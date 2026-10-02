@@ -1,0 +1,172 @@
+# =============================================================================
+# AI Workbench — full stack with Docker Compose
+#
+#   docker compose up -d
+#   open http://localhost:5173      (frontend)
+#   open http://localhost:8000/docs (API documentation)
+#
+# ⚠️  IMPORTANT — READ BEFORE TRUSTING THIS FILE
+#
+# This compose file has NOT been executed on the machine this project was
+# developed and verified on. That machine has no Docker installation and its
+# Docker Hub registry endpoint is unreachable, so containers could not be built
+# or started there. Everything else in this repository *was* executed and
+# verified against native PostgreSQL 16.4 / Redis 5 / Qdrant 1.12.4 processes
+# (see FINAL_CHECKLIST.md and docs/deployment.md).
+#
+# Treat the compose path as "provided and reviewed, not executed". If you run
+# it, verify it yourself — and please report what you find.
+# =============================================================================
+
+name: ai-workbench
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: awb-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-aiworkbench}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-aiworkbench}
+      POSTGRES_DB: ${POSTGRES_DB:-aiworkbench}
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-aiworkbench} -d ${POSTGRES_DB:-aiworkbench}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    networks: [awb]
+
+  redis:
+    image: redis:7-alpine
+    container_name: awb-redis
+    restart: unless-stopped
+    # Cache-only usage: persistence is intentionally disabled.
+    command: ["redis-server", "--save", "", "--appendonly", "no", "--maxmemory", "256mb", "--maxmemory-policy", "allkeys-lru"]
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks: [awb]
+
+  qdrant:
+    image: qdrant/qdrant:v1.12.4
+    container_name: awb-qdrant
+    restart: unless-stopped
+    volumes:
+      - qdrant-data:/qdrant/storage
+    ports:
+      - "${QDRANT_HTTP_PORT:-6333}:6333"
+      - "${QDRANT_GRPC_PORT:-6334}:6334"
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c ':> /dev/tcp/127.0.0.1/6333' || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+    networks: [awb]
+
+  api:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    image: ai-workbench-backend:latest
+    container_name: awb-api
+    restart: unless-stopped
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+      qdrant: { condition: service_healthy }
+    environment:
+      APP_ENV: ${APP_ENV:-prod}
+      DEBUG: ${DEBUG:-false}
+      SECRET_KEY: ${SECRET_KEY:?SECRET_KEY must be set in .env}
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-aiworkbench}:${POSTGRES_PASSWORD:-aiworkbench}@postgres:5432/${POSTGRES_DB:-aiworkbench}
+      REDIS_URL: redis://redis:6379/0
+      QDRANT_URL: http://qdrant:6333
+      QDRANT_COLLECTION: ${QDRANT_COLLECTION:-ai_workbench_chunks}
+      AI_PROVIDER: ${AI_PROVIDER:-openai_compatible}
+      AI_BASE_URL: ${AI_BASE_URL:-https://api.deepseek.com/v1}
+      AI_API_KEY: ${AI_API_KEY:-}
+      AI_MODEL: ${AI_MODEL:-deepseek-chat}
+      EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER:-openai_compatible}
+      EMBEDDING_BASE_URL: ${EMBEDDING_BASE_URL:-}
+      EMBEDDING_API_KEY: ${EMBEDDING_API_KEY:-}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-text-embedding-3-small}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173}
+      # The API hosts the worker in-process here; flip to false and scale the
+      # `worker` service when you need to separate CPU-bound ingestion work.
+      WORKER_ENABLED: ${WORKER_ENABLED:-true}
+      WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-2}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      LOG_JSON: ${LOG_JSON:-true}
+    volumes:
+      - uploads:/app/.runtime/storage
+    ports:
+      - "${API_PORT:-8000}:8000"
+    networks: [awb]
+
+  # Optional: run the worker as its own container. Set WORKER_ENABLED=false on
+  # the api service and start this one with:
+  #   docker compose --profile worker up -d
+  worker:
+    build:
+      context: .
+      dockerfile: worker/Dockerfile
+    image: ai-workbench-worker:latest
+    container_name: awb-worker
+    restart: unless-stopped
+    profiles: ["worker"]
+    depends_on:
+      api: { condition: service_healthy }
+    environment:
+      APP_ENV: ${APP_ENV:-prod}
+      SECRET_KEY: ${SECRET_KEY:?SECRET_KEY must be set in .env}
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-aiworkbench}:${POSTGRES_PASSWORD:-aiworkbench}@postgres:5432/${POSTGRES_DB:-aiworkbench}
+      REDIS_URL: redis://redis:6379/0
+      QDRANT_URL: http://qdrant:6333
+      AI_PROVIDER: ${AI_PROVIDER:-openai_compatible}
+      AI_BASE_URL: ${AI_BASE_URL:-https://api.deepseek.com/v1}
+      AI_API_KEY: ${AI_API_KEY:-}
+      AI_MODEL: ${AI_MODEL:-deepseek-chat}
+      EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER:-openai_compatible}
+      EMBEDDING_API_KEY: ${EMBEDDING_API_KEY:-}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-text-embedding-3-small}
+      WORKER_ENABLED: "false"
+      WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-2}
+      MIGRATE_ON_START: "false"
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      LOG_JSON: ${LOG_JSON:-true}
+    volumes:
+      - uploads:/app/.runtime/storage
+    networks: [awb]
+
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    image: ai-workbench-frontend:latest
+    container_name: awb-frontend
+    restart: unless-stopped
+    depends_on:
+      api: { condition: service_healthy }
+    ports:
+      - "${WEB_PORT:-5173}:80"
+    networks: [awb]
+
+volumes:
+  postgres-data:
+  qdrant-data:
+  uploads:
+
+networks:
+  awb:
+    driver: bridge

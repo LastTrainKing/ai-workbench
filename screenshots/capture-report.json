@@ -1,0 +1,14 @@
+{
+  "capturedAt": "2026-10-02T18:22:49.573Z",
+  "webUrl": "http://127.0.0.1:5173",
+  "apiUrl": "http://127.0.0.1:8000/api/v1",
+  "viewport": {
+    "width": 1600,
+    "height": 1000
+  },
+  "project": "毕业设计",
+  "knowledgeBase": "示例知识库",
+  "consoleErrors": [
+    "Failed to load resource: the server responded with a status of 404 (Not Found)"
+  ]
+}

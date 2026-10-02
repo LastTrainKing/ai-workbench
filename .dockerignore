@@ -1,0 +1,41 @@
+# Build context hygiene: keep images small and never leak local state.
+
+# --- version control / editor ---
+.git
+.gitignore
+.gitattributes
+.github
+
+# --- local runtime state (contains the database, uploaded files, logs, PIDs) ---
+.runtime
+vendor/runtime
+vendor/*.zip
+
+# --- python ---
+**/__pycache__
+**/*.py[cod]
+**/.pytest_cache
+**/.mypy_cache
+**/.ruff_cache
+**/.coverage
+**/htmlcov
+.venv
+venv
+
+# --- node ---
+**/node_modules
+**/dist
+**/.vite
+**/coverage
+frontend/test-results
+frontend/playwright-report
+
+# --- docs / screenshots / tooling output ---
+docs
+screenshots
+*.log
+
+# --- secrets ---
+.env
+.env.*
+!.env.example

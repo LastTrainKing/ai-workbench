@@ -1,0 +1,350 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ------------------------------------------------------------------ tokens --
+ * Colours are stored as space-separated RGB channels so Tailwind can apply
+ * opacity modifiers (`bg-danger/10`, `border-info/40`, …) via `<alpha-value>`.
+ * The `*-soft` tokens are pre-composited rgba values used for tinted surfaces.
+ */
+:root,
+[data-theme='dark'] {
+  --c-base: 11 13 16;
+  --c-surface: 17 20 24;
+  --c-elevated: 23 27 33;
+  --c-inset: 13 16 20;
+
+  --c-border-subtle: 35 40 47;
+  --c-border-strong: 51 58 68;
+
+  --c-text: 230 233 239;
+  --c-muted: 139 149 165;
+  --c-faint: 91 100 114;
+
+  --c-accent: 99 102 241;
+  --c-accent-hover: 123 126 245;
+  --c-accent-fg: 255 255 255;
+  --c-accent-soft: rgba(99, 102, 241, 0.16);
+
+  --c-success: 46 160 67;
+  --c-success-soft: rgba(46, 160, 67, 0.15);
+  --c-warn: 210 153 34;
+  --c-warn-soft: rgba(210, 153, 34, 0.15);
+  --c-danger: 229 72 77;
+  --c-danger-soft: rgba(229, 72, 77, 0.15);
+  --c-info: 59 158 255;
+  --c-info-soft: rgba(59, 158, 255, 0.15);
+
+  --c-overlay: rgba(6, 8, 11, 0.66);
+  --c-shimmer: rgba(255, 255, 255, 0.05);
+
+  color-scheme: dark;
+}
+
+[data-theme='light'] {
+  --c-base: 246 247 249;
+  --c-surface: 255 255 255;
+  --c-elevated: 255 255 255;
+  --c-inset: 241 243 246;
+
+  --c-border-subtle: 227 230 235;
+  --c-border-strong: 207 213 222;
+
+  --c-text: 20 24 31;
+  --c-muted: 95 107 122;
+  --c-faint: 138 148 162;
+
+  --c-accent: 84 87 229;
+  --c-accent-hover: 68 72 212;
+  --c-accent-fg: 255 255 255;
+  --c-accent-soft: rgba(84, 87, 229, 0.12);
+
+  --c-success: 26 127 55;
+  --c-success-soft: rgba(26, 127, 55, 0.1);
+  --c-warn: 154 103 0;
+  --c-warn-soft: rgba(154, 103, 0, 0.1);
+  --c-danger: 207 34 46;
+  --c-danger-soft: rgba(207, 34, 46, 0.1);
+  --c-info: 9 105 218;
+  --c-info-soft: rgba(9, 105, 218, 0.1);
+
+  --c-overlay: rgba(23, 27, 33, 0.38);
+  --c-shimmer: rgba(15, 23, 42, 0.05);
+
+  color-scheme: light;
+}
+
+/* -------------------------------------------------------------------- base -- */
+@layer base {
+  * {
+    border-color: rgb(var(--c-border-subtle));
+  }
+
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    margin: 0;
+    background-color: rgb(var(--c-base));
+    color: rgb(var(--c-text));
+    font-family:
+      Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB',
+      'Microsoft YaHei', sans-serif;
+    font-size: 14px;
+    line-height: 22px;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  ::selection {
+    background: var(--c-accent-soft);
+  }
+
+  :focus-visible {
+    outline: 2px solid rgb(var(--c-accent));
+    outline-offset: 1px;
+  }
+
+  input,
+  textarea,
+  select,
+  button {
+    font: inherit;
+    color: inherit;
+  }
+
+  /* Slim, developer-tool scrollbars. */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: rgb(var(--c-border-strong)) transparent;
+  }
+
+  ::-webkit-scrollbar {
+    width: 9px;
+    height: 9px;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background-color: rgb(var(--c-border-strong));
+    border: 2px solid transparent;
+    background-clip: content-box;
+    border-radius: 999px;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background-color: rgb(var(--c-faint));
+  }
+}
+
+/* --------------------------------------------------------------- components -- */
+@layer components {
+  .aiw-input {
+    @apply w-full rounded border border-subtle bg-inset px-2.5 py-1.5 text-sm text-primary
+      placeholder:text-faint transition-colors;
+  }
+
+  .aiw-input:hover:not(:disabled) {
+    border-color: rgb(var(--c-border-strong));
+  }
+
+  .aiw-input:focus {
+    border-color: rgb(var(--c-accent));
+    outline: none;
+    box-shadow: 0 0 0 3px var(--c-accent-soft);
+  }
+
+  .aiw-input:disabled {
+    @apply cursor-not-allowed opacity-55;
+  }
+
+  .aiw-label {
+    @apply mb-1.5 block text-xs font-medium text-muted;
+  }
+
+  .aiw-card {
+    @apply rounded-lg border border-subtle bg-surface;
+  }
+
+  .aiw-divider {
+    @apply h-px w-full bg-subtle;
+  }
+
+  .aiw-kbd {
+    @apply inline-flex h-[19px] min-w-[19px] items-center justify-center rounded border
+      border-subtle bg-elevated px-1 font-mono text-2xs text-muted;
+  }
+
+  .aiw-scroll {
+    @apply overflow-y-auto overscroll-contain;
+  }
+
+  .aiw-skeleton {
+    @apply relative overflow-hidden rounded bg-elevated;
+  }
+
+  .aiw-skeleton::after {
+    content: '';
+    @apply absolute inset-0 -translate-x-full;
+    background-image: linear-gradient(90deg, transparent, var(--c-shimmer), transparent);
+    animation: shimmer 1.5s infinite;
+  }
+}
+
+@keyframes shimmer {
+  100% {
+    transform: translateX(100%);
+  }
+}
+
+/* ------------------------------------------------------- markdown rendering -- */
+.md-body {
+  font-size: 14px;
+  line-height: 1.7;
+  word-break: break-word;
+}
+
+.md-body > *:first-child {
+  margin-top: 0;
+}
+
+.md-body > *:last-child {
+  margin-bottom: 0;
+}
+
+.md-body h1,
+.md-body h2,
+.md-body h3,
+.md-body h4 {
+  margin: 1.3em 0 0.55em;
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.md-body h1 {
+  font-size: 1.4em;
+}
+.md-body h2 {
+  font-size: 1.2em;
+  padding-bottom: 0.25em;
+  border-bottom: 1px solid rgb(var(--c-border-subtle));
+}
+.md-body h3 {
+  font-size: 1.06em;
+}
+.md-body h4 {
+  font-size: 1em;
+  color: rgb(var(--c-muted));
+}
+
+.md-body p,
+.md-body ul,
+.md-body ol,
+.md-body blockquote,
+.md-body table,
+.md-body pre {
+  margin: 0.75em 0;
+}
+
+.md-body ul,
+.md-body ol {
+  padding-left: 1.35em;
+}
+
+.md-body ul {
+  list-style: disc;
+}
+.md-body ol {
+  list-style: decimal;
+}
+.md-body li {
+  margin: 0.22em 0;
+}
+
+.md-body li::marker {
+  color: rgb(var(--c-faint));
+}
+
+.md-body a {
+  color: rgb(var(--c-accent));
+  text-decoration: none;
+  border-bottom: 1px solid var(--c-accent-soft);
+}
+
+.md-body a:hover {
+  border-bottom-color: rgb(var(--c-accent));
+}
+
+.md-body code {
+  font-family: ui-monospace, SFMono-Regular, 'JetBrains Mono', Menlo, Consolas, monospace;
+  font-size: 0.86em;
+  background: rgb(var(--c-inset));
+  border: 1px solid rgb(var(--c-border-subtle));
+  border-radius: 4px;
+  padding: 0.1em 0.36em;
+}
+
+.md-body pre {
+  background: rgb(var(--c-inset));
+  border: 1px solid rgb(var(--c-border-subtle));
+  border-radius: 8px;
+  padding: 0.85em 1em;
+  overflow-x: auto;
+}
+
+.md-body pre code {
+  background: none;
+  border: none;
+  padding: 0;
+  font-size: 0.84em;
+  line-height: 1.6;
+}
+
+.md-body blockquote {
+  border-left: 3px solid var(--c-accent-soft);
+  padding: 0.1em 0 0.1em 0.9em;
+  color: rgb(var(--c-muted));
+}
+
+.md-body table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.94em;
+  display: block;
+  overflow-x: auto;
+}
+
+.md-body th,
+.md-body td {
+  border: 1px solid rgb(var(--c-border-subtle));
+  padding: 0.45em 0.65em;
+  text-align: left;
+  vertical-align: top;
+}
+
+.md-body th {
+  background: rgb(var(--c-elevated));
+  font-weight: 600;
+}
+
+.md-body hr {
+  border: none;
+  border-top: 1px solid rgb(var(--c-border-subtle));
+  margin: 1.4em 0;
+}
+
+.md-body img {
+  max-width: 100%;
+  border-radius: 8px;
+}
+
+.md-body input[type='checkbox'] {
+  margin-right: 0.4em;
+  accent-color: rgb(var(--c-accent));
+}

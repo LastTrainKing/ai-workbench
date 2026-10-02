@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="dark">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="AI Workbench — 本地优先的 AI 知识与任务执行工作台" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta name="theme-color" content="#0b0d10" />
+    <meta property="og:title" content="AI Workbench" />
+    <meta property="og:description" content="资料 → 知识 → 任务 → 执行 → 结果的完整闭环" />
+    <title>AI Workbench</title>
+    <script>
+      // Resolve the theme before first paint so the app never flashes the wrong palette.
+      (function () {
+        try {
+          var stored = localStorage.getItem('aiw.theme')
+          var theme = stored === 'light' || stored === 'dark' ? stored : 'dark'
+          document.documentElement.setAttribute('data-theme', theme)
+        } catch (e) {
+          document.documentElement.setAttribute('data-theme', 'dark')
+        }
+      })()
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

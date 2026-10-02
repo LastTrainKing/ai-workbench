@@ -1,0 +1,556 @@
+"""Search, chat (RAG), planning, agent and AI-run services."""
+
+from __future__ import annotations
+
+import uuid
+from datetime import UTC, datetime, timedelta
+from typing import Any
+
+from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.ai.agent.executor import AgentExecutor, AgentOutcome
+from app.ai.prompts.registry import get_prompt
+from app.ai.providers.factory import build_llm_provider
+from app.ai.rag.pipeline import RAGAnswer, RAGPipeline, load_json_object
+from app.ai.rag.retriever import Retriever
+from app.ai.tracing import RunRecorder
+from app.ai.types import ChatMessage
+from app.core.cache import cache_get, cache_set, make_key, namespace_version
+from app.core.config import settings
+from app.core.errors import AppError, NotFoundError, ValidationError
+from app.core.logging import get_logger
+from app.domain.enums import RunStatus, RunType, TaskSource
+from app.models.ai import AIRun
+from app.repositories.ai_repo import ActivityRepository, AIRunRepository, JobRepository
+from app.repositories.knowledge_repo import DocumentRepository, KnowledgeBaseRepository
+from app.repositories.work_repo import ProjectRepository, TaskRepository
+from app.services.task_service import TaskService
+
+logger = get_logger(__name__)
+
+
+# ===========================================================================
+# Search
+# ===========================================================================
+class SearchService:
+    """Keyword / semantic / hybrid search over the knowledge base."""
+
+    def __init__(self, session: AsyncSession) -> None:
+        self.session = session
+        self.retriever = Retriever()
+        self.bases = KnowledgeBaseRepository(session)
+
+    async def search(
+        self,
+        *,
+        owner_id: uuid.UUID,
+        query: str,
+        mode: str = "hybrid",
+        knowledge_base_ids: list[uuid.UUID] | None = None,
+        project_id: uuid.UUID | None = None,
+        limit: int = 20,
+    ) -> dict[str, Any]:
+        query = (query or "").strip()
+        if not query:
+            raise ValidationError("Search query must not be empty")
+
+        # Ownership check: a caller must not be able to search another tenant's KB.
+        if knowledge_base_ids:
+            for kb_id in knowledge_base_ids:
+                if await self.bases.get_owned(kb_id, owner_id) is None:
+                    raise NotFoundError(f"Knowledge base {kb_id} not found")
+        else:
+            owned = await self.bases.list(KnowledgeBaseRepository.model.owner_id == owner_id)
+            knowledge_base_ids = [kb.id for kb in owned]
+
+        if not knowledge_base_ids:
+            return {
+                "query": query,
+                "mode": mode,
+                "results": [],
+                "took_ms": 0,
+                "cached": False,
+                "message": "当前没有任何知识库，请先创建知识库并上传文档。",
+            }
+
+        version = await namespace_version("search")
+        cache_key = make_key(
+            "search", owner_id, query, mode, sorted(map(str, knowledge_base_ids)), limit, version
+        )
+        cached = await cache_get("search", cache_key)
+        if cached:
+            cached["cached"] = True
+            return cached
+
+        result = await self.retriever.retrieve(
+            self.session,
+            query=query,
+            knowledge_base_ids=knowledge_base_ids,
+            mode=mode,
+            top_k=limit,
+        )
+        payload = {
+            "query": query,
+            "mode": result.mode,
+            "cached": False,
+            "took_ms": result.took_ms,
+            "reranked": result.reranked,
+            "dense_hits": result.dense_hits,
+            "sparse_hits": result.sparse_hits,
+            "results": [
+                {
+                    "chunk_id": c.chunk_id,
+                    "document_id": c.document_id,
+                    "document_title": c.document_title,
+                    "knowledge_base_id": c.knowledge_base_id,
+                    "chunk_index": c.chunk_index,
+                    "heading": c.heading,
+                    "content": c.content,
+                    "score": round(c.score, 6),
+                    "vector_score": round(c.vector_score, 6),
+                    "keyword_score": round(c.keyword_score, 6),
+                }
+                for c in result.chunks
+            ],
+        }
+        await cache_set("search", cache_key, payload, settings.cache_ttl_search_seconds)
+        return payload
+
+
+# ===========================================================================
+# Chat / RAG
+# ===========================================================================
+class ChatService:
+    def __init__(self, session: AsyncSession) -> None:
+        self.session = session
+        self.pipeline = RAGPipeline()
+        self.bases = KnowledgeBaseRepository(session)
+        self.runs = AIRunRepository(session)
+
+    async def ask(
+        self,
+        *,
+        owner_id: uuid.UUID,
+        question: str,
+        knowledge_base_ids: list[uuid.UUID] | None = None,
+        document_ids: list[uuid.UUID] | None = None,
+        mode: str = "hybrid",
+        top_k: int | None = None,
+        history: list[dict[str, str]] | None = None,
+        project_id: uuid.UUID | None = None,
+    ) -> RAGAnswer:
+        if knowledge_base_ids:
+            for kb_id in knowledge_base_ids:
+                if await self.bases.get_owned(kb_id, owner_id) is None:
+                    raise NotFoundError(f"Knowledge base {kb_id} not found")
+        else:
+            owned = await self.bases.list(KnowledgeBaseRepository.model.owner_id == owner_id)
+            knowledge_base_ids = [kb.id for kb in owned]
+            if not knowledge_base_ids:
+                raise ValidationError(
+                    "No knowledge base available. Create one and upload documents first."
+                )
+
+        return await self.pipeline.answer(
+            self.session,
+            question=question,
+            owner_id=owner_id,
+            knowledge_base_ids=knowledge_base_ids,
+            document_ids=document_ids,
+            mode=mode,
+            top_k=top_k,
+            history=history,
+            project_id=project_id,
+        )
+
+
+# ===========================================================================
+# Task planner
+# ===========================================================================
+class PlannerService:
+    def __init__(self) -> None:
+        self.llm, self.info = build_llm_provider()
+        self.retriever = Retriever()
+
+    async def generate_plan(
+        self,
+        session: AsyncSession,
+        *,
+        owner_id: uuid.UUID,
+        goal: str,
+        knowledge_base_ids: list[uuid.UUID] | None = None,
+        horizon_days: int = 30,
+        project_id: uuid.UUID | None = None,
+    ) -> dict[str, Any]:
+        goal = (goal or "").strip()
+        if not goal:
+            raise ValidationError("Goal must not be empty")
+        horizon_days = max(1, min(int(horizon_days or 30), 365))
+
+        # Grounding first: a plan built on the user's own material beats a generic one.
+        retrieval = await self.retriever.retrieve(
+            session,
+            query=goal,
+            knowledge_base_ids=knowledge_base_ids,
+            top_k=6,
+        )
+        context = "\n\n".join(
+            f"【资料 {i}】{c.document_title} / {c.heading}\n{c.content[:1200]}"
+            for i, c in enumerate(retrieval.chunks, start=1)
+        ) or "（知识库中没有检索到相关资料，请基于通用方法论拆解）"
+
+        prompt = await get_prompt(session, "task_planner")
+        recorder = await RunRecorder.start(
+            session,
+            run_type=RunType.TASK_PLANNER,
+            owner_id=owner_id,
+            provider=self.info.kind,
+            model=self.llm.model,
+            prompt_name=prompt.name,
+            prompt_version=prompt.version,
+            request_payload={
+                "goal": goal,
+                "horizon_days": horizon_days,
+                "knowledge_base_ids": [str(k) for k in (knowledge_base_ids or [])],
+            },
+            project_id=project_id,
+            knowledge_base_id=knowledge_base_ids[0] if knowledge_base_ids else None,
+        )
+        recorder.set_retrieval(
+            {"mode": retrieval.mode, "retrieved": len(retrieval.chunks)}, len(retrieval.chunks)
+        )
+
+        try:
+            chat = await self.llm.chat(
+                [
+                    ChatMessage(
+                        role="system",
+                        content=prompt.render(
+                            goal=goal, context=context, horizon_days=horizon_days
+                        ),
+                    ),
+                    ChatMessage(role="user", content=f"目标：{goal}"),
+                ],
+                temperature=0.3,
+                max_tokens=settings.ai_max_tokens,
+                json_mode=True,
+            )
+            recorder.record_usage(chat.usage)
+            raw = load_json_object(chat.content)
+            plan = self._normalise_plan(raw, goal, horizon_days)
+
+            await recorder.add_sources(
+                [c.to_citation(i) for i, c in enumerate(retrieval.chunks, start=1)]
+            )
+            # The FULL plan is stored on the run, not just a summary: it is what
+            # POST /planner/plan/apply replays into real tasks.
+            await recorder.finish(
+                status=RunStatus.SUCCEEDED,
+                response_text=chat.content,
+                result_payload={
+                    **plan,
+                    "summary": {
+                        "phases": len(plan["phases"]),
+                        "tasks": sum(len(p["tasks"]) for p in plan["phases"]),
+                    },
+                },
+                chat_result=chat,
+            )
+            plan["run_id"] = recorder.run_id
+            plan["provider"] = self.info.kind
+            plan["model"] = self.llm.model
+            plan["grounded_chunks"] = len(retrieval.chunks)
+            plan["latency_ms"] = recorder.model_row.latency_ms
+            return plan
+
+        except AppError as exc:
+            await recorder.finish(
+                status=RunStatus.FAILED, error_code=exc.code, error_message=exc.message
+            )
+            raise
+        except Exception as exc:
+            await recorder.finish(
+                status=RunStatus.FAILED,
+                error_code="unexpected_error",
+                error_message=f"{type(exc).__name__}: {exc}",
+            )
+            raise
+
+    @staticmethod
+    def _normalise_plan(raw: dict[str, Any], goal: str, horizon_days: int) -> dict[str, Any]:
+        phases_raw = raw.get("phases")
+        phases: list[dict[str, Any]] = []
+        if isinstance(phases_raw, list):
+            for index, phase in enumerate(phases_raw):
+                if not isinstance(phase, dict):
+                    continue
+                tasks: list[dict[str, Any]] = []
+                for task in phase.get("tasks") or []:
+                    if not isinstance(task, dict):
+                        continue
+                    title = str(task.get("title") or "").strip()
+                    if not title:
+                        continue
+                    subtasks = [
+                        {
+                            "title": str(st.get("title") or "").strip(),
+                            "estimated_minutes": _safe_int(st.get("estimated_minutes"), 30),
+                        }
+                        for st in (task.get("subtasks") or [])
+                        if isinstance(st, dict) and str(st.get("title") or "").strip()
+                    ]
+                    tasks.append(
+                        {
+                            "title": title[:300],
+                            "description": str(task.get("description") or "")[:2000],
+                            "estimated_minutes": _safe_int(task.get("estimated_minutes"), 60),
+                            "priority": _safe_priority(task.get("priority")),
+                            "completion_criteria": str(task.get("completion_criteria") or "")[:1000],
+                            "depends_on": [
+                                str(d)[:300]
+                                for d in (task.get("depends_on") or [])
+                                if isinstance(d, str)
+                            ],
+                            "subtasks": subtasks,
+                        }
+                    )
+                if tasks:
+                    phases.append(
+                        {
+                            "name": str(phase.get("name") or f"阶段 {index + 1}")[:200],
+                            "description": str(phase.get("description") or "")[:1000],
+                            "tasks": tasks,
+                        }
+                    )
+
+        if not phases:
+            phases = [
+                {
+                    "name": "阶段 1：目标澄清",
+                    "description": "模型未返回可解析的阶段结构，已生成最小可执行计划。",
+                    "tasks": [
+                        {
+                            "title": goal[:160],
+                            "description": "明确目标范围、验收标准与时间盒。",
+                            "estimated_minutes": 60,
+                            "priority": "HIGH",
+                            "completion_criteria": "产出书面的目标与验收标准。",
+                            "depends_on": [],
+                            "subtasks": [],
+                        }
+                    ],
+                }
+            ]
+
+        total_minutes = sum(
+            t["estimated_minutes"] for p in phases for t in p["tasks"]
+        ) + sum(
+            st["estimated_minutes"] for p in phases for t in p["tasks"] for st in t["subtasks"]
+        )
+        return {
+            "goal": str(raw.get("goal") or goal)[:500],
+            "strategy": str(raw.get("strategy") or "")[:2000],
+            "horizon_days": horizon_days,
+            "phases": phases,
+            "estimated_total_minutes": total_minutes,
+            "estimated_total_hours": round(total_minutes / 60, 1),
+        }
+
+    async def persist_plan(
+        self,
+        session: AsyncSession,
+        *,
+        owner_id: uuid.UUID,
+        project_id: uuid.UUID | None,
+        plan: dict[str, Any],
+        source: TaskSource = TaskSource.PLANNER,
+    ) -> dict[str, Any]:
+        tasks_service = TaskService(session)
+        task_ids: list[str] = []
+        title_to_id: dict[str, uuid.UUID] = {}
+        pending_dependencies: list[tuple[uuid.UUID, str]] = []
+
+        for phase in plan.get("phases", []):
+            phase_task = await tasks_service.create_task(
+                owner_id=owner_id,
+                project_id=project_id,
+                title=str(phase.get("name") or "阶段")[:300],
+                description=str(phase.get("description") or ""),
+                priority="HIGH",
+                estimated_minutes=sum(
+                    int(t.get("estimated_minutes") or 0) for t in phase.get("tasks", [])
+                ),
+                source=source,
+                ai_suggestion=plan.get("strategy", "")[:2000],
+            )
+            task_ids.append(str(phase_task.id))
+
+            for item in phase.get("tasks", []):
+                task = await tasks_service.create_task(
+                    owner_id=owner_id,
+                    project_id=project_id,
+                    parent_id=phase_task.id,
+                    title=str(item.get("title") or "任务")[:300],
+                    description=str(item.get("description") or ""),
+                    priority=str(item.get("priority") or "MEDIUM"),
+                    estimated_minutes=int(item.get("estimated_minutes") or 0),
+                    completion_criteria=str(item.get("completion_criteria") or ""),
+                    source=source,
+                    ai_suggestion=plan.get("strategy", "")[:2000],
+                )
+                task_ids.append(str(task.id))
+                title_to_id[str(item.get("title"))] = task.id
+                for dependency_title in item.get("depends_on", []):
+                    pending_dependencies.append((task.id, str(dependency_title)))
+
+                for subtask in item.get("subtasks", []):
+                    child = await tasks_service.create_task(
+                        owner_id=owner_id,
+                        project_id=project_id,
+                        parent_id=task.id,
+                        title=str(subtask.get("title") or "子任务")[:300],
+                        estimated_minutes=int(subtask.get("estimated_minutes") or 0),
+                        source=source,
+                    )
+                    task_ids.append(str(child.id))
+
+        for task_id, dependency_title in pending_dependencies:
+            dependency_id = title_to_id.get(dependency_title)
+            if dependency_id and dependency_id != task_id:
+                try:
+                    await tasks_service.add_dependency(
+                        owner_id=owner_id, task_id=task_id, depends_on_id=dependency_id
+                    )
+                except AppError as exc:
+                    logger.info(
+                        "dependency_skipped",
+                        extra={"task_id": str(task_id), "reason": exc.message},
+                    )
+
+        return {
+            "created": len(task_ids),
+            "phases": len(plan.get("phases", [])),
+            "task_ids": task_ids,
+            "goal": plan.get("goal", ""),
+        }
+
+
+# ===========================================================================
+# Agent
+# ===========================================================================
+class AgentService:
+    def __init__(self, session: AsyncSession) -> None:
+        self.session = session
+        self.executor = AgentExecutor()
+        self.runs = AIRunRepository(session)
+        self.projects = ProjectRepository(session)
+        self.bases = KnowledgeBaseRepository(session)
+
+    async def run(
+        self,
+        *,
+        owner_id: uuid.UUID,
+        goal: str,
+        project_id: uuid.UUID | None = None,
+        knowledge_base_ids: list[uuid.UUID] | None = None,
+        max_steps: int | None = None,
+    ) -> AgentOutcome:
+        if project_id and await self.projects.get_owned(project_id, owner_id) is None:
+            raise NotFoundError("Project not found")
+        if knowledge_base_ids:
+            for kb_id in knowledge_base_ids:
+                if await self.bases.get_owned(kb_id, owner_id) is None:
+                    raise NotFoundError(f"Knowledge base {kb_id} not found")
+        else:
+            owned = await self.bases.list(KnowledgeBaseRepository.model.owner_id == owner_id)
+            knowledge_base_ids = [kb.id for kb in owned]
+
+        return await self.executor.run(
+            self.session,
+            owner_id=owner_id,
+            goal=goal,
+            project_id=project_id,
+            knowledge_base_ids=knowledge_base_ids,
+            max_steps=max_steps,
+        )
+
+
+# ===========================================================================
+# AI run inspection
+# ===========================================================================
+class AIRunService:
+    def __init__(self, session: AsyncSession) -> None:
+        self.session = session
+        self.runs = AIRunRepository(session)
+
+    async def get_trace(self, *, owner_id: uuid.UUID, run_id: str) -> dict[str, Any]:
+        run = await self.runs.by_run_id(run_id, owner_id)
+        if run is None:
+            raise NotFoundError("AI run not found")
+        return {
+            "run": run,
+            "tool_calls": await self.runs.tool_calls(run.id),
+            "sources": await self.runs.sources(run.id),
+            "agent_run": await self.runs.agent_run(run.id),
+        }
+
+    async def metrics(self, *, owner_id: uuid.UUID, days: int = 30) -> dict[str, Any]:
+        return await self.runs.metrics(owner_id, days=days)
+
+    async def daily(self, *, owner_id: uuid.UUID, days: int = 14) -> list[dict[str, Any]]:
+        return await self.runs.daily_counts(owner_id, days=days)
+
+    async def health(self) -> dict[str, Any]:
+        """Success/failure counters over the last 24h (observability endpoint)."""
+        since = datetime.now(UTC) - timedelta(hours=24)
+        rows = (
+            await self.session.execute(
+                select(AIRun.status, func.count(AIRun.id))
+                .where(AIRun.created_at >= since)
+                .group_by(AIRun.status)
+            )
+        ).all()
+        counts = {str(status): int(count) for status, count in rows}
+        total = sum(counts.values())
+        failed = counts.get(RunStatus.FAILED.value, 0) + counts.get(RunStatus.TIMEOUT.value, 0)
+        latency = (
+            await self.session.execute(
+                select(func.coalesce(func.avg(AIRun.latency_ms), 0)).where(
+                    AIRun.created_at >= since
+                )
+            )
+        ).scalar_one()
+        return {
+            "window_hours": 24,
+            "total": total,
+            "failed": failed,
+            "failure_rate": round(failed / total, 4) if total else 0.0,
+            "avg_latency_ms": int(latency or 0),
+            "by_status": counts,
+        }
+
+
+def _safe_int(value: Any, default: int) -> int:
+    try:
+        return max(0, int(value))
+    except (TypeError, ValueError):
+        return default
+
+
+def _safe_priority(value: Any) -> str:
+    candidate = str(value or "").upper()
+    return candidate if candidate in {"LOW", "MEDIUM", "HIGH", "URGENT"} else "MEDIUM"
+
+
+__all__ = [
+    "AIRunService",
+    "ActivityRepository",
+    "AgentService",
+    "ChatService",
+    "DocumentRepository",
+    "JobRepository",
+    "PlannerService",
+    "SearchService",
+    "TaskRepository",
+]

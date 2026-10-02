@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="AI Workbench">
+  <defs>
+    <linearGradient id="awb" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#6366f1"/>
+      <stop offset="100%" stop-color="#8b5cf6"/>
+    </linearGradient>
+  </defs>
+  <rect width="64" height="64" rx="14" fill="#0b0d10"/>
+  <rect x="3" y="3" width="58" height="58" rx="12" fill="none" stroke="url(#awb)" stroke-width="2" opacity="0.55"/>
+  <!-- knowledge node -->
+  <circle cx="20" cy="44" r="5" fill="url(#awb)"/>
+  <!-- task node -->
+  <circle cx="44" cy="44" r="5" fill="url(#awb)"/>
+  <!-- execution node -->
+  <circle cx="32" cy="19" r="6" fill="none" stroke="url(#awb)" stroke-width="2.5"/>
+  <!-- the closed loop: knowledge -> task -> execution -> knowledge -->
+  <path d="M24 41 L29 24 M35 24 L40 41 M25 44 H39"
+        fill="none" stroke="url(#awb)" stroke-width="2.2" stroke-linecap="round"/>
+  <circle cx="32" cy="19" r="1.8" fill="#e6e9ef"/>
+</svg>

@@ -1,0 +1,109 @@
+# ============================================================================
+#  AI Workbench — .gitignore
+#
+#  The repository must contain source, documentation and configuration
+#  templates only.  No secrets, no runtime state, no downloaded binaries,
+#  no build output, no editor or OS noise.
+# ============================================================================
+
+# ------------------------------------------------------------------ secrets --
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+secrets/
+credentials.json
+
+# ------------------------------------------------- local runtime state -------
+# Contains the PostgreSQL data directory, uploaded documents, logs and PID
+# files. Never committed: it is machine-specific and can be gigabytes.
+.runtime/
+vendor/runtime/
+vendor/*.zip
+*.log
+
+# ------------------------------------------------------------------- python --
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.venv/
+venv/
+env/
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib64/
+parts/
+sdist/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# --------------------------------------------------------------------- node --
+node_modules/
+frontend/dist/
+frontend/.vite/
+frontend/coverage/
+frontend/test-results/
+frontend/playwright-report/
+frontend/blob-report/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+.pnpm-store/
+
+# ------------------------------------------------------------------ testing --
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+tests/coverage/
+.tox/
+.nox/
+
+# --------------------------------------------------------------------- data --
+*.sqlite
+*.sqlite3
+*.db
+*.dump
+*.sql.gz
+
+# ------------------------------------------------------------ ide / editor ---
+.idea/
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json.example
+*.swp
+*.swo
+*.iml
+.project
+.classpath
+.settings/
+
+# ----------------------------------------------------------------------- os --
+.DS_Store
+Thumbs.db
+desktop.ini
+*.lnk
+$RECYCLE.BIN/
+
+# ----------------------------------------------------------- local scratch ---
+tmp/
+temp/
+*.tmp
+scratch/
+*.bak
+*.orig
+*.rej

@@ -1,0 +1,88 @@
+[project]
+name = "ai-workbench-backend"
+version = "1.0.0"
+description = "AI Workbench — local-first AI knowledge & task execution platform (backend)"
+requires-python = ">=3.11"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+extend-exclude = ["alembic/versions"]
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort
+    "B",   # flake8-bugbear
+    "UP",  # pyupgrade
+    "C4",  # flake8-comprehensions
+    "SIM", # flake8-simplify
+    "RUF", # ruff-specific
+]
+ignore = [
+    "E501",   # line length is handled by the formatter
+    "B008",   # FastAPI relies on function calls in argument defaults (Depends)
+    "SIM108", # ternaries are not always clearer
+    "RUF001", # allow full-width CJK punctuation inside strings
+    "RUF002",
+    "RUF003",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["E402", "F401"]
+"app/models/__init__.py" = ["F401"]
+"app/ai/rag/pipeline.py" = ["F401"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["app"]
+
+[tool.mypy]
+python_version = "3.11"
+warn_unused_ignores = true
+ignore_missing_imports = true
+plugins = ["pydantic.mypy"]
+exclude = ["alembic/versions"]
+
+[[tool.mypy.overrides]]
+# SQLAlchemy's async typing is noisy without the plugin; keep mypy focused on
+# the AI/domain layers where it actually catches bugs.
+module = "app.repositories.*"
+ignore_errors = true
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+# All async fixtures and tests must share ONE event loop. Otherwise the
+# SQLAlchemy async engine (created once per process) hands out pooled
+# connections bound to a previous loop and asyncpg raises
+# "got Future attached to a different loop".
+asyncio_default_fixture_loop_scope = "session"
+asyncio_default_test_loop_scope = "session"
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-q --strict-markers --timeout=180 --timeout-method=thread"
+markers = [
+    "integration: requires PostgreSQL/Redis/Qdrant to be running",
+    "slow: takes more than a few seconds",
+]
+filterwarnings = ["ignore::DeprecationWarning"]
+
+[tool.coverage.run]
+source = ["app"]
+# SQLAlchemy's async engine runs ORM work inside greenlets. Without declaring
+# that here, coverage silently misses every line executed through
+# greenlet_spawn() and reports a dramatically understated percentage.
+concurrency = ["greenlet", "thread"]
+branch = false
+omit = ["*/alembic/*", "*/tests/*", "*/__pycache__/*"]
+
+[tool.coverage.report]
+show_missing = true
+precision = 1
+exclude_lines = [
+    "pragma: no cover",
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+]

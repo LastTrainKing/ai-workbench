@@ -1,0 +1,138 @@
+%PDF-1.4
+%‚„œ”
+1 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>
+endobj
+2 0 obj
+<< /Length 647 >>
+stream
+BT
+/F1 11 Tf
+16 TL
+56 800 Td
+(Distributed Systems - Study Notes) Tj
+T*
+() Tj
+T*
+(1. CAP Theorem) Tj
+T*
+(A distributed data store can only guarantee two of the following three:) Tj
+T*
+(Consistency, Availability and Partition tolerance. Because network) Tj
+T*
+(partitions are unavoidable in a real cluster, the practical choice is) Tj
+T*
+(between consistency and availability during a partition.) Tj
+T*
+() Tj
+T*
+(CP systems reject writes when a partition prevents quorum, which keeps) Tj
+T*
+(every reader on the same value. AP systems keep serving reads and writes) Tj
+T*
+(and reconcile conflicts later, usually with last-write-wins or CRDTs.) Tj
+ET
+endstream
+endobj
+3 0 obj
+<< /Length 721 >>
+stream
+BT
+/F1 11 Tf
+16 TL
+56 800 Td
+(2. Consistency Models) Tj
+T*
+(Linearizability gives the illusion of a single copy updated atomically.) Tj
+T*
+(Sequential consistency preserves each client's program order but allows) Tj
+T*
+(reordering across clients. Causal consistency only orders operations that) Tj
+T*
+(are causally related, which is enough for many collaborative editors.) Tj
+T*
+() Tj
+T*
+(3. Replication) Tj
+T*
+(Single-leader replication is simple to reason about but the leader is a) Tj
+T*
+(bottleneck and a failover risk. Multi-leader replication tolerates) Tj
+T*
+(regional outages at the cost of write conflicts. Leaderless replication) Tj
+T*
+(uses quorums: with R + W > N, every read overlaps the latest write.) Tj
+ET
+endstream
+endobj
+4 0 obj
+<< /Length 831 >>
+stream
+BT
+/F1 11 Tf
+16 TL
+56 800 Td
+(4. Consensus) Tj
+T*
+(Raft separates leader election, log replication and safety. A candidate) Tj
+T*
+(wins an election with a majority of votes; each log entry carries a term) Tj
+T*
+(number and an index. The commit rule only advances the commit index once a) Tj
+T*
+(majority has replicated the entry from the current term.) Tj
+T*
+() Tj
+T*
+(5. Idempotency and Retries) Tj
+T*
+(Every retried request must carry an idempotency key so that a duplicated) Tj
+T*
+(delivery cannot apply the same effect twice. Exponential backoff with) Tj
+T*
+(jitter avoids synchronised retry storms.) Tj
+T*
+() Tj
+T*
+(6. TODO) Tj
+T*
+(TODO: compare Raft and Paxos commit rules in detail.) Tj
+T*
+(TODO: measure the write amplification of quorum replication.) Tj
+T*
+(TODO: write a failure-injection test for leader failover.) Tj
+ET
+endstream
+endobj
+5 0 obj
+<< /Type /Page /Parent 8 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 1 0 R >> >> /Contents 2 0 R >>
+endobj
+6 0 obj
+<< /Type /Page /Parent 8 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 1 0 R >> >> /Contents 3 0 R >>
+endobj
+7 0 obj
+<< /Type /Page /Parent 8 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 1 0 R >> >> /Contents 4 0 R >>
+endobj
+8 0 obj
+<< /Type /Pages /Kids [5 0 R 6 0 R 7 0 R] /Count 3 >>
+endobj
+9 0 obj
+<< /Type /Catalog /Pages 8 0 R >>
+endobj
+xref
+0 10
+0000000000 65535 f 
+0000000015 00000 n 
+0000000085 00000 n 
+0000000783 00000 n 
+0000001555 00000 n 
+0000002437 00000 n 
+0000002563 00000 n 
+0000002689 00000 n 
+0000002815 00000 n 
+0000002884 00000 n 
+trailer
+<< /Size 10 /Root 9 0 R >>
+startxref
+2933
+%%EOF

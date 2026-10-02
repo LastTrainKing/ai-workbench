@@ -1,0 +1,173 @@
+"""Pytest fixtures.
+
+Test isolation strategy
+-----------------------
+* A **dedicated database** (``aiworkbench_test``) and a **dedicated Redis
+  database index** are used so tests can never touch development data.
+* Environment variables are set *before* ``app`` is imported, because the
+  settings object and the SQLAlchemy engine are created at import time.
+* Tables are created once per session and truncated between tests, which is far
+  faster than re-creating the schema and still gives full isolation.
+* The AI providers are forced to the deterministic offline engine so the test
+  suite needs no API key and produces stable, reproducible output.
+"""
+
+from __future__ import annotations
+
+import os
+import uuid
+from collections.abc import AsyncIterator
+
+# ---------------------------------------------------------------------------
+# Environment must be configured before importing anything from `app`.
+# ---------------------------------------------------------------------------
+TEST_DB_NAME = "aiworkbench_test"
+TEST_DB_URL = f"postgresql+asyncpg://aiworkbench:aiworkbench@127.0.0.1:5432/{TEST_DB_NAME}"
+
+os.environ["DATABASE_URL"] = TEST_DB_URL
+os.environ["REDIS_URL"] = "redis://127.0.0.1:6379/1"
+os.environ["QDRANT_COLLECTION"] = "ai_workbench_chunks_test"
+os.environ["AI_PROVIDER"] = "offline"
+os.environ["EMBEDDING_PROVIDER"] = "offline"
+os.environ["WORKER_ENABLED"] = "false"
+os.environ["CACHE_ENABLED"] = "true"
+os.environ["LOG_LEVEL"] = "WARNING"
+os.environ["APP_ENV"] = "test"
+os.environ["STORAGE_DIR"] = str(
+    __import__("pathlib").Path(__file__).resolve().parents[2] / ".runtime" / "test-storage"
+)
+
+import httpx
+import pytest
+import pytest_asyncio
+from sqlalchemy import text
+
+from app.core.config import settings
+from app.infrastructure.database import dispose_engine, get_engine, session_scope
+from app.models import Base
+
+
+async def _ensure_test_database() -> None:
+    """Create the test database if it does not exist yet."""
+    import asyncpg
+
+    admin = await asyncpg.connect(
+        user="aiworkbench",
+        password="aiworkbench",
+        host="127.0.0.1",
+        port=5432,
+        database="postgres",
+    )
+    try:
+        exists = await admin.fetchval(
+            "SELECT 1 FROM pg_database WHERE datname = $1", TEST_DB_NAME
+        )
+        if not exists:
+            await admin.execute(f'CREATE DATABASE "{TEST_DB_NAME}"')
+    finally:
+        await admin.close()
+
+
+@pytest_asyncio.fixture(scope="session", autouse=True)
+async def _database() -> AsyncIterator[None]:
+    await _ensure_test_database()
+    async with get_engine().begin() as conn:
+        await conn.run_sync(Base.metadata.drop_all)
+        await conn.run_sync(Base.metadata.create_all)
+    yield
+    await dispose_engine()
+
+
+@pytest_asyncio.fixture(autouse=True)
+async def _clean_state() -> AsyncIterator[None]:
+    """Truncate every table and clear the Redis test database between tests."""
+    from app.core.cache import get_redis
+
+    async with session_scope() as session:
+        await session.execute(
+            text(
+                "TRUNCATE TABLE "
+                + ", ".join(f'"{name}"' for name in Base.metadata.tables)
+                + " RESTART IDENTITY CASCADE"
+            )
+        )
+        # Prompt templates are reference data: seed them for every test.
+        from app.ai.prompts.registry import ensure_seeded
+
+        await ensure_seeded(session)
+    try:
+        await get_redis().flushdb()
+    except Exception:
+        pass
+    yield
+
+
+@pytest_asyncio.fixture
+async def session() -> AsyncIterator[object]:
+    async with session_scope() as s:
+        yield s
+
+
+@pytest_asyncio.fixture
+async def client() -> AsyncIterator[httpx.AsyncClient]:
+    from app.main import create_app
+
+    app = create_app()
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(
+        transport=transport, base_url="http://test/api/v1", timeout=60.0
+    ) as c:
+        yield c
+
+
+@pytest_asyncio.fixture
+async def user_token(client: httpx.AsyncClient) -> tuple[str, dict]:
+    """Register a fresh user and return (token, user dict)."""
+    payload = {
+        "email": f"user_{uuid.uuid4().hex[:8]}@aiworkbench.dev",
+        "username": f"user_{uuid.uuid4().hex[:8]}",
+        "password": "test1234",
+        "display_name": "Test User",
+    }
+    response = await client.post("/auth/register", json=payload)
+    assert response.status_code == 201, response.text
+    data = response.json()["data"]
+    return data["access_token"], data["user"]
+
+
+@pytest_asyncio.fixture
+async def auth_headers(user_token: tuple[str, dict]) -> dict[str, str]:
+    token, _ = user_token
+    return {"Authorization": f"Bearer {token}"}
+
+
+@pytest_asyncio.fixture
+async def knowledge_base(client: httpx.AsyncClient, auth_headers: dict) -> dict:
+    response = await client.post(
+        "/knowledge-bases",
+        headers=auth_headers,
+        json={"name": f"测试知识库 {uuid.uuid4().hex[:6]}", "description": "pytest fixture"},
+    )
+    assert response.status_code == 201, response.text
+    return response.json()["data"]
+
+
+@pytest.fixture
+def sample_markdown() -> bytes:
+    return (
+        "# JVM 学习笔记\n\n"
+        "## 垃圾回收\n\n"
+        "G1 收集器把堆划分为多个 Region，可以预测停顿时间，是 JDK 9 之后的默认收集器。\n"
+        "ZGC 追求极低停顿，停顿时间与堆大小基本无关。\n\n"
+        "## 集合框架\n\n"
+        "HashMap 在 JDK 8 之后采用数组加链表加红黑树的结构，链表长度超过 8 且容量不小于 64 时转为红黑树。\n\n"
+        "## 待办\n\n"
+        "- TODO: 整理 JVM 调优参数\n"
+        "- 待办：补充线程池监控指标\n"
+    ).encode()
+
+
+@pytest.fixture
+def settings_override():
+    """Expose the live settings object so tests can assert on config."""
+    return settings
