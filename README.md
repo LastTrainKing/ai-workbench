@@ -24,6 +24,10 @@ documents → knowledge → tasks → execution → results → back into knowle
   <img src="screenshots/02-knowledge.png" alt="Knowledge bases" width="49%">
   <img src="screenshots/07-ai-runs.png" alt="AI execution traces" width="49%">
 </p>
+<p align="center">
+  <img src="screenshots/10-ai-provider.png" alt="AI Provider settings — switch model at runtime" width="49%">
+  <img src="screenshots/09-graph.png" alt="Knowledge graph" width="49%">
+</p>
 
 ---
 
