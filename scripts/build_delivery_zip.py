@@ -18,6 +18,8 @@ Usage::
 from __future__ import annotations
 
 import argparse
+import os
+import re
 import subprocess
 import sys
 import zipfile
@@ -37,13 +39,52 @@ FORBIDDEN_SUFFIXES = {".pyc", ".pyo", ".log", ".zip", ".tsbuildinfo"}
 FORBIDDEN_NAMES = {".env", "ai-config.json", ".coverage"}
 
 #: Credential shapes that must not appear in any archived text file.
-SECRET_MARKERS = ("REDACTED-BY-AWB",)
+#: Deliberately generic — a real key is never hard-coded here. The concrete
+#: values are read at build time from `.env` and the environment (see
+#: ``collect_secrets``), so this file itself can be archived safely.
+_GENERIC_SECRET = re.compile(r"sk-[A-Za-z0-9]{20,}")
+_SYNTHETIC_HINTS = ("xxx", "your", "example", "dummy", "fake", "placeholder", "0123456789abcdef")
 
 TEXT_SUFFIXES = {
     ".py", ".ts", ".tsx", ".js", ".mjs", ".cjs", ".json", ".md", ".txt", ".toml",
     ".ini", ".cfg", ".yaml", ".yml", ".bat", ".sh", ".ps1", ".html", ".css",
     ".mako", ".example", ".gitignore", ".dockerignore", ".env",
 }
+
+
+def collect_secrets() -> set[str]:
+    """Read every real credential this machine knows about.
+
+    Sources: ``.env`` (the git-ignored file) and the process environment. Values
+    are kept in memory only and never written anywhere.
+    """
+    secrets: set[str] = set()
+
+    env_file = ROOT / ".env"
+    if env_file.exists():
+        for line in env_file.read_text(encoding="utf-8", errors="ignore").splitlines():
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, _, value = line.partition("=")
+            if "KEY" in key.upper() or "SECRET" in key.upper() or "PASSWORD" in key.upper():
+                value = value.strip().strip("'\"")
+                if len(value) >= 16:
+                    secrets.add(value)
+
+    for name, value in os.environ.items():
+        if ("KEY" in name.upper() or "SECRET" in name.upper()) and len(value) >= 16:
+            secrets.add(value.strip())
+
+    return secrets
+
+
+def looks_synthetic(value: str) -> bool:
+    lowered = value.lower()
+    if any(hint in lowered for hint in _SYNTHETIC_HINTS):
+        return True
+    body = lowered.removeprefix("sk-")
+    return bool(body) and len(set(body)) <= 2
 
 
 def tracked_files() -> list[Path]:
@@ -62,9 +103,7 @@ def is_forbidden(relative: Path) -> bool:
         return True
     if relative.name in FORBIDDEN_NAMES:
         return True
-    if relative.suffix.lower() in FORBIDDEN_SUFFIXES:
-        return True
-    return False
+    return relative.suffix.lower() in FORBIDDEN_SUFFIXES
 
 
 def build(output: Path) -> int:
@@ -93,6 +132,8 @@ def build(output: Path) -> int:
 def verify(output: Path) -> list[str]:
     """Re-open the archive and prove it is clean."""
     problems: list[str] = []
+    secrets = collect_secrets()
+    print(f"  known credentials to look for : {len(secrets)}")
 
     with zipfile.ZipFile(output) as archive:
         names = archive.namelist()
@@ -112,9 +153,14 @@ def verify(output: Path) -> list[str]:
                 payload = archive.read(name).decode("utf-8", errors="ignore")
             except (KeyError, OSError):
                 continue
-            for marker in SECRET_MARKERS:
-                if marker in payload:
+            for secret in secrets:
+                if secret in payload:
                     problems.append(f"credential found in archive: {name}")
+            for match in _GENERIC_SECRET.finditer(payload):
+                if not looks_synthetic(match.group(0)):
+                    problems.append(
+                        f"credential-shaped string in archive: {name} ({match.group(0)[:12]}…)"
+                    )
 
         required = [
             f"{ARCHIVE_PREFIX}/README.md",
