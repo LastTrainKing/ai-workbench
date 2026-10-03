@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import re
 import uuid
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -405,3 +406,56 @@ def load_json_object(text: str) -> dict[str, Any]:
 
 # Backwards-compatible private alias used internally.
 _loads = load_json_object
+
+
+async def request_structured(
+    provider: Any,
+    messages: Sequence[ChatMessage],
+    *,
+    temperature: float = 0.2,
+    max_tokens: int = 2048,
+    attempts: int = 3,
+) -> tuple[dict[str, Any], Any]:
+    """Call the model and parse JSON, retrying when the model returns prose.
+
+    The HTTP retry policy in :mod:`app.core.retry` cannot help here: the request
+    succeeds with HTTP 200 and it is the *content* that is unusable. Language
+    models occasionally answer a JSON request with a paragraph, or get cut off
+    mid-object in a way the repair pass cannot salvage.
+
+    Observed in practice against DeepSeek: the same document analysis request
+    failed roughly one time in five with "Model returned content that is not
+    valid JSON" and succeeded on an immediate retry. Asking again is far better
+    than surfacing a 502 for something that is transient by nature.
+
+    Returns ``(payload, chat_result)`` so the caller can still record tokens and
+    latency from the attempt that actually produced the answer.
+    """
+    last_error: AIResponseFormatError | None = None
+
+    for attempt in range(1, max(1, attempts) + 1):
+        chat = await provider.chat(
+            messages,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            json_mode=True,
+        )
+        try:
+            return load_json_object(chat.content), chat
+        except AIResponseFormatError as exc:
+            last_error = exc
+            logger.warning(
+                "structured_output_unparseable",
+                extra={
+                    "attempt": attempt,
+                    "attempts": attempts,
+                    "finish_reason": chat.finish_reason,
+                    "chars": len(chat.content or ""),
+                    "preview": (chat.content or "")[:160],
+                },
+            )
+            if attempt >= attempts:
+                break
+
+    assert last_error is not None
+    raise last_error

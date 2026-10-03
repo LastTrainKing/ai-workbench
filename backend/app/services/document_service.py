@@ -26,6 +26,7 @@ from app.ai.providers.factory import build_llm_provider
 from app.ai.rag.chunker import chunk_text
 from app.ai.rag.embedding import EmbeddingService
 from app.ai.rag.pipeline import load_json_object as _loads
+from app.ai.rag.pipeline import request_structured
 from app.ai.tracing import RunRecorder
 from app.ai.types import ChatMessage, estimate_tokens
 from app.core.config import settings
@@ -538,7 +539,10 @@ class DocumentService:
                 prompt = await get_prompt(self.session, "document_summary")
                 recorder.model_row.prompt_name = prompt.name
                 recorder.model_row.prompt_version = prompt.version
-                chat = await llm.chat(
+                # Retries the *parse*, not the HTTP call: the model sometimes
+                # answers a JSON request with prose, and asking again works.
+                payload, chat = await request_structured(
+                    llm,
                     [
                         ChatMessage(
                             role="system",
@@ -548,10 +552,8 @@ class DocumentService:
                     ],
                     temperature=0.2,
                     max_tokens=settings.ai_max_tokens,
-                    json_mode=True,
                 )
                 recorder.record_usage(chat.usage)
-                payload = _loads(chat.content)
                 result["summary"] = payload.get("summary", "")
                 result["key_points"] = payload.get("key_points", [])
                 result["keywords"] = payload.get("keywords", [])

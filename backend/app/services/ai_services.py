@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.ai.agent.executor import AgentExecutor, AgentOutcome
 from app.ai.prompts.registry import get_prompt
 from app.ai.providers.factory import build_llm_provider
-from app.ai.rag.pipeline import RAGAnswer, RAGPipeline, load_json_object
+from app.ai.rag.pipeline import RAGAnswer, RAGPipeline, request_structured
 from app.ai.rag.retriever import Retriever
 from app.ai.tracing import RunRecorder
 from app.ai.types import ChatMessage
@@ -222,7 +222,10 @@ class PlannerService:
         )
 
         try:
-            chat = await self.llm.chat(
+            # Retries the *parse*, not the HTTP call: a JSON request occasionally
+            # comes back as prose, and simply asking again succeeds.
+            raw, chat = await request_structured(
+                self.llm,
                 [
                     ChatMessage(
                         role="system",
@@ -234,10 +237,8 @@ class PlannerService:
                 ],
                 temperature=0.3,
                 max_tokens=settings.ai_max_tokens,
-                json_mode=True,
             )
             recorder.record_usage(chat.usage)
-            raw = load_json_object(chat.content)
             plan = self._normalise_plan(raw, goal, horizon_days)
 
             await recorder.add_sources(

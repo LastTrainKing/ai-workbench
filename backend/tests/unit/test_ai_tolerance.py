@@ -133,3 +133,56 @@ def test_non_integer_estimate_is_defaulted() -> None:
     raw = {"phases": [{"name": "P", "tasks": [{"title": "T", "estimated_minutes": "一小时"}]}]}
     plan = PlannerService._normalise_plan(raw, "g", 7)
     assert plan["phases"][0]["tasks"][0]["estimated_minutes"] == 60
+
+
+# --------------------------------------------------------------------------- #
+# structured-output retry
+# --------------------------------------------------------------------------- #
+class _FlakyProvider:
+    """Returns prose first, valid JSON on the retry — the observed behaviour."""
+
+    def __init__(self, replies: list[str]) -> None:
+        self._replies = list(replies)
+        self.calls = 0
+
+    async def chat(self, messages, **kwargs):
+        from app.ai.types import ChatResult, Usage
+
+        self.calls += 1
+        content = self._replies.pop(0) if self._replies else "{}"
+        return ChatResult(
+            content=content,
+            provider="test",
+            model="test",
+            usage=Usage(prompt_tokens=1, completion_tokens=1),
+        )
+
+
+@pytest.mark.asyncio
+async def test_structured_request_retries_unparseable_output() -> None:
+    from app.ai.rag.pipeline import request_structured
+
+    provider = _FlakyProvider(["这是一段说明文字，没有 JSON。", '{"summary": "ok"}'])
+    payload, _chat = await request_structured(provider, [], attempts=3)
+    assert payload == {"summary": "ok"}
+    assert provider.calls == 2, "it should have retried exactly once"
+
+
+@pytest.mark.asyncio
+async def test_structured_request_succeeds_first_time() -> None:
+    from app.ai.rag.pipeline import request_structured
+
+    provider = _FlakyProvider(['{"a": 1}'])
+    payload, _ = await request_structured(provider, [], attempts=3)
+    assert payload == {"a": 1}
+    assert provider.calls == 1, "a good first answer must not be retried"
+
+
+@pytest.mark.asyncio
+async def test_structured_request_gives_up_after_the_attempt_limit() -> None:
+    from app.ai.rag.pipeline import request_structured
+
+    provider = _FlakyProvider(["prose", "more prose", "still prose", "and more"])
+    with pytest.raises(AIResponseFormatError):
+        await request_structured(provider, [], attempts=3)
+    assert provider.calls == 3, "it must stop at the limit rather than loop"
