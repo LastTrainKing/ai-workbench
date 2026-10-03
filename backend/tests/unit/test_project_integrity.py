@@ -235,3 +235,50 @@ def test_env_example_never_ships_a_real_key() -> None:
             assert not value.startswith("sk-") or value in {"", "sk-..."}, (
                 f".env.example must not contain a key: {line}"
             )
+
+
+def test_no_credential_exists_anywhere_in_git_history() -> None:
+    """Scan every commit, not just the working tree.
+
+    The working-tree check above is not enough. A real key was once committed and
+    only fixed in a *later* commit, which leaves it permanently readable in
+    history. This test is the guard for that: it walks every commit, extracts
+    every credential-shaped string, and fails on any that is not obviously
+    synthetic.
+
+    Skips (rather than fails) when the directory is not a Git repository, so the
+    suite still runs from an extracted source archive.
+    """
+    import subprocess
+
+    if not (REPO_ROOT / ".git").exists():
+        pytest.skip("not a git repository - history cannot be scanned")
+
+    try:
+        commits = subprocess.run(
+            ["git", "rev-list", "--all"],
+            cwd=REPO_ROOT, capture_output=True, text=True, timeout=60,
+        ).stdout.split()
+    except (OSError, subprocess.SubprocessError) as exc:
+        pytest.skip(f"git unavailable: {exc}")
+
+    if not commits:
+        pytest.skip("no commits yet")
+
+    offenders: list[str] = []
+    for commit in commits:
+        # -o prints only the matched text, so synthetic samples are filtered out
+        # the same way the working-tree scan filters them.
+        result = subprocess.run(
+            ["git", "grep", "-I", "-o", "-E", r"sk-[A-Za-z0-9]{20,}", commit],
+            cwd=REPO_ROOT, capture_output=True, text=True,
+        )
+        for line in result.stdout.splitlines():
+            _, _, match = line.partition(":")
+            if match and not _looks_synthetic(match):
+                offenders.append(f"{commit[:8]}: {match[:16]}...")
+
+    assert not offenders, (
+        "credentials found in git history - rewrite it before publishing: "
+        + ", ".join(sorted(set(offenders)))
+    )
