@@ -2,11 +2,21 @@
 #
 #   powershell -ExecutionPolicy Bypass -File scripts\dev.ps1 start
 #   powershell -ExecutionPolicy Bypass -File scripts\dev.ps1 stop
+#   powershell -ExecutionPolicy Bypass -File scripts\dev.ps1 restart
 #   powershell -ExecutionPolicy Bypass -File scripts\dev.ps1 status
 #   powershell -ExecutionPolicy Bypass -File scripts\dev.ps1 logs api
 #
-# Processes started here are project-scoped: PID files live in .runtime/pids and
-# logs in .runtime/logs. Nothing is installed as a Windows service.
+# Processes started here are project-scoped: pid files live in .runtime\pids and
+# logs in .runtime\logs. Nothing is installed as a Windows service.
+#
+# READINESS CONTRACT
+# ------------------
+# The API is ready when GET /api/v1/health returns 200, and the frontend is ready
+# when GET / returns 200. A listening port is not readiness — Vite binds the port
+# before it can serve a page, and the API binds before the worker has started.
+# `start` exits non-zero if either does not become ready in time, so the caller
+# never opens a browser on a half-started application.
+#
 param(
     [Parameter(Position = 0)]
     [ValidateSet('start', 'stop', 'restart', 'status', 'logs')]
@@ -19,179 +29,194 @@ param(
 . "$PSScriptRoot\lib.ps1"
 Initialize-Dirs
 
-$PidDir = Join-Path $RuntimeDir 'pids'
-if (-not (Test-Path $PidDir)) { New-Item -ItemType Directory -Path $PidDir -Force | Out-Null }
-
 $ApiPort = 8000
 $WebPort = 5173
+$ApiReadyTimeout = 90
+$WebReadyTimeout = 90
+
 $Python = Join-Path $RepoRoot '.venv\Scripts\python.exe'
 $BackendDir = Join-Path $RepoRoot 'backend'
+$FrontendDir = Join-Path $RepoRoot 'frontend'
+$ViteEntry = Join-Path $FrontendDir 'node_modules\vite\bin\vite.js'
 
-function Get-PidFile([string]$name) { Join-Path $PidDir "$name.pid" }
+$ApiHealthUrl = "http://127.0.0.1:$ApiPort/api/v1/health"
+$WebUrl = "http://127.0.0.1:$WebPort/"
 
-function Test-Tracked([string]$name) {
-    $file = Get-PidFile $name
-    if (-not (Test-Path $file)) { return $false }
-    $tracked = (Get-Content $file -Raw).Trim()
-    if (-not $tracked) { return $false }
-    return [bool](Get-Process -Id ([int]$tracked) -ErrorAction SilentlyContinue)
-}
+function Test-ApiReady { Test-HttpOk -Url $ApiHealthUrl -TimeoutSeconds 5 }
+function Test-WebReady { Test-HttpOk -Url $WebUrl -TimeoutSeconds 5 }
 
 function Start-Tracked {
+    <#
+      Start one application process and wait until its readiness probe passes.
+
+      Idempotent: an already-running, already-ready service is reported as such
+      and left untouched, so double-clicking the desktop shortcut twice does not
+      start a second copy.
+    #>
     param(
-        [string]$Name,
-        [string]$FilePath,
+        [Parameter(Mandatory)][string]$Name,
+        [Parameter(Mandatory)][string]$FilePath,
         [string[]]$Arguments,
-        [string]$WorkingDirectory,
-        [int]$Port
+        [Parameter(Mandatory)][string]$WorkingDirectory,
+        [int]$Port = 0,
+        [Parameter(Mandatory)][scriptblock]$Probe,
+        [string]$ProbeLabel = 'readiness probe',
+        [int]$ReadyTimeout = 90,
+        [string]$MustMatch = ''
     )
-    if (Test-Tracked $Name) {
-        Write-Ok "$Name already running (pid $((Get-Content (Get-PidFile $Name) -Raw).Trim()))"
-        return
+
+    if ((Get-TrackedPid -Name $Name) -and (& $Probe)) {
+        Write-StartupLog -Service $Name -State 'SKIPPED' -Detail "pid $(Get-TrackedPid -Name $Name), already ready"
+        return $true
     }
-    if ($Port -gt 0 -and (Test-PortOpen $Port)) {
-        Write-Warn2 "$Name is not tracked but port $Port is already in use - skipping"
-        return
+    if ($Port -gt 0 -and (Test-PortOpen $Port) -and (& $Probe)) {
+        Write-StartupLog -Service $Name -State 'SKIPPED' -Detail "already serving on $Port"
+        return $true
     }
 
     $stdout = Join-Path $LogDir "$Name.out.log"
     $stderr = Join-Path $LogDir "$Name.err.log"
-    Write-Step "Starting $Name"
+    Write-StartupLog -Service $Name -State 'STARTING' -Detail "port $Port"
+
     $proc = Start-Process -FilePath $FilePath -ArgumentList $Arguments `
         -WorkingDirectory $WorkingDirectory -WindowStyle Hidden -PassThru `
         -RedirectStandardOutput $stdout -RedirectStandardError $stderr
-    Set-Content -Path (Get-PidFile $Name) -Value $proc.Id -Encoding ascii
-    if ($Port -gt 0) {
-        if (-not (Wait-Port $Port 60 $Name)) {
-            Write-Err "See logs: $stdout / $stderr"
-            return
-        }
-    }
-    Write-Ok "$Name started (pid $($proc.Id))"
-}
+    Set-TrackedPid -Name $Name -ProcessId $proc.Id
 
-function Stop-Tracked {
-    param(
-        [string]$Name,
-        [int]$Port = 0
-    )
-    $stopped = $false
-
-    # 1) The PID file written by Start-Tracked.
-    $file = Get-PidFile $Name
-    if (Test-Path $file) {
-        $tracked = (Get-Content $file -Raw).Trim()
-        if ($tracked) {
-            $proc = Get-Process -Id ([int]$tracked) -ErrorAction SilentlyContinue
-            if ($proc) {
-                Write-Step "Stopping $Name (pid $tracked)"
-                Stop-Process -Id ([int]$tracked) -Force
-                $stopped = $true
-            }
-        }
-        Remove-Item $file -Force -ErrorAction SilentlyContinue
+    if (-not (Wait-ServiceReady -Name $Name -Probe $Probe `
+                -TimeoutSeconds $ReadyTimeout -ProbeLabel $ProbeLabel)) {
+        Write-StartupError "$Name failed to become ready within ${ReadyTimeout} seconds."
+        Write-Host "    see $stdout / $stderr" -ForegroundColor DarkGray
+        return $false
     }
 
-    # 2) Fall back to whatever is actually listening on this service's port.
-    #    A process started outside this script (manually, by an IDE, or by an
-    #    earlier session) has no PID file, and `stop` must still stop it —
-    #    otherwise "stop" silently leaves the app running.
-    #    Only OUR app ports are ever inspected; nothing else is touched.
+    # Record the process that actually holds the port, not the one we spawned.
+    # `python -m app.cli serve` hands the listening socket to a child process, so
+    # the spawned pid can exit while the service keeps running; the pid file must
+    # point at the process a later `stop` needs to end.
     if ($Port -gt 0) {
-        $owners = @(
+        $owner = @(
             Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue |
                 Select-Object -ExpandProperty OwningProcess -Unique
-        )
-        foreach ($ownerPid in $owners) {
-            $proc = Get-Process -Id $ownerPid -ErrorAction SilentlyContinue
-            if (-not $proc) { continue }
-            Write-Step "Stopping $Name on port $Port (pid $ownerPid, untracked)"
-            Stop-Process -Id $ownerPid -Force -ErrorAction SilentlyContinue
-            $stopped = $true
-        }
-        # Give the OS a moment to release the port before reporting.
-        for ($i = 0; $i -lt 10 -and (Test-PortOpen $Port); $i++) {
-            Start-Sleep -Milliseconds 400
+        ) | Select-Object -First 1
+        if ($owner -and $owner -ne $proc.Id) {
+            Set-TrackedPid -Name $Name -ProcessId $owner
+            Write-Host "    (listening socket held by pid $owner)" -ForegroundColor DarkGray
         }
     }
 
-    if ($stopped) {
-        Write-Ok "$Name stopped"
-    } else {
-        Write-Warn2 "$Name is not running"
+    Write-Ok "$Name started (pid $($proc.Id))"
+    return $true
+}
+
+function Start-Api {
+    return (Start-Tracked -Name 'api' -FilePath $Python `
+        -Arguments @('-W', 'ignore', '-m', 'app.cli', 'serve', '--host', '127.0.0.1', '--port', "$ApiPort") `
+        -WorkingDirectory $BackendDir -Port $ApiPort `
+        -Probe { Test-ApiReady } -ProbeLabel "HTTP GET $ApiHealthUrl" `
+        -ReadyTimeout $ApiReadyTimeout -MustMatch 'app.cli')
+}
+
+function Start-Web {
+    if (-not (Test-Path (Join-Path $FrontendDir 'package.json'))) {
+        Write-Warn2 'frontend/package.json not found - skipping the frontend'
+        return $true
     }
+    if (-not (Test-Path (Join-Path $FrontendDir 'node_modules'))) {
+        Write-Warn2 'frontend/node_modules is missing - run: cd frontend && npm install'
+        return $false
+    }
+    if (-not (Test-Path $ViteEntry)) {
+        Write-Warn2 "Vite entry not found at $ViteEntry - run: cd frontend && npm install"
+        return $false
+    }
+    # Vite is launched through node directly rather than via `npm run dev`: the
+    # npm wrapper exits as soon as it has spawned the real server, so the pid we
+    # recorded would be dead while the port stayed busy. Running vite.js gives us
+    # the actual long-lived process.
+    $node = (Get-Command node.exe -ErrorAction SilentlyContinue).Source
+    if (-not $node) {
+        Write-Warn2 'node not found on PATH - skipping the frontend'
+        return $false
+    }
+    return (Start-Tracked -Name 'web' -FilePath $node `
+        -Arguments @($ViteEntry, '--host', '127.0.0.1', '--port', "$WebPort", '--strictPort') `
+        -WorkingDirectory $FrontendDir -Port $WebPort `
+        -Probe { Test-WebReady } -ProbeLabel "HTTP GET $WebUrl" `
+        -ReadyTimeout $WebReadyTimeout -MustMatch $FrontendDir)
+}
+
+function Stop-Api {
+    Stop-ProjectProcess -Name 'api' -Port $ApiPort -MustMatch 'app.cli' | Out-Null
+}
+
+function Stop-Web {
+    Stop-ProjectProcess -Name 'web' -Port $WebPort -MustMatch $FrontendDir | Out-Null
+}
+
+function Assert-Infrastructure {
+    <# The application needs a ready database, cache and vector store. #>
+    $problems = @()
+    if (-not (Test-PgReady))  { $problems += 'PostgreSQL (pg_isready)' }
+    if (-not (Test-RedisReady)) { $problems += 'Redis (PING)' }
+    if (-not (Test-QdrantReady)) { $problems += 'Qdrant (HTTP /healthz)' }
+    if ($problems.Count -gt 0) {
+        Write-StartupError ("Infrastructure is not ready: " + ($problems -join ', ') + ' - run scripts\infra-start.ps1')
+        return $false
+    }
+    return $true
 }
 
 switch ($Action) {
     'start' {
         $missing = Test-VendorPresent
         if ($missing.Count -gt 0) {
-            Write-Err ("Missing runtime(s): " + ($missing -join ', '))
-            Write-Warn2 'Run scripts\fetch-runtime.ps1 first'
+            Write-StartupError ("Missing runtime(s): " + ($missing -join ', '))
             exit 1
         }
-        foreach ($svc in @(@{n='PostgreSQL';p=$PgPort}, @{n='Redis';p=$RedisPort}, @{n='Qdrant';p=$QdrantPort})) {
-            if (-not (Test-PortOpen $svc.p)) {
-                Write-Warn2 "$($svc.n) is down. Run scripts\infra-start.ps1 first."
-                exit 1
-            }
-        }
+        if (-not (Assert-Infrastructure)) { exit 1 }
 
-        # The API runs the in-process worker by default (WORKER_ENABLED=true).
-        Start-Tracked -Name 'api' -FilePath $Python `
-            -Arguments @('-W', 'ignore', '-m', 'app.cli', 'serve', '--host', '127.0.0.1', '--port', "$ApiPort") `
-            -WorkingDirectory $BackendDir -Port $ApiPort
-
-        $frontend = Join-Path $RepoRoot 'frontend'
-        if (Test-Path (Join-Path $frontend 'package.json')) {
-            if (Test-Path (Join-Path $frontend 'node_modules')) {
-                $npm = (Get-Command npm.cmd -ErrorAction SilentlyContinue).Source
-                if ($npm) {
-                    Start-Tracked -Name 'web' -FilePath $npm `
-                        -Arguments @('run', 'dev', '--', '--host', '127.0.0.1', '--port', "$WebPort") `
-                        -WorkingDirectory $frontend -Port $WebPort
-                } else {
-                    Write-Warn2 'npm not found on PATH - skipping the frontend'
-                }
-            } else {
-                Write-Warn2 'frontend/node_modules is missing - run: cd frontend && npm install'
-            }
-        } else {
-            Write-Warn2 'frontend/package.json not found - skipping the frontend'
-        }
+        if (-not (Start-Api)) { exit 1 }
+        if (-not (Start-Web)) { exit 1 }
 
         Write-Host ''
-        Write-Ok 'Application is up.'
+        Write-StartupLog -Service 'Application' -State 'READY'
         Write-Host "  API       http://127.0.0.1:$ApiPort"
         Write-Host "  Docs      http://127.0.0.1:$ApiPort/docs"
         Write-Host "  Frontend  http://127.0.0.1:$WebPort"
+        exit 0
     }
     'stop' {
-        Stop-Tracked -Name 'web' -Port $WebPort
-        Stop-Tracked -Name 'api' -Port $ApiPort
+        Stop-Web
+        Stop-Api
         Write-Host ''
-        Write-Ok 'Application processes stopped (infrastructure left running).'
+        Write-StartupLog -Service 'Application' -State 'STOPPED'
+        exit 0
     }
     'restart' {
-        Stop-Tracked -Name 'web' -Port $WebPort
-        Stop-Tracked -Name 'api' -Port $ApiPort
-        Start-Sleep -Seconds 2
+        Stop-Web
+        Stop-Api
+        # Wait for the ports to be genuinely free before starting again.
+        Wait-Until -Condition { -not (Test-PortOpen $ApiPort) -and -not (Test-PortOpen $WebPort) } `
+            -TimeoutSeconds 30 | Out-Null
         & $PSCommandPath start
+        exit $LASTEXITCODE
     }
     'status' {
         $rows = @()
-        foreach ($name in @('api', 'web')) {
-            $port = if ($name -eq 'api') { $ApiPort } else { $WebPort }
+        foreach ($svc in @(
+            @{ n = 'api'; p = $ApiPort; probe = { Test-ApiReady } },
+            @{ n = 'web'; p = $WebPort; probe = { Test-WebReady } }
+        )) {
             # NOTE: $PID is a read-only automatic variable in PowerShell, so the
             # tracked process id must live in a differently named variable.
-            $trackedId = ''
-            $file = Get-PidFile $name
-            if (Test-Path $file) { $trackedId = (Get-Content $file -Raw).Trim() }
+            $trackedId = Get-TrackedPid -Name $svc.n
             $rows += [pscustomobject]@{
-                Service   = $name
-                Port      = $port
-                Listening = (Test-PortOpen $port)
-                Pid       = $trackedId
+                Service   = $svc.n
+                Port      = $svc.p
+                Listening = (Test-PortOpen $svc.p)
+                Ready     = (& $svc.probe)
+                Pid       = if ($trackedId) { $trackedId } else { '' }
             }
         }
         $rows | Format-Table -AutoSize

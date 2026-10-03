@@ -253,12 +253,27 @@ Open <http://127.0.0.1:5173> and sign in with **`demo` / `demo1234`**.
 no system changes), then starts the API and the UI.
 
 **Desktop shortcut.** The first run also creates `AI Workbench.lnk` on your Desktop
-(with a proper icon) that launches the whole stack — infrastructure included. If it
-is missing, create it with:
+(with a proper icon). Double-clicking it starts the whole stack **with no console
+window** and opens your browser on <http://127.0.0.1:5173> as soon as the frontend
+really serves a page:
+
+```
+AI Workbench.lnk
+  -> wscript.exe  scripts\start-hidden.vbs
+       -> scripts\start.bat --hidden
+            -> PostgreSQL / Redis / Qdrant / API / frontend
+                 -> browser opens
+```
+
+If it is missing, create it with:
 
 ```bat
 powershell -ExecutionPolicy Bypass -File scripts\create-shortcut.ps1
 ```
+
+A failure is never swallowed: nothing is opened in the browser, the reason is written
+to `.runtime\logs\startup-error.log`, and the launcher shows a message box pointing
+at that file.
 
 **Other commands:**
 
@@ -267,11 +282,50 @@ scripts\stop.bat              :: stop everything (all data preserved)
 scripts\stop.bat --app-only   :: stop just the API + UI, keep the databases running
 scripts\restart.bat           :: restart the application only
 scripts\restart.bat --full    :: restart infrastructure too
+scripts\infra-status.ps1      :: readiness report for every dependency
 ```
 
 A shortcut is a shell object, so `create-shortcut.ps1` asks the shell to build it
 (`WScript.Shell`) rather than hand-writing the binary format — that is what Explorer
 itself does. If the Desktop is redirected, pass `-Destination`.
+
+### Startup is gated on real readiness
+
+Every service is proven usable before the next step runs — a listening port is never
+treated as ready:
+
+| Service | Probe | Why not just the port |
+|---|---|---|
+| PostgreSQL | `pg_isready`, then `psql -c "SELECT 1"` | the server binds the port before crash recovery finishes and answers `FATAL: the database system is starting up` until it is done |
+| Redis | `redis-cli ping` → `PONG` | an open socket does not mean Redis is serving |
+| Qdrant | `HTTP GET /healthz` → 200 | the port opens before the HTTP API is up |
+| API | `HTTP GET /api/v1/health` → 200 | the socket binds before the worker has started |
+| Frontend | `HTTP GET /` → 200 | Vite binds the port before it can serve a page |
+
+Ordering is strictly serial (`start → ready → provision → verify`), a service that
+misses its budget is reported `FAILED` and the run exits non-zero, and the browser is
+only opened after the frontend answers. `scripts/startup-lock.ps1` serialises
+concurrent launches, so an impatient double-click waits for the run already in
+progress instead of starting a second one.
+
+Every transition is appended to `.runtime\logs\startup.log`:
+
+```
+2026-10-03 11:00:15 Infrastructure STARTING
+2026-10-03 11:00:16 PostgreSQL STARTING - port 5432
+2026-10-03 11:00:16 PostgreSQL READY - 0s via pg_isready
+2026-10-03 11:00:28 Redis READY - 1s via redis-cli ping
+2026-10-03 11:00:36 Qdrant READY - 1s via HTTP /healthz
+2026-10-03 11:00:41 api READY - 3s via HTTP GET http://127.0.0.1:8000/api/v1/health
+2026-10-03 11:00:44 web READY - 1s via HTTP GET http://127.0.0.1:5173/
+2026-10-03 11:00:45 opening the browser
+```
+
+`stop` is scope-safe: PostgreSQL is stopped through `pg_ctl -D <our data dir>`, and
+Redis / Qdrant / API / frontend are stopped by pid file **verified to belong to this
+project** (image under `vendor\runtime`, or a matching command line), plus the port
+owner. There is deliberately no `taskkill /IM python.exe` or `/IM node.exe` — that
+would kill your other projects.
 
 ### Linux / macOS
 

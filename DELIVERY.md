@@ -68,21 +68,44 @@ DEEPSEEK_API_KEY=sk-你的密钥
 
 ### 4. 一键启动
 
-双击桌面快捷方式，或运行：
+双击桌面快捷方式 `AI Workbench.lnk`，或运行：
 
 ```bat
 scripts\start.bat
 ```
 
-脚本会：检查依赖 → 首次自动下载 PostgreSQL / Redis / Qdrant 到 `vendor/`
-→ 以项目级进程启动它们 → 启动 API 与前端 → 打开浏览器。
+**快捷方式的完整链路**（全程无黑窗口）：
 
-首次启动还会在桌面自动创建 `AI Workbench.lnk`（带图标，点击即启动整个项目）。
-若缺失，手动创建：
+```
+AI Workbench.lnk
+  → wscript.exe  scripts\start-hidden.vbs
+      → scripts\start.bat --hidden
+          → PostgreSQL / Redis / Qdrant / API / 前端
+              → 前端真正返回 HTTP 200 后自动打开浏览器
+```
+
+脚本会：检查依赖 → 首次自动下载 PostgreSQL / Redis / Qdrant 到 `vendor/`
+→ 以项目级进程启动它们 → 启动 API 与前端 → **确认前端真的可访问后打开浏览器**。
+
+首次启动还会在桌面自动创建该快捷方式。若缺失，手动创建：
 
 ```bat
 powershell -ExecutionPolicy Bypass -File scripts\create-shortcut.ps1
 ```
+
+**就绪判定是真实探测，不是端口监听**：
+
+| 服务 | 探测方式 |
+|---|---|
+| PostgreSQL | `pg_isready` + `psql "SELECT 1"` |
+| Redis | `redis-cli ping` → `PONG` |
+| Qdrant | HTTP `/healthz` → 200 |
+| API | HTTP `/api/v1/health` → 200 |
+| 前端 | HTTP `/` → 200 |
+
+严格串行（启动 → 就绪 → 初始化 → 复核）；超时即 `FAILED` 并非零退出，
+浏览器不会打开；重复点击由启动锁串行化，不会启动第二份实例。
+全过程记录在 `.runtime\logs\startup.log`，失败原因记录在 `.runtime\logs\startup-error.log`。
 
 首次启动会下载约 350 MB 运行时，需要几分钟。**不需要** Docker，也**不会**修改系统设置。
 
@@ -180,7 +203,10 @@ ai-workbench/
 ├── worker/             独立 Worker
 ├── scripts/            运维与验证脚本
 │   ├── start.bat       一键启动（缺失时自动创建桌面快捷方式）
-│   ├── create-shortcut.ps1  创建桌面快捷方式
+│   ├── create-shortcut.ps1  创建桌面快捷方式（指向隐藏启动器）
+│   ├── start-hidden.vbs     无窗口启动入口
+│   ├── startup-lock.ps1     启动锁（并发点击串行化）
+│   ├── wait-ready.ps1       等待 URL 返回 HTTP 200
 │   ├── stop.bat        一键停止
 │   ├── restart.bat     一键重启
 │   ├── fetch-runtime.ps1   下载原生运行时
@@ -195,6 +221,8 @@ ai-workbench/
 ├── samples/            示例文档
 ├── screenshots/        运行截图
 ├── assets/ai-workbench.ico  应用图标
+├── .runtime/logs/startup.log        启动审计日志（运行时生成）
+├── .runtime/logs/startup-error.log  启动失败原因（运行时生成）
 ├── docker-compose.yml
 ├── start.bat / stop.bat / start.sh / stop.sh
 ├── .env.example        配置模板（无真实密钥）

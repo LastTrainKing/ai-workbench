@@ -3,133 +3,195 @@ REM ===========================================================================
 REM  AI Workbench - start (Windows)
 REM
 REM  Idempotent. Running it twice is safe:
-REM    * already-running infrastructure is detected and left alone
+REM    * already-running infrastructure is detected via a real readiness probe
+REM      and left alone
 REM    * already-running application processes are detected and left alone
 REM    * the database, the Qdrant collection and the uploaded files are NEVER
 REM      deleted, truncated or re-initialised by this script
 REM
-REM  Steps:
-REM    1. verify the Python virtual environment
-REM    2. download the native runtimes if they are missing (one-time, ~350 MB)
-REM    3. start PostgreSQL / Redis / Qdrant  (scripts\infra-start.ps1)
-REM    4. start the API (with the in-process worker) and the frontend
-REM       (scripts\dev.ps1 start)
-REM    5. print the URLs
+REM  Readiness is proven, never assumed:
+REM    PostgreSQL  pg_isready + psql "SELECT 1"
+REM    Redis       redis-cli ping -> PONG
+REM    Qdrant      HTTP GET /healthz -> 200
+REM    API         HTTP GET /api/v1/health -> 200
+REM    Frontend    HTTP GET / -> 200
+REM  A service that does not become ready stops the run with a non-zero exit
+REM  code: the browser is not opened and logs\startup-error.log is written.
 REM
-REM  For Docker instead:  docker compose up -d
+REM  Usage:
+REM    scripts\start.bat              interactive (visible console)
+REM    scripts\start.bat --hidden     launched by the desktop shortcut
+REM    scripts\start.bat --no-browser start without opening a browser
 REM ===========================================================================
-setlocal EnableDelayedExpansion
+setlocal EnableExtensions
 cd /d "%~dp0\.."
 set "ROOT=%CD%"
+set "LOGSDIR=%ROOT%\.runtime\logs"
+set "STARTUPLOG=%LOGSDIR%\startup.log"
+set "ERRORLOG=%LOGSDIR%\startup-error.log"
+set "HIDDEN=0"
+set "OPENBROWSER=1"
+set "EXITCODE=0"
+set "PS=powershell -ExecutionPolicy Bypass -NoProfile -File"
 
-echo.
-echo ==========================================================
-echo   AI Workbench - starting
-echo   %ROOT%
-echo ==========================================================
-echo.
+if not exist "%LOGSDIR%" mkdir "%LOGSDIR%" >nul 2>&1
+
+:parse
+if "%~1"=="" goto parsed
+if /i "%~1"=="--hidden" set "HIDDEN=1"
+if /i "%~1"=="--no-browser" set "OPENBROWSER=0"
+shift
+goto parse
+:parsed
+
+call :log "----- start requested (hidden=%HIDDEN%) -----"
+
+if "%HIDDEN%"=="0" (
+    echo.
+    echo ==========================================================
+    echo   AI Workbench - starting
+    echo   %ROOT%
+    echo ==========================================================
+    echo.
+)
+
+REM ------------------------------------------------ single-instance lock ----
+REM A second launch (an impatient double-click) waits here instead of running a
+REM parallel start sequence, then simply opens the browser on the frontend the
+REM first run started.
+%PS% "scripts\startup-lock.ps1" -Action Acquire -TimeoutSeconds 240
+if errorlevel 1 (
+    call :log "another startup is already in progress - waiting for the frontend"
+    %PS% "scripts\wait-ready.ps1" -Url "http://127.0.0.1:5173/" -TimeoutSeconds 120 -Label "Frontend"
+    if errorlevel 1 (
+        call :fail "Another startup is in progress and the frontend did not become reachable."
+        goto :theend
+    )
+    call :log "frontend ready (started by the other launch)"
+    if "%OPENBROWSER%"=="1" start "" "http://127.0.0.1:5173"
+    goto :theend
+)
+set "LOCKHELD=1"
 
 REM ------------------------------------------------------------ prerequisites
 where powershell >nul 2>&1
 if errorlevel 1 (
-    echo [x] PowerShell was not found on PATH.
-    echo     Windows 10/11 ships it by default; check your PATH.
-    goto :fail
+    call :fail "PowerShell was not found on PATH."
+    goto :theend
 )
 
 if not exist "%ROOT%\.venv\Scripts\python.exe" (
-    echo [x] Python virtual environment not found.
-    echo.
-    echo     Create it once with:
-    echo         python -m venv .venv
-    echo         .venv\Scripts\python.exe -m pip install -r backend\requirements-dev.txt
-    echo.
-    goto :fail
+    call :fail "Python virtual environment not found. Create it with: python -m venv .venv  then  .venv\Scripts\python.exe -m pip install -r backend\requirements-dev.txt"
+    goto :theend
 )
 
 if not exist "%ROOT%\frontend\node_modules" (
-    echo [!] frontend\node_modules is missing - the UI will not start.
-    echo     Install it once with:  cd frontend ^&^& npm install
-    echo.
+    call :fail "frontend\node_modules is missing. Install it with: cd frontend  then  npm install"
+    goto :theend
 )
 
-REM ---------------------------------------------------- desktop shortcut
-REM Created on first run if absent. A .lnk is a shell object, so the shell is
-REM asked to build it (scripts\create-shortcut.ps1). Non-fatal if it fails.
+REM ------------------------------------------------------- desktop shortcut --
 set "SHORTCUT=%USERPROFILE%\Desktop\AI Workbench.lnk"
 if not exist "%SHORTCUT%" (
-    echo [*] Creating the desktop shortcut...
-    powershell -ExecutionPolicy Bypass -NoProfile -File "scripts\create-shortcut.ps1" >nul 2>&1
-    if exist "%SHORTCUT%" (
-        echo [+] Desktop shortcut created: %SHORTCUT%
-    ) else (
-        echo [!] Could not create the desktop shortcut. Run scripts\create-shortcut.ps1 manually.
-    )
+    call :log "creating the desktop shortcut"
+    %PS% "scripts\create-shortcut.ps1" >nul 2>&1
+    if exist "%SHORTCUT%" ( call :log "desktop shortcut created" ) else ( call :log "could not create the desktop shortcut (non-fatal)" )
 )
 
-REM ------------------------------------------------------------------ runtimes
-REM Only downloaded when actually absent; never re-downloaded, never deleted.
+REM ---------------------------------------------------------------- runtimes --
 set "NEED_FETCH="
-if not exist "%ROOT%\vendor\runtime\qdrant\qdrant.exe"          set "NEED_FETCH=1"
-if not exist "%ROOT%\vendor\runtime\redis\redis-server.exe"     set "NEED_FETCH=1"
+if not exist "%ROOT%\vendor\runtime\qdrant\qdrant.exe"           set "NEED_FETCH=1"
+if not exist "%ROOT%\vendor\runtime\redis\redis-server.exe"      set "NEED_FETCH=1"
 if not exist "%ROOT%\vendor\runtime\pgsql\pgsql\bin\postgres.exe" set "NEED_FETCH=1"
 
 if defined NEED_FETCH (
-    echo [*] Native runtimes are missing - downloading them now.
-    echo     One-time download of roughly 350 MB.
-    echo.
-    powershell -ExecutionPolicy Bypass -NoProfile -File "scripts\fetch-runtime.ps1"
+    if "%HIDDEN%"=="0" echo [*] Downloading native runtimes ^(one time, ~350 MB^)...
+    call :log "fetching native runtimes"
+    %PS% "scripts\fetch-runtime.ps1"
     if errorlevel 1 (
-        echo [x] Failed to download the runtimes. See the message above.
-        goto :fail
+        call :fail "Failed to download the native runtimes."
+        goto :theend
     )
-) else (
-    echo [+] Native runtimes present.
 )
 
-REM ------------------------------------------------------------ infrastructure
-echo.
-echo [*] Ensuring PostgreSQL, Redis and Qdrant are running...
-echo     (services already running are detected and left untouched)
-powershell -ExecutionPolicy Bypass -NoProfile -File "scripts\infra-start.ps1"
+REM ---------------------------------------------------------- infrastructure --
+if "%HIDDEN%"=="0" (
+    echo.
+    echo [*] Infrastructure
+)
+call :log "infrastructure: start requested"
+%PS% "scripts\infra-start.ps1"
 if errorlevel 1 (
-    echo [x] Infrastructure failed to start. See the message above.
-    goto :fail
+    call :fail "Infrastructure failed to start. See .runtime\logs\startup.log and .runtime\logs\startup-error.log"
+    goto :theend
 )
 
-REM -------------------------------------------------------------- application
-echo.
-echo [*] Ensuring the API and the frontend are running...
-echo     (processes already running are detected and left untouched)
-powershell -ExecutionPolicy Bypass -NoProfile -File "scripts\dev.ps1" start
+REM ------------------------------------------------------------ application --
+if "%HIDDEN%"=="0" (
+    echo.
+    echo [*] Application
+)
+call :log "application: start requested"
+%PS% "scripts\dev.ps1" start
+if errorlevel 1 (
+    call :fail "The application failed to start. See .runtime\logs\startup.log and .runtime\logs\startup-error.log"
+    goto :theend
+)
 
-REM ------------------------------------------------------------------- report
-echo.
-echo ==========================================================
-echo   AI Workbench is up
-echo ==========================================================
-echo.
-echo   Web UI        http://127.0.0.1:5173
-echo   API           http://127.0.0.1:8000
-echo   API docs      http://127.0.0.1:8000/docs
-echo   Qdrant UI     http://127.0.0.1:6333/dashboard
-echo.
-echo   Demo account  demo / demo1234
-echo.
-echo   Restart with: scripts\restart.bat
-echo   Stop with:    scripts\stop.bat
-echo ==========================================================
-echo.
+REM --------------------------------------------------- final readiness gate --
+call :log "waiting for the frontend to serve HTTP 200"
+%PS% "scripts\wait-ready.ps1" -Url "http://127.0.0.1:5173/" -TimeoutSeconds 60 -Label "Frontend"
+if errorlevel 1 (
+    call :fail "The frontend did not become reachable."
+    goto :theend
+)
 
-if /i "%~1"=="--no-browser" goto :ok
-start "" "http://127.0.0.1:5173"
+REM ------------------------------------------------------------------ report --
+call :log "startup complete"
+if "%HIDDEN%"=="0" (
+    echo.
+    echo ==========================================================
+    echo   AI Workbench is up
+    echo ==========================================================
+    echo.
+    echo   Web UI        http://127.0.0.1:5173
+    echo   API           http://127.0.0.1:8000
+    echo   API docs      http://127.0.0.1:8000/docs
+    echo   Qdrant UI     http://127.0.0.1:6333/dashboard
+    echo.
+    echo   Demo account  demo / demo1234
+    echo.
+    echo   Stop with:    scripts\stop.bat
+    echo   Restart with: scripts\restart.bat
+    echo ==========================================================
+    echo.
+)
 
-:ok
-endlocal
-exit /b 0
+if "%OPENBROWSER%"=="1" (
+    call :log "opening the browser"
+    start "" "http://127.0.0.1:5173"
+)
+
+goto :theend
+
+REM ----------------------------------------------------------------- helpers --
+:log
+>>"%STARTUPLOG%" echo %DATE% %TIME% %~1
+if "%HIDDEN%"=="0" echo [*] %~1
+goto :eof
 
 :fail
+>>"%STARTUPLOG%" echo %DATE% %TIME% FAILED - %~1
+>>"%ERRORLOG%" echo %DATE% %TIME% %~1
 echo.
-pause
-endlocal
-exit /b 1
+echo [ERROR] %~1
+echo         See %ERRORLOG%
+set "EXITCODE=1"
+goto :eof
+
+:theend
+if defined LOCKHELD (
+    %PS% "scripts\startup-lock.ps1" -Action Release >nul 2>&1
+)
+if "%HIDDEN%"=="0" if "%EXITCODE%"=="1" pause
+endlocal & exit /b %EXITCODE%
