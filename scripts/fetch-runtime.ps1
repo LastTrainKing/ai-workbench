@@ -1,4 +1,4 @@
-# Download the native runtime binaries (PostgreSQL / Redis / Qdrant) into vendor/.
+﻿# Download the native runtime binaries (PostgreSQL / Redis / Qdrant) into vendor/.
 # The binaries are intentionally NOT committed to git (see .gitignore); this
 # script makes a fresh clone reproducible with a single command.
 #

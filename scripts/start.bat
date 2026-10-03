@@ -53,6 +53,20 @@ if not exist "%ROOT%\frontend\node_modules" (
     echo.
 )
 
+REM ---------------------------------------------------- desktop shortcut
+REM Created on first run if absent. A .lnk is a shell object, so the shell is
+REM asked to build it (scripts\create-shortcut.ps1). Non-fatal if it fails.
+set "SHORTCUT=%USERPROFILE%\Desktop\AI Workbench.lnk"
+if not exist "%SHORTCUT%" (
+    echo [*] Creating the desktop shortcut...
+    powershell -ExecutionPolicy Bypass -NoProfile -File "scripts\create-shortcut.ps1" >nul 2>&1
+    if exist "%SHORTCUT%" (
+        echo [+] Desktop shortcut created: %SHORTCUT%
+    ) else (
+        echo [!] Could not create the desktop shortcut. Run scripts\create-shortcut.ps1 manually.
+    )
+)
+
 REM ------------------------------------------------------------------ runtimes
 REM Only downloaded when actually absent; never re-downloaded, never deleted.
 set "NEED_FETCH="

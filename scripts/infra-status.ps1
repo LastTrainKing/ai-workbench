@@ -1,4 +1,4 @@
-# Report the health of every local dependency.
+﻿# Report the health of every local dependency.
 #   powershell -ExecutionPolicy Bypass -File scripts\infra-status.ps1
 #
 . "$PSScriptRoot\lib.ps1"

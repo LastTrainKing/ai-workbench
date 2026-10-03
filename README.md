@@ -246,7 +246,28 @@ Open <http://127.0.0.1:5173> and sign in with **`demo` / `demo1234`**.
 
 `start.bat` checks the environment, downloads PostgreSQL / Redis / Qdrant into
 `vendor/` if missing, starts them as project-scoped processes (no Windows services,
-no system changes), then starts the API and the UI. `stop.bat` shuts it all down.
+no system changes), then starts the API and the UI.
+
+**Desktop shortcut.** The first run also creates `AI Workbench.lnk` on your Desktop
+(with a proper icon) that launches the whole stack — infrastructure included. If it
+is missing, create it with:
+
+```bat
+powershell -ExecutionPolicy Bypass -File scripts\create-shortcut.ps1
+```
+
+**Other commands:**
+
+```bat
+scripts\stop.bat              :: stop everything (all data preserved)
+scripts\stop.bat --app-only   :: stop just the API + UI, keep the databases running
+scripts\restart.bat           :: restart the application only
+scripts\restart.bat --full    :: restart infrastructure too
+```
+
+A shortcut is a shell object, so `create-shortcut.ps1` asks the shell to build it
+(`WScript.Shell`) rather than hand-writing the binary format — that is what Explorer
+itself does. If the Desktop is redirected, pass `-Destination`.
 
 ### Linux / macOS
 

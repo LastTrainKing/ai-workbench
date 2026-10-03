@@ -1,4 +1,4 @@
-# Shared helpers for AI Workbench operational scripts (Windows / PowerShell).
+﻿# Shared helpers for AI Workbench operational scripts (Windows / PowerShell).
 # Dot-source this file: . "$PSScriptRoot\lib.ps1"
 
 $ErrorActionPreference = 'Stop'

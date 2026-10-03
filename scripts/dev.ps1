@@ -1,4 +1,4 @@
-# Start / stop / inspect the AI Workbench application processes.
+﻿# Start / stop / inspect the AI Workbench application processes.
 #
 #   powershell -ExecutionPolicy Bypass -File scripts\dev.ps1 start
 #   powershell -ExecutionPolicy Bypass -File scripts\dev.ps1 stop

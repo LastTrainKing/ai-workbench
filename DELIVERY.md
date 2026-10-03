@@ -77,6 +77,13 @@ scripts\start.bat
 脚本会：检查依赖 → 首次自动下载 PostgreSQL / Redis / Qdrant 到 `vendor/`
 → 以项目级进程启动它们 → 启动 API 与前端 → 打开浏览器。
 
+首次启动还会在桌面自动创建 `AI Workbench.lnk`（带图标，点击即启动整个项目）。
+若缺失，手动创建：
+
+```bat
+powershell -ExecutionPolicy Bypass -File scripts\create-shortcut.ps1
+```
+
 首次启动会下载约 350 MB 运行时，需要几分钟。**不需要** Docker，也**不会**修改系统设置。
 
 ### 5. 访问
@@ -172,7 +179,8 @@ ai-workbench/
 ├── frontend/           React 前端
 ├── worker/             独立 Worker
 ├── scripts/            运维与验证脚本
-│   ├── start.bat       一键启动
+│   ├── start.bat       一键启动（缺失时自动创建桌面快捷方式）
+│   ├── create-shortcut.ps1  创建桌面快捷方式
 │   ├── stop.bat        一键停止
 │   ├── restart.bat     一键重启
 │   ├── fetch-runtime.ps1   下载原生运行时
@@ -180,10 +188,13 @@ ai-workbench/
 │   ├── dev.ps1             应用进程管理
 │   ├── smoke_test.py       端到端验收（75 项）
 │   ├── verify_deepseek.py  DeepSeek 真实链路验证（60 项）
+│   ├── build_delivery_zip.py    构建交付包并校验无密钥泄露
+│   ├── make_icon.py             生成应用图标
 │   └── capture-screenshots.mjs  截图采集
 ├── docs/               全部文档
 ├── samples/            示例文档
 ├── screenshots/        运行截图
+├── assets/ai-workbench.ico  应用图标
 ├── docker-compose.yml
 ├── start.bat / stop.bat / start.sh / stop.sh
 ├── .env.example        配置模板（无真实密钥）

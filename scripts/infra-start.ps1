@@ -1,4 +1,4 @@
-# Start PostgreSQL, Redis and Qdrant as local, project-scoped processes.
+﻿# Start PostgreSQL, Redis and Qdrant as local, project-scoped processes.
 # Nothing is registered as a Windows service and no system configuration is
 # modified: every process, data file and log lives inside this repository.
 #

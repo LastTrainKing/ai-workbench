@@ -1,4 +1,4 @@
-# Stop the project-scoped infrastructure processes.
+﻿# Stop the project-scoped infrastructure processes.
 #   powershell -ExecutionPolicy Bypass -File scripts\infra-stop.ps1
 #
 . "$PSScriptRoot\lib.ps1"
