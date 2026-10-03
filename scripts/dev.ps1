@@ -70,21 +70,56 @@ function Start-Tracked {
     Write-Ok "$Name started (pid $($proc.Id))"
 }
 
-function Stop-Tracked([string]$Name) {
+function Stop-Tracked {
+    param(
+        [string]$Name,
+        [int]$Port = 0
+    )
+    $stopped = $false
+
+    # 1) The PID file written by Start-Tracked.
     $file = Get-PidFile $Name
-    if (-not (Test-Path $file)) { Write-Warn2 "$Name is not tracked"; return }
-    $tracked = (Get-Content $file -Raw).Trim()
-    if ($tracked) {
-        $proc = Get-Process -Id ([int]$tracked) -ErrorAction SilentlyContinue
-        if ($proc) {
-            Write-Step "Stopping $Name (pid $tracked)"
-            Stop-Process -Id ([int]$tracked) -Force
-            Write-Ok "$Name stopped"
-        } else {
-            Write-Warn2 "$Name was not running"
+    if (Test-Path $file) {
+        $tracked = (Get-Content $file -Raw).Trim()
+        if ($tracked) {
+            $proc = Get-Process -Id ([int]$tracked) -ErrorAction SilentlyContinue
+            if ($proc) {
+                Write-Step "Stopping $Name (pid $tracked)"
+                Stop-Process -Id ([int]$tracked) -Force
+                $stopped = $true
+            }
+        }
+        Remove-Item $file -Force -ErrorAction SilentlyContinue
+    }
+
+    # 2) Fall back to whatever is actually listening on this service's port.
+    #    A process started outside this script (manually, by an IDE, or by an
+    #    earlier session) has no PID file, and `stop` must still stop it —
+    #    otherwise "stop" silently leaves the app running.
+    #    Only OUR app ports are ever inspected; nothing else is touched.
+    if ($Port -gt 0) {
+        $owners = @(
+            Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue |
+                Select-Object -ExpandProperty OwningProcess -Unique
+        )
+        foreach ($ownerPid in $owners) {
+            $proc = Get-Process -Id $ownerPid -ErrorAction SilentlyContinue
+            if (-not $proc) { continue }
+            Write-Step "Stopping $Name on port $Port (pid $ownerPid, untracked)"
+            Stop-Process -Id $ownerPid -Force -ErrorAction SilentlyContinue
+            $stopped = $true
+        }
+        # Give the OS a moment to release the port before reporting.
+        for ($i = 0; $i -lt 10 -and (Test-PortOpen $Port); $i++) {
+            Start-Sleep -Milliseconds 400
         }
     }
-    Remove-Item $file -Force -ErrorAction SilentlyContinue
+
+    if ($stopped) {
+        Write-Ok "$Name stopped"
+    } else {
+        Write-Warn2 "$Name is not running"
+    }
 }
 
 switch ($Action) {
@@ -132,14 +167,14 @@ switch ($Action) {
         Write-Host "  Frontend  http://127.0.0.1:$WebPort"
     }
     'stop' {
-        Stop-Tracked 'web'
-        Stop-Tracked 'api'
+        Stop-Tracked -Name 'web' -Port $WebPort
+        Stop-Tracked -Name 'api' -Port $ApiPort
         Write-Host ''
         Write-Ok 'Application processes stopped (infrastructure left running).'
     }
     'restart' {
-        Stop-Tracked 'web'
-        Stop-Tracked 'api'
+        Stop-Tracked -Name 'web' -Port $WebPort
+        Stop-Tracked -Name 'api' -Port $ApiPort
         Start-Sleep -Seconds 2
         & $PSCommandPath start
     }

@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import importlib
 import pkgutil
+import re
 from pathlib import Path
 
 import pytest
@@ -21,6 +22,8 @@ import pytest
 import app
 
 APP_ROOT = Path(app.__file__).resolve().parent
+#: Repository root, used by the secret-hygiene checks.
+REPO_ROOT = APP_ROOT.parent.parent
 
 
 def _discover_modules() -> list[str]:
@@ -46,8 +49,6 @@ def test_module_imports(module_name: str) -> None:
 
 def test_no_stale_service_module_references() -> None:
     """Every ``app.services.<name>`` referenced anywhere must actually exist."""
-    import re
-
     pattern = re.compile(r"app\.services\.([a-z_]+)")
     referenced: set[str] = set()
     for path in APP_ROOT.rglob("*.py"):
@@ -122,3 +123,115 @@ def test_no_duplicate_index_names() -> None:
     names = [idx.name for table in Base.metadata.tables.values() for idx in table.indexes]
     duplicates = [name for name, count in Counter(names).items() if count > 1]
     assert not duplicates, f"duplicate index names: {duplicates}"
+
+
+# --------------------------------------------------------------------------- #
+# secret hygiene
+# --------------------------------------------------------------------------- #
+#: Directories that legitimately contain generated or third-party content.
+_SKIP_DIRS = {
+    ".git", ".venv", "node_modules", ".runtime", "vendor", "dist",
+    "__pycache__", ".pytest_cache", ".ruff_cache", ".mypy_cache", "coverage",
+}
+
+#: Patterns that indicate a real credential rather than a placeholder.
+_SECRET_PATTERNS = [
+    re.compile(r"sk-[A-Za-z0-9]{20,}"),
+    re.compile(r"(?:api[_-]?key|secret[_-]?key|password)\s*[:=]\s*['\"][^'\"\s]{16,}['\"]", re.I),
+]
+
+#: Files allowed to hold a secret: they are git-ignored and never shipped.
+_ALLOWED = {".env", "ai-config.json"}
+
+#: An inline marker that exempts a single line — the convention used by
+#: detect-secrets, so the intent is obvious to anyone reading the file.
+_ALLOW_MARKERS = ("allowlist secret", "secret-scan: allow", "pragma: allowlist")
+
+#: Values that are plainly synthetic rather than a real credential.
+_SYNTHETIC_HINTS = (
+    "xxx", "your", "example", "dummy", "fake", "placeholder", "sample",
+    "0000000000", "1234567890", "0123456789abcdef", "aaaaaaaa",
+)
+
+
+def _iter_repo_files() -> list[Path]:
+    files: list[Path] = []
+    for path in REPO_ROOT.rglob("*"):
+        if not path.is_file():
+            continue
+        if any(part in _SKIP_DIRS for part in path.parts):
+            continue
+        if path.name in _ALLOWED:
+            continue
+        if path.suffix.lower() in {
+            ".png", ".jpg", ".jpeg", ".gif", ".ico", ".pdf", ".zip", ".woff", ".woff2",
+        }:
+            continue
+        files.append(path)
+    return files
+
+
+def _looks_synthetic(candidate: str) -> bool:
+    lowered = candidate.lower()
+    if any(hint in lowered for hint in _SYNTHETIC_HINTS):
+        return True
+    # A single repeated character, e.g. sk-aaaaaaaaaaaaaaaaaaaa
+    body = lowered.removeprefix("sk-")
+    return bool(body) and len(set(body)) <= 2
+
+
+def test_no_credentials_are_committed_anywhere() -> None:
+    """No source, test, doc, config template or script may contain a real key.
+
+    This is the guard for a mistake that was actually made: a real DeepSeek key
+    was used as the sample value in a masking unit test. It only existed in the
+    working tree for a few minutes, but a commit would have published it
+    permanently — and rewriting Git history costs far more than this test.
+
+    A line may opt out with an inline ``allowlist secret`` comment; obvious
+    synthetic values (``sk-0123456789abcdef…``) are ignored automatically.
+    """
+    offenders: list[str] = []
+    for path in _iter_repo_files():
+        try:
+            text = path.read_text(encoding="utf-8", errors="ignore")
+        except OSError:
+            continue
+        for line_number, line in enumerate(text.splitlines(), start=1):
+            lowered = line.lower()
+            if any(marker in lowered for marker in _ALLOW_MARKERS):
+                continue
+            for pattern in _SECRET_PATTERNS:
+                for match in pattern.finditer(line):
+                    candidate = match.group(0)
+                    if any(token in candidate.lower() for token in ("xxx", "your", "example", "test", "dummy", "fake", "placeholder", "...", "<")):
+                        continue
+                    if _looks_synthetic(candidate):
+                        continue
+                    offenders.append(
+                        f"{path.relative_to(REPO_ROOT)}:{line_number}: {candidate[:24]}…"
+                    )
+
+    assert not offenders, "possible credentials found in tracked files:\n" + "\n".join(offenders)
+
+
+def test_env_is_git_ignored_and_template_is_not() -> None:
+    """``.env`` must be ignored; ``.env.example`` must be committed."""
+    ignore = (REPO_ROOT / ".gitignore").read_text(encoding="utf-8")
+    lines = {line.strip() for line in ignore.splitlines()}
+    assert ".env" in lines, ".env must be git-ignored"
+    assert "!.env.example" in lines, ".env.example must be re-included"
+
+    example = (REPO_ROOT / ".env.example").read_text(encoding="utf-8")
+    for key in ("DEEPSEEK_API_KEY=", "AI_PROVIDER=", "DEEPSEEK_MODEL="):
+        assert key in example, f"{key} missing from .env.example"
+
+
+def test_env_example_never_ships_a_real_key() -> None:
+    example = (REPO_ROOT / ".env.example").read_text(encoding="utf-8")
+    for line in example.splitlines():
+        if "API_KEY" in line and "=" in line:
+            value = line.split("=", 1)[1].strip()
+            assert not value.startswith("sk-") or value in {"", "sk-..."}, (
+                f".env.example must not contain a key: {line}"
+            )

@@ -107,3 +107,7 @@ scratch/
 *.bak
 *.orig
 *.rej
+
+# --------------------------------------------------- assistant workspace data --
+# Local notes/state kept alongside the project; not part of the deliverable.
+.workbuddy-ai/

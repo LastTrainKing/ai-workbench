@@ -164,7 +164,7 @@ class AgentExecutor:
                 chat = await self.llm.chat(
                     messages,
                     temperature=0.0,
-                    max_tokens=min(settings.ai_max_tokens, 1600),
+                    max_tokens=max(1024, min(settings.ai_max_tokens, 3000)),
                     tools=self.registry.specs(),
                 )
                 recorder.record_usage(chat.usage)
@@ -244,6 +244,10 @@ class AgentExecutor:
                     ChatMessage(
                         role="assistant",
                         content=chat.content or "",
+                        # Reasoning models require their previous chain of thought
+                        # to be sent back verbatim, or the follow-up turn is
+                        # rejected with HTTP 400.
+                        reasoning_content=chat.reasoning_content or None,
                         tool_calls=[
                             {
                                 "id": request.id,
@@ -273,6 +277,14 @@ class AgentExecutor:
                 final_answer = (
                     f"已达到最大步数（{steps_allowed} 步），Agent 停止继续调用工具。\n\n"
                     f"本次共执行 {len(steps)} 个工具调用，结果已记录在 AI 执行记录中。"
+                )
+
+            # Attach the provenance collected by the tools (knowledge_search).
+            if ctx.sources:
+                await recorder.add_sources(ctx.sources)
+                recorder.set_retrieval(
+                    {"mode": "agent", "retrieved": len(ctx.sources), "tool": "knowledge_search"},
+                    len(ctx.sources),
                 )
 
             agent_run.status = (

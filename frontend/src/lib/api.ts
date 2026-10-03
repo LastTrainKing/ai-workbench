@@ -12,6 +12,11 @@ import type {
   AgentRunPayload,
   AgentRunResult,
   AgentToolCatalogue,
+  AIConfigPatch,
+  AIConfigResponse,
+  AIConnectionTestResult,
+  AIProviderOption,
+  AIModelOption,
   AIRun,
   AIMetricsResponse,
   AIRunTrace,
@@ -522,6 +527,33 @@ export const api = {
       params: { project_id?: string; limit?: number; include_concepts?: boolean; include_runs?: boolean } = {},
       signal?: AbortSignal,
     ) => request<GraphResponse>('/graph', { query: params, signal }),
+  },
+
+  /* ----------------------------------------------------------- ai config */
+  aiConfig: {
+    get: (signal?: AbortSignal) => request<AIConfigResponse>('/ai-config', { signal }),
+    update: (payload: AIConfigPatch) =>
+      request<AIConfigResponse>('/ai-config', { method: 'PATCH', body: payload }),
+    reset: () => request<AIConfigResponse>('/ai-config', { method: 'DELETE' }),
+    providers: (signal?: AbortSignal) =>
+      request<{ providers: AIProviderOption[]; count: number }>('/ai-config/providers', { signal }),
+    models: (provider: string, live = false, signal?: AbortSignal) =>
+      request<{ provider: string; models: AIModelOption[]; live: boolean }>('/ai-config/models', {
+        query: { provider, live },
+        signal,
+      }),
+    toggle: (provider: string, enabled: boolean) =>
+      request<{ enabled_providers: Record<string, boolean> }>('/ai-config/providers/toggle', {
+        method: 'POST',
+        body: { provider, enabled },
+      }),
+    test: (provider?: string) =>
+      request<AIConnectionTestResult>('/ai-config/test', {
+        method: 'POST',
+        body: { provider: provider ?? null },
+      }),
+    health: (signal?: AbortSignal) =>
+      request<Record<string, unknown>>('/ai-config/health', { signal }),
   },
 
   /* --------------------------------------------------------------- health */

@@ -22,6 +22,11 @@ class ChatMessage:
     # the OpenAI contract so that the following ``role="tool"`` message can be
     # correlated with the call that produced it.
     tool_calls: list[dict[str, Any]] | None = None
+    # Reasoning models (DeepSeek thinking mode, and similar) reject a follow-up
+    # turn that omits the previous assistant turn's chain of thought:
+    #   "The `reasoning_content` in the thinking mode must be passed back".
+    # Only set for providers that emit it, so other vendors never see the field.
+    reasoning_content: str | None = None
 
     def to_openai(self) -> dict[str, Any]:
         msg: dict[str, Any] = {"role": self.role}
@@ -36,6 +41,8 @@ class ChatMessage:
             msg["tool_call_id"] = self.tool_call_id
         if self.tool_calls:
             msg["tool_calls"] = self.tool_calls
+        if self.reasoning_content:
+            msg["reasoning_content"] = self.reasoning_content
         return msg
 
 
@@ -73,6 +80,14 @@ class ChatResult:
     finish_reason: str = "stop"
     latency_ms: int = 0
     raw: dict[str, Any] = field(default_factory=dict)
+    #: Chain of thought for reasoning models; must be echoed back on the next
+    #: turn of a tool-calling loop (see ``ChatMessage.reasoning_content``).
+    reasoning_content: str = ""
+
+    @property
+    def truncated(self) -> bool:
+        """True when the model hit the token ceiling instead of finishing."""
+        return self.finish_reason == "length"
 
 
 @dataclass(slots=True)

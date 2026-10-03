@@ -288,33 +288,119 @@ class RAGPipeline:
             raise
 
 
+def _close_open_structures(fragment: str) -> str | None:
+    """Close an unterminated string and every open bracket/brace."""
+    # Drop a trailing partial token, e.g. `"title": "通读并整理 `.
+    if fragment.count('"') % 2 == 1:
+        cut = fragment.rfind('"')
+        if cut < 0:
+            return None
+        fragment = fragment[:cut]
+
+    stack: list[str] = []
+    in_string = False
+    escaped = False
+    for char in fragment:
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+            continue
+        if char == '"':
+            in_string = True
+        elif char in "{[":
+            stack.append(char)
+        elif char in "}]" and stack:
+            stack.pop()
+
+    repaired = fragment.rstrip()
+    # A dangling separator or key (`{"title":` / `[{},`) has no value to close.
+    while repaired and repaired[-1] in ",:[":
+        repaired = repaired[:-1].rstrip()
+    if not repaired:
+        return None
+    for opener in reversed(stack):
+        repaired += "}" if opener == "{" else "]"
+    return repaired
+
+
+def _repair_truncated_json(text: str) -> dict[str, Any] | None:
+    """Best-effort recovery of a JSON object cut off by the token ceiling.
+
+    Reasoning models spend part of their budget thinking, so a long structured
+    answer can hit ``max_tokens`` mid-object. Recovering the complete part is far
+    more useful than a hard failure: the planner can normalise a plan with three
+    finished phases instead of none.
+
+    The algorithm closes the open structures; if that still does not parse, it
+    trims back to the previous structural boundary and tries again, bounded to a
+    fixed number of attempts so a pathological input cannot spin.
+    """
+    start = text.find("{")
+    if start < 0:
+        return None
+    fragment = text[start:]
+
+    for _ in range(80):
+        candidate = _close_open_structures(fragment)
+        if candidate:
+            try:
+                data = json.loads(candidate)
+            except json.JSONDecodeError:
+                data = None
+            if isinstance(data, dict):
+                return data
+
+        cut = max(fragment.rfind(","), fragment.rfind("["), fragment.rfind("{"))
+        if cut <= 0:
+            return None
+        fragment = fragment[:cut]
+    return None
+
+
 def load_json_object(text: str) -> dict[str, Any]:
-    """Tolerant JSON extraction (models sometimes wrap JSON in prose/fences)."""
+    """Tolerant JSON extraction.
+
+    Models wrap JSON in prose or fences, and reasoning models can be cut off by
+    the token ceiling. Three escalating strategies are applied before giving up:
+    strip fences → locate the outermost object → repair a truncated object.
+    """
     if not text:
         return {}
     cleaned = text.strip()
     if cleaned.startswith("```"):
         cleaned = re.sub(r"^```[a-zA-Z]*\n?", "", cleaned)
         cleaned = re.sub(r"\n?```$", "", cleaned)
+
     try:
         data = json.loads(cleaned)
         return data if isinstance(data, dict) else {}
     except json.JSONDecodeError:
-        match = re.search(r"\{.*\}", cleaned, re.DOTALL)
-        if match:
-            try:
-                data = json.loads(match.group(0))
-                return data if isinstance(data, dict) else {}
-            except json.JSONDecodeError as exc:
-                raise AIResponseFormatError(
-                    "Model returned content that is not valid JSON",
-                    details={"preview": cleaned[:400]},
-                ) from exc
+        pass
 
-        raise AIResponseFormatError(
-            "Model returned content that contains no JSON object",
-            details={"preview": cleaned[:400]},
-        ) from None
+    match = re.search(r"\{.*\}", cleaned, re.DOTALL)
+    if match:
+        try:
+            data = json.loads(match.group(0))
+            return data if isinstance(data, dict) else {}
+        except json.JSONDecodeError:
+            pass
+
+    repaired = _repair_truncated_json(cleaned)
+    if repaired is not None:
+        logger.warning(
+            "json_repaired_after_truncation",
+            extra={"recovered_keys": sorted(repaired)[:12], "chars": len(cleaned)},
+        )
+        return repaired
+
+    raise AIResponseFormatError(
+        "Model returned content that is not valid JSON",
+        details={"preview": cleaned[:400], "length": len(cleaned)},
+    ) from None
 
 
 # Backwards-compatible private alias used internally.

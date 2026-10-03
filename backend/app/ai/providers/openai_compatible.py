@@ -41,26 +41,46 @@ logger = get_logger(__name__)
 _RETRYABLE_STATUS = {408, 409, 425, 429, 500, 502, 503, 504, 522, 524}
 
 
+def _vendor_message(body: str) -> str:
+    """Extract the vendor's own error text so it reaches the operator.
+
+    Without this, a 400 shows up in the AI run trace as
+    "AI provider returned an unexpected HTTP 400." — which tells you nothing.
+    Vendors almost always explain the problem in the body (for example
+    "Prompt must contain the word 'json' …"), so it is surfaced verbatim.
+    """
+    try:
+        payload = json.loads(body)
+    except (json.JSONDecodeError, TypeError):
+        return body[:300]
+    error = payload.get("error") if isinstance(payload, dict) else None
+    if isinstance(error, dict):
+        return str(error.get("message") or error.get("code") or "")[:300]
+    if isinstance(error, str):
+        return error[:300]
+    return body[:300]
+
+
 def _classify_status(status_code: int, body: str) -> Exception:
-    snippet = body[:500]
+    snippet = _vendor_message(body)
+    details = {"status": status_code, "body": body[:500], "vendor_message": snippet}
+
     if status_code in (401, 403):
         return AIAuthError(
-            "The AI provider rejected the credentials. Check AI_API_KEY.",
-            details={"status": status_code, "body": snippet},
+            f"The AI provider rejected the credentials. Check AI_API_KEY. ({snippet})",
+            details=details,
         )
     if status_code == 429:
         return AIRateLimitError(
-            "The AI provider rate-limited this request.",
-            details={"status": status_code, "body": snippet},
+            f"The AI provider rate-limited this request. ({snippet})", details=details
         )
     if status_code in _RETRYABLE_STATUS:
         return AIProviderError(
-            f"AI provider returned HTTP {status_code}.",
-            details={"status": status_code, "body": snippet},
+            f"AI provider returned HTTP {status_code}. ({snippet})", details=details
         )
     return AIProviderError(
-        f"AI provider returned an unexpected HTTP {status_code}.",
-        details={"status": status_code, "body": snippet},
+        f"AI provider returned an unexpected HTTP {status_code}. ({snippet})",
+        details=details,
         status_code=502,
     )
 
@@ -213,6 +233,7 @@ class OpenAICompatibleProvider(LLMProvider):
             tool_calls=tool_calls,
             finish_reason=choices[0].get("finish_reason") or "stop",
             latency_ms=latency_ms,
+            reasoning_content=str(message.get("reasoning_content") or ""),
         )
 
     # ------------------------------------------------------------- embedding --

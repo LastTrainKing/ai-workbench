@@ -105,11 +105,18 @@ safe.
 **Prompt versioning** — prompts are database rows with an immutable version history.
 Business code requests a prompt *by name*; every AI run records which version answered.
 
-**Multi-provider AI** — OpenAI-compatible, Ollama (fully local) and a deterministic
-offline engine. Switching is a configuration change, never a code change. When no
-cloud key is present the factory degrades to the offline engine and records
-`degraded: true` plus the reason — the product keeps working and never pretends a
-hosted model answered.
+**Multi-provider AI** — DeepSeek (default), any OpenAI-compatible endpoint, Ollama
+(fully local) and a deterministic offline engine. Switching is a configuration change
+**or a click in Settings → AI Provider**, and it takes effect on the very next AI call.
+When a cloud provider is selected but no key is available the factory degrades to the
+offline engine and records `degraded: true` plus the reason — the product keeps working
+and never pretends a hosted model answered.
+
+**Runtime provider configuration** — provider, model, base URL, API key, temperature,
+max tokens and timeout are all editable in the UI. Changes persist to
+`.runtime/ai-config.json` (git-ignored, local machine only) with `.env` as the
+baseline, so a key never has to be written into source or committed to Git. The API
+key is write-only: reads return `api_key_set` and a mask like `sk-****(len=35)`.
 
 **AI execution trace** — request payload, prompt name/version, retrieval metadata,
 cited sources, tool calls with arguments and results, token usage, latency, retry
@@ -278,10 +285,11 @@ Copy `.env.example` to `.env`. The most important keys:
 | `REDIS_URL` | `redis://127.0.0.1:6379/0` | cache |
 | `QDRANT_URL` | `http://127.0.0.1:6333` | vector store |
 | `QDRANT_COLLECTION` | `ai_workbench_chunks` | collection name |
-| `AI_PROVIDER` | `openai_compatible` | `openai_compatible` \| `ollama` \| `offline` |
-| `AI_BASE_URL` | `https://api.deepseek.com/v1` | any OpenAI-compatible endpoint |
-| `AI_API_KEY` | *(empty)* | empty ⇒ offline engine, clearly reported |
-| `AI_MODEL` | `deepseek-chat` | chat model |
+| `AI_PROVIDER` | `deepseek` | `deepseek` \| `openai_compatible` \| `ollama` \| `offline` |
+| `DEEPSEEK_API_KEY` | *(empty)* | empty ⇒ offline engine, clearly reported |
+| `DEEPSEEK_BASE_URL` | `https://api.deepseek.com` | DeepSeek endpoint |
+| `DEEPSEEK_MODEL` | `deepseek-flash` | DeepSeek V4.1 Flash |
+| `AI_BASE_URL` / `AI_API_KEY` / `AI_MODEL` | — | used by the non-DeepSeek providers |
 | `EMBEDDING_PROVIDER` | `openai_compatible` | `openai_compatible` \| `ollama` \| `offline` |
 | `EMBEDDING_MODEL` | `text-embedding-3-small` | embedding model |
 | `CHUNK_SIZE` / `CHUNK_OVERLAP` | `900` / `150` | chunking |
@@ -368,23 +376,58 @@ See [`docs/testing.md`](docs/testing.md) for the full strategy.
 
 ## AI configuration
 
-**Cloud (any OpenAI-compatible vendor):**
+**Default: DeepSeek.** The model answering every AI feature is shown in the top bar
+and on **Settings → AI Provider**, and it can be changed there without editing a file
+or restarting.
 
 ```ini
-AI_PROVIDER=openai_compatible
-AI_BASE_URL=https://api.deepseek.com/v1
-AI_API_KEY=sk-...
-AI_MODEL=deepseek-chat
-EMBEDDING_PROVIDER=openai_compatible
-EMBEDDING_MODEL=text-embedding-3-small
+AI_PROVIDER=deepseek
+DEEPSEEK_API_KEY=sk-...            # .env — git-ignored, never committed
+DEEPSEEK_BASE_URL=https://api.deepseek.com
+DEEPSEEK_MODEL=deepseek-flash      # DeepSeek V4.1 Flash (fast, low cost)
+AI_MAX_TOKENS=8192
 ```
+
+Get a key at <https://platform.deepseek.com/>. `deepseek-flash` is a **reasoning
+model**: it emits a chain of thought before the answer, so the token budget has to be
+generous — 8192 is the default and the code reports
+`ai_reasoning_budget_exhausted` rather than returning an empty answer if it runs out.
+
+**Switching providers** (Settings → AI Provider, or `PATCH /api/v1/ai-config`):
+
+| Provider | Needs | Notes |
+|---|---|---|
+| **DeepSeek** | API key | Default. `deepseek-flash` / `deepseek-v4-pro` |
+| **OpenAI Compatible** | API key + base URL | OpenAI, Qwen, Moonshot, Zhipu, SiliconFlow, vLLM, LM Studio |
+| **Ollama** | local daemon | Fully local; `ollama serve` + a pulled model |
+| **Offline** | nothing | Deterministic extractive engine; never fabricates |
+
+Precedence is **runtime override → `.env` → default**, and the Settings page shows
+where each value came from. Clearing an override (`DELETE /api/v1/ai-config`) falls
+back to `.env`.
+
+```bash
+# change provider without touching a file
+curl -X PATCH http://127.0.0.1:8000/api/v1/ai-config \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"provider":"ollama","model":"qwen2.5:7b","base_url":"http://127.0.0.1:11434"}'
+
+# prove the current configuration works (one small request)
+curl -X POST http://127.0.0.1:8000/api/v1/ai-config/test -H "Authorization: Bearer $TOKEN"
+
+# which provider is actually answering, and why
+curl http://127.0.0.1:8000/api/v1/health/deps | jq .data.ai.llm
+```
+
+**No key at all:** the product still runs. Every AI feature falls back to the offline
+engine, `GET /health/deps` reports `degraded: true` with the reason, the UI shows a
+warning badge, and each `ai_runs` row records `provider=offline` — so nothing is ever
+misrepresented as a hosted model's output.
 
 **Fully local (privacy mode):**
 
 ```bash
-ollama serve
-ollama pull qwen2.5:7b
-ollama pull nomic-embed-text
+ollama serve && ollama pull qwen2.5:7b && ollama pull nomic-embed-text
 ```
 
 ```ini
@@ -395,20 +438,10 @@ EMBEDDING_PROVIDER=ollama
 EMBEDDING_MODEL=nomic-embed-text
 ```
 
-**No key, no daemon:**
-
-```ini
-AI_PROVIDER=offline
-EMBEDDING_PROVIDER=offline
-```
-
 The offline engine is a real deterministic implementation — hashed bag-of-ngrams
 embeddings with sublinear TF and L2 normalisation, extractive sentence-scoring QA,
-TF-IDF keyword/term extraction, and heading-based planning. It is a documented
-fallback, not a mock, and every run records `provider=offline` so nothing is
-misrepresented. Quality is naturally below a hosted LLM.
-
-`GET /api/v1/health/deps` always reports which engine is active and why.
+TF-IDF keyword/term extraction, heading-based planning. It is a documented fallback,
+not a mock. Quality is naturally below a hosted LLM.
 
 ---
 

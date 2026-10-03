@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   Activity,
+  Zap,
   CheckCircle2,
   Database,
   Moon,
@@ -31,11 +32,12 @@ import {
   Tabs,
 } from '@/components/ui/primitives'
 import { EmptyState, ErrorState, InlineAlert, Skeleton, SkeletonText } from '@/components/ui/feedback'
+import { AIProviderSettings } from '@/features/ai/AIProviderSettings'
 import { useAuthStore } from '@/store/auth'
 import { useUiStore } from '@/store/ui'
 import { useToastStore, toastApiError } from '@/store/toast'
 
-type TabKey = 'profile' | 'system' | 'prompts' | 'metrics'
+type TabKey = 'ai' | 'profile' | 'system' | 'prompts' | 'metrics'
 
 /* --------------------------------------------------------------- profile */
 
@@ -617,7 +619,7 @@ function MetricsSection() {
 /* ------------------------------------------------------------------ page */
 
 export default function SettingsPage() {
-  const [tab, setTab] = useState<TabKey>('profile')
+  const [tab, setTab] = useState<TabKey>('ai')
   const theme = useUiStore((state) => state.theme)
   const toggleTheme = useUiStore((state) => state.toggleTheme)
 
@@ -642,6 +644,7 @@ export default function SettingsPage() {
         value={tab}
         onChange={(key) => setTab(key as TabKey)}
         items={[
+          { key: 'ai', label: 'AI Provider', icon: <Zap className="size-3" /> },
           { key: 'profile', label: '账户', icon: <UserIcon className="size-3" /> },
           { key: 'system', label: '模型与依赖', icon: <Server className="size-3" /> },
           { key: 'prompts', label: '提示词模板', icon: <Database className="size-3" /> },
@@ -649,6 +652,7 @@ export default function SettingsPage() {
         ]}
       />
 
+      {tab === 'ai' ? <AIProviderSettings /> : null}
       {tab === 'profile' ? <ProfileSection /> : null}
       {tab === 'system' ? <SystemSection /> : null}
       {tab === 'prompts' ? <PromptManager /> : null}

@@ -4,6 +4,98 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.0] — 2026-10-03
+
+Real DeepSeek integration plus a runtime provider control surface. Verified against the
+live DeepSeek API: **60/60 integration checks**, **75/75 end-to-end assertions**, and a
+full RAG → planner → agent chain executed by `deepseek-flash`.
+
+### Added
+
+- **DeepSeek provider** (`app/ai/providers/deepseek.py`) — reuses the OpenAI-compatible
+  transport and adds DeepSeek's defaults, live model discovery via `GET /models`,
+  precise error translation, and handling of the reasoning-model contract.
+  Default model is **`deepseek-flash` (DeepSeek V4.1 Flash)**.
+- **Provider registry** (`app/ai/providers/registry.py`) — a declarative catalogue of
+  DeepSeek / OpenAI-Compatible / Ollama / Offline with labels, kinds, default models,
+  docs links and per-provider model lists. Adding a vendor is a two-step change.
+- **Runtime AI configuration** (`app/ai/runtime_config.py`) — provider, model, base URL,
+  API key, temperature, max tokens and timeout are resolvable at runtime with the
+  precedence **runtime override → `.env` → default**. Overrides persist to
+  `.runtime/ai-config.json` (git-ignored, local only) and take effect on the next AI
+  call without a restart.
+- **AI provider API** (`/api/v1/ai-config`) — 8 endpoints: read the effective
+  configuration, list providers, list models (`live=true` asks the vendor), read health,
+  patch the configuration, clear overrides, toggle a provider, and run a real
+  connection test that returns latency and token usage.
+- **Settings → AI Provider UI** — a working control panel: current effective provider
+  banner with an explicit degradation warning, provider cards with enable switches and
+  configured/active badges, dynamic model picker per provider with a custom-model
+  escape hatch, base URL, write-only API key field, temperature / max-tokens / timeout,
+  "apply", "reset to .env", and a "test connection" button. The tab is now the default
+  view of Settings.
+- **DeepSeek-aware error taxonomy** — `ai_insufficient_balance` (HTTP 402, not
+  retryable), `ai_model_not_found`, and `ai_reasoning_budget_exhausted`.
+- **Agent run provenance** — `knowledge_search` now records the chunks it retrieved as
+  `ai_run_sources` on the agent run, so an agent run can answer "which documents did
+  this use?" exactly like a RAG run, and the knowledge graph gains those edges.
+- **Live integration tests** (`tests/integration/test_deepseek_live.py`) — real API
+  calls that **skip automatically** with a stated reason when no key is configured.
+  The key is read from the environment and never referenced in test source.
+- **Verification harness** (`scripts/verify_deepseek.py`) — 11 groups / 60 checks
+  covering connectivity, RAG, document analysis, planner, agent, the AI run trace,
+  provider switching, bad key, unreachable host, retry, fallback and honest labelling.
+
+### Fixed
+
+Five real defects, all found by running against the live API rather than a mock:
+
+- **JSON mode was rejected with HTTP 400.** DeepSeek refuses
+  `response_format={"type":"json_object"}` unless the prompt literally contains the word
+  "json". The provider now satisfies the requirement in one place instead of making
+  every prompt author remember a vendor quirk.
+- **`reasoning_content` was not echoed back.** `deepseek-flash` is a reasoning model and
+  rejects a tool-loop follow-up that omits the previous assistant turn's chain of
+  thought ("The `reasoning_content` in the thinking mode must be passed back"). The
+  value now travels on `ChatMessage` / `ChatResult` and is replayed by the agent.
+- **Truncated JSON lost the whole plan.** A long structured answer cut off by the token
+  ceiling used to fail the entire request. The parser now recovers the complete part by
+  closing open structures and trimming back to the last valid boundary, bounded so a
+  pathological input cannot spin.
+- **A 1-token connection probe reported a false failure** for a healthy reasoning
+  endpoint, because the whole allowance went on the chain of thought. The probe budget
+  is now 256 tokens.
+- **`str(None)` made an empty API key look configured.** The resolver returned the
+  string `"None"` when every candidate was empty, which silently selected a cloud
+  provider with no credentials. The fallback now returns the default value itself.
+- **Task plans could ship without completion criteria.** Models occasionally omit the
+  field even though the prompt requires it. The plan normaliser now enforces the
+  contract and logs the under-delivery rather than shipping an empty criterion.
+- **Pure unit tests required a database.** The test suite's schema fixture was
+  `autouse`, so `pytest tests/unit` failed on a machine with no PostgreSQL — contradicting
+  the README. The fixtures are now opt-in, and all 246 unit tests run with no services.
+
+### Changed
+
+- `AI_MAX_TOKENS` default raised from 2048 to **8192** — reasoning models need room for
+  the chain of thought before the answer, and the old value silently produced empty
+  responses.
+- The agent loop's per-step budget is now `max(1024, min(ai_max_tokens, 3000))`.
+- Provider error messages now include the vendor's own explanation verbatim. A 400 used
+  to surface as "unexpected HTTP 400" and nothing else, which made the two defects above
+  invisible.
+- `AI_PROVIDER` defaults to `deepseek`; `DEEPSEEK_API_KEY` / `DEEPSEEK_BASE_URL` /
+  `DEEPSEEK_MODEL` have their own environment namespace.
+- API keys are masked as `sk-****(len=35)` — the prefix and length only, never the tail,
+  because these values end up in screenshots and bug reports.
+
+### Security
+
+- The API key lives only in `.env` (git-ignored) or `.runtime/ai-config.json`
+  (git-ignored, excluded from the delivery archive). Verified: it appears in **no Git
+  commit**, no tracked file, no log line, no screenshot and no archive entry.
+- Reads never return the key — only `api_key_set` and a mask.
+
 ## [1.0.0] — 2026-10-03
 
 First complete, verified release. Every item below was executed and checked on the
@@ -119,4 +211,5 @@ Ten real defects found during verification; each now has a regression test.
 - No rate limiting, refresh-token rotation, audit log or upload virus scanning
 - Single-node deployment; no horizontal scaling story beyond running more workers
 
+[1.1.0]: https://github.com/your-username/ai-workbench/releases/tag/v1.1.0
 [1.0.0]: https://github.com/your-username/ai-workbench/releases/tag/v1.0.0

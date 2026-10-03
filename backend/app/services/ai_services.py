@@ -281,6 +281,8 @@ class PlannerService:
     def _normalise_plan(raw: dict[str, Any], goal: str, horizon_days: int) -> dict[str, Any]:
         phases_raw = raw.get("phases")
         phases: list[dict[str, Any]] = []
+        repaired_criteria = 0
+
         if isinstance(phases_raw, list):
             for index, phase in enumerate(phases_raw):
                 if not isinstance(phase, dict):
@@ -300,13 +302,21 @@ class PlannerService:
                         for st in (task.get("subtasks") or [])
                         if isinstance(st, dict) and str(st.get("title") or "").strip()
                     ]
+                    criteria = str(task.get("completion_criteria") or "").strip()
+                    if not criteria:
+                        # "Every task has a verifiable completion criterion" is a
+                        # product guarantee, not a hope: models occasionally omit
+                        # the field, so the contract is enforced here and the
+                        # under-delivery is logged rather than silently shipped.
+                        criteria = _derive_criterion(title)
+                        repaired_criteria += 1
                     tasks.append(
                         {
                             "title": title[:300],
                             "description": str(task.get("description") or "")[:2000],
                             "estimated_minutes": _safe_int(task.get("estimated_minutes"), 60),
                             "priority": _safe_priority(task.get("priority")),
-                            "completion_criteria": str(task.get("completion_criteria") or "")[:1000],
+                            "completion_criteria": criteria[:1000],
                             "depends_on": [
                                 str(d)[:300]
                                 for d in (task.get("depends_on") or [])
@@ -323,6 +333,12 @@ class PlannerService:
                             "tasks": tasks,
                         }
                     )
+
+        if repaired_criteria:
+            logger.warning(
+                "plan_completion_criteria_repaired",
+                extra={"count": repaired_criteria, "reason": "model omitted the field"},
+            )
 
         if not phases:
             phases = [
@@ -536,6 +552,16 @@ def _safe_int(value: Any, default: int) -> int:
         return max(0, int(value))
     except (TypeError, ValueError):
         return default
+
+
+def _derive_criterion(title: str) -> str:
+    """Build a verifiable criterion for a task whose model omitted the field.
+
+    Deliberately concrete: it names the deliverable so the criterion can still
+    be checked off, rather than being a generic "掌握 / 了解" placeholder that
+    the prompt explicitly forbids.
+    """
+    return f"产出「{title[:120]}」的可交付结果，并能说明其关键结论与依据。"
 
 
 def _safe_priority(value: Any) -> str:

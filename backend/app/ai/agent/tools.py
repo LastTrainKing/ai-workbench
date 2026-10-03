@@ -61,9 +61,34 @@ class ToolContext:
     max_write_ops: int = 40
     write_ops: int = 0
     artifacts: dict[str, list[str]] = field(default_factory=dict)
+    #: Documents the agent actually read, collected so the run trace can answer
+    #: "which knowledge did this agent run use?" — the same provenance guarantee
+    #: the RAG pipeline gives. Without it an agent run would have no
+    #: ``ai_run_sources`` rows and the knowledge graph would miss those edges.
+    sources: list[dict[str, Any]] = field(default_factory=list)
 
     def register_artifact(self, kind: str, entity_id: str) -> None:
         self.artifacts.setdefault(kind, []).append(entity_id)
+
+    def record_sources(self, chunks: list[Any]) -> None:
+        """Collect retrieved chunks as run provenance (deduplicated by chunk id)."""
+        seen = {str(s.get("chunk_id")) for s in self.sources}
+        for index, chunk in enumerate(chunks, start=1):
+            chunk_id = str(getattr(chunk, "chunk_id", "") or "")
+            if not chunk_id or chunk_id in seen:
+                continue
+            seen.add(chunk_id)
+            self.sources.append(
+                {
+                    "document_id": getattr(chunk, "document_id", None),
+                    "chunk_id": chunk_id,
+                    "document_title": getattr(chunk, "document_title", ""),
+                    "chunk_index": getattr(chunk, "chunk_index", -1),
+                    "score": float(getattr(chunk, "score", 0.0) or 0.0),
+                    "snippet": str(getattr(chunk, "content", ""))[:1000],
+                    "citation_index": index,
+                }
+            )
 
     def consume_write(self) -> None:
         self.write_ops += 1
@@ -192,6 +217,10 @@ class KnowledgeSearchTool(Tool):
             knowledge_base_ids=ctx.knowledge_base_ids or None,
             top_k=limit,
         )
+        # Record provenance: the agent run must be able to answer
+        # "which documents did this run use?" just like a RAG run can.
+        ctx.record_sources(result.chunks)
+
         payload = {
             "query": query,
             "mode": result.mode,

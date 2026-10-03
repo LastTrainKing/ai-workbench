@@ -69,15 +69,22 @@ class Settings(BaseSettings):
     qdrant_distance: Literal["Cosine", "Dot", "Euclid"] = "Cosine"
 
     # ----------------------------------------------------------- AI: chat ---
-    ai_provider: Literal["openai_compatible", "ollama", "offline"] = "openai_compatible"
-    ai_base_url: str = "https://api.deepseek.com/v1"
+    ai_provider: Literal["deepseek", "openai_compatible", "ollama", "offline"] = "deepseek"
+    ai_base_url: str = "https://api.deepseek.com"
     ai_api_key: str = ""
-    ai_model: str = "deepseek-chat"
+    ai_model: str = "deepseek-flash"
     ai_temperature: float = 0.2
-    ai_max_tokens: int = 2048
+    ai_max_tokens: int = 8192
     ai_timeout_seconds: float = 90.0
     ai_max_retries: int = 3
     ai_backoff_base_seconds: float = 1.0
+
+    # -------------------------------------------------------- AI: DeepSeek ---
+    # Kept in their own namespace so a DeepSeek key can be supplied without
+    # touching the generic OpenAI-compatible variables.
+    deepseek_api_key: str = ""
+    deepseek_base_url: str = "https://api.deepseek.com"
+    deepseek_model: str = "deepseek-flash"
 
     # ------------------------------------------------------ AI: embedding ---
     embedding_provider: Literal["openai_compatible", "ollama", "offline"] = (
@@ -145,10 +152,22 @@ class Settings(BaseSettings):
 
     @property
     def is_offline_ai(self) -> bool:
-        """True when no real model backend is configured."""
-        return self.ai_provider == "offline" or (
-            self.ai_provider == "openai_compatible" and not self.ai_api_key.strip()
-        )
+        """True when no real model backend is configured.
+
+        Delegates to the runtime resolver so the answer reflects what the
+        Settings UI currently has selected, not just what ``.env`` said at boot.
+        """
+        from app.ai.runtime_config import resolve
+
+        try:
+            resolved = resolve()
+        except Exception:
+            return True
+        if resolved.provider == "offline":
+            return True
+        if resolved.provider in ("deepseek", "openai_compatible"):
+            return not resolved.api_key_set
+        return False
 
     def resolved_embedding_base_url(self) -> str:
         return self.embedding_base_url or self.ai_base_url

@@ -909,3 +909,88 @@ export interface HealthBasic {
   version: string
   env: string
 }
+
+/* ------------------------------------------------------------ AI provider */
+
+export type AIProviderId = 'deepseek' | 'openai_compatible' | 'ollama' | 'offline'
+
+export interface AIModelOption {
+  id: string
+  label: string
+  description?: string
+}
+
+export interface AIProviderOption {
+  id: AIProviderId
+  label: string
+  /** cloud | local | offline */
+  kind: string
+  requires_api_key: boolean
+  requires_daemon?: boolean
+  default_base_url: string
+  default_model: string
+  models: AIModelOption[]
+  description: string
+  docs_url?: string
+  /** Whether the operator has enabled it in the UI. */
+  enabled: boolean
+  /** Whether it is usable right now (a key is present / a daemon is reachable). */
+  configured: boolean
+}
+
+export interface AIEffectiveConfig {
+  provider: AIProviderId
+  model: string
+  base_url: string
+  api_key_set: boolean
+  /** Masked hint only — the raw key is never returned by the API. */
+  api_key_hint: string
+  temperature: number
+  max_tokens: number
+  timeout_seconds: number
+  embedding_provider: string
+  embedding_model: string
+  embedding_base_url: string
+  embedding_api_key_set: boolean
+  enabled_providers: Record<string, boolean>
+  /** Where each value came from: runtime override, env, or default. */
+  sources: Record<string, string>
+}
+
+export interface AIConfigResponse {
+  effective: AIEffectiveConfig
+  overrides: Record<string, unknown>
+  catalog: AIProviderOption[]
+  runtime_config_path: string
+  editable_fields: string[]
+}
+
+export interface AIConfigPatch {
+  provider?: AIProviderId
+  model?: string
+  base_url?: string
+  api_key?: string
+  temperature?: number
+  max_tokens?: number
+  timeout_seconds?: number
+  embedding_provider?: string
+  embedding_model?: string
+  embedding_base_url?: string
+  embedding_api_key?: string
+  enabled_providers?: Record<string, boolean>
+}
+
+export interface AIConnectionTestResult {
+  ok: boolean
+  provider: string
+  model: string
+  degraded?: boolean
+  latency_ms?: number
+  error_code?: string
+  error_message?: string
+  usage?: {
+    prompt_tokens: number
+    completion_tokens: number
+    total_tokens: number
+  }
+}

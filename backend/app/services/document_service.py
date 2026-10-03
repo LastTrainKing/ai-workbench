@@ -389,7 +389,7 @@ class DocumentService:
 
         try:
             await self.session.rollback()
-        except Exception as exc:  # noqa: BLE001 - the rollback must never mask the cause
+        except Exception as exc:
             logger.warning(
                 "ingest_rollback_failed",
                 extra={"document_id": str(document_id), "error": str(exc)},
@@ -403,7 +403,7 @@ class DocumentService:
                 document.status = DocumentStatus.FAILED.value
                 document.error_message = message[:2000]
                 document.progress = 0
-        except Exception as exc:  # noqa: BLE001 - never mask the original error
+        except Exception as exc:
             logger.error(
                 "failed_to_record_document_failure",
                 extra={"document_id": str(document_id), "error": str(exc)},

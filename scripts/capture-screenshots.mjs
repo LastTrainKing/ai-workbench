@@ -383,7 +383,9 @@ async function capture() {
   await page.screenshot({ path: path.join(OUT, '11-search.png') });
   log('11-search.png  <- /search (hybrid results with score breakdown)');
 
-  await shot('10-settings', '/settings', { wait: 2400 });
+  // --- AI Provider settings: the model actually answering -----------------
+  await shot('10-settings', '/settings', { wait: 3000 });
+  await shot('15-ai-provider', '/settings', { wait: 3000 });
   await shot('12-projects', '/projects', { wait: 1800 });
   await shot('13-notes', '/notes', { wait: 1800 });
 

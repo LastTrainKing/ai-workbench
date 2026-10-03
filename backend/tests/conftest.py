@@ -14,6 +14,7 @@ Test isolation strategy
 
 from __future__ import annotations
 
+import contextlib
 import os
 import uuid
 from collections.abc import AsyncIterator
@@ -68,8 +69,14 @@ async def _ensure_test_database() -> None:
         await admin.close()
 
 
-@pytest_asyncio.fixture(scope="session", autouse=True)
+@pytest_asyncio.fixture(scope="session")
 async def _database() -> AsyncIterator[None]:
+    """Create the schema once per session.
+
+    Deliberately **not** ``autouse``: pure unit tests (chunking, tokenising,
+    JSON repair, retry policy) must be runnable on a machine with no PostgreSQL,
+    no Redis and no Qdrant. Only the fixtures below pull the database in.
+    """
     await _ensure_test_database()
     async with get_engine().begin() as conn:
         await conn.run_sync(Base.metadata.drop_all)
@@ -78,9 +85,9 @@ async def _database() -> AsyncIterator[None]:
     await dispose_engine()
 
 
-@pytest_asyncio.fixture(autouse=True)
-async def _clean_state() -> AsyncIterator[None]:
-    """Truncate every table and clear the Redis test database between tests."""
+@pytest_asyncio.fixture
+async def _clean_state(_database: None) -> AsyncIterator[None]:
+    """Truncate every table and clear the Redis test database between DB tests."""
     from app.core.cache import get_redis
 
     async with session_scope() as session:
@@ -95,21 +102,20 @@ async def _clean_state() -> AsyncIterator[None]:
         from app.ai.prompts.registry import ensure_seeded
 
         await ensure_seeded(session)
-    try:
+    # The cache is optional in tests: a Redis outage must not fail the suite.
+    with contextlib.suppress(Exception):
         await get_redis().flushdb()
-    except Exception:
-        pass
     yield
 
 
 @pytest_asyncio.fixture
-async def session() -> AsyncIterator[object]:
+async def session(_clean_state: None) -> AsyncIterator[object]:
     async with session_scope() as s:
         yield s
 
 
 @pytest_asyncio.fixture
-async def client() -> AsyncIterator[httpx.AsyncClient]:
+async def client(_clean_state: None) -> AsyncIterator[httpx.AsyncClient]:
     from app.main import create_app
 
     app = create_app()

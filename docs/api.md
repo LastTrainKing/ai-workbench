@@ -292,6 +292,43 @@ Edge `type` ∈ `contains | mentions | subtask_of | uses_knowledge | produced | 
 
 ---
 
+## AI provider configuration
+
+Backs Settings → AI Provider. Changes here take effect on the **next AI call**: the
+provider cache is dropped and the resolved configuration is re-read.
+
+| Method | Path | Body / query | Notes |
+|---|---|---|---|
+| GET | `/ai-config` | — | `{effective, overrides, catalog, runtime_config_path, editable_fields}` |
+| GET | `/ai-config/providers` | — | `{providers: [...], count}` |
+| GET | `/ai-config/models` | `?provider=&live=` | `live=true` asks the vendor for its real model list |
+| GET | `/ai-config/health` | — | which provider is answering, and why |
+| PATCH | `/ai-config` | `{provider?, model?, base_url?, api_key?, temperature?, max_tokens?, timeout_seconds?, enabled_providers?}` | partial; `null` clears a field |
+| DELETE | `/ai-config` | — | clear all overrides, fall back to `.env` |
+| POST | `/ai-config/providers/toggle` | `{provider, enabled}` | enable/disable a provider in the UI |
+| POST | `/ai-config/test` | `{provider?}` | one small real request; returns latency + token usage |
+
+`effective` (secrets are never returned in full):
+
+```jsonc
+{ "provider": "deepseek", "model": "deepseek-flash",
+  "base_url": "https://api.deepseek.com",
+  "api_key_set": true, "api_key_hint": "sk-****(len=35)",
+  "temperature": 0.2, "max_tokens": 8192, "timeout_seconds": 90.0,
+  "embedding_provider": "openai_compatible", "embedding_model": "text-embedding-3-small",
+  "embedding_api_key_set": false,
+  "enabled_providers": { "deepseek": true, "openai_compatible": true, "ollama": true, "offline": true },
+  "sources": { "provider": "env", "api_key": "env", "model": "runtime", "embedding_api_key": "default" } }
+```
+
+`sources` records where each value came from: `runtime` (Settings UI) · `env` (`.env`) ·
+`default`. Precedence is runtime → env → default.
+
+Provider `kind` is `cloud` | `local` | `offline`. Error codes specific to this area:
+`ai_auth_error`, `ai_timeout`, `ai_rate_limited`, `ai_provider_error`,
+`ai_insufficient_balance`, `ai_model_not_found`, `ai_reasoning_budget_exhausted`,
+`ai_provider_mismatch`.
+
 ## Health
 
 * `GET /health` → `{status, app, version, env}`
