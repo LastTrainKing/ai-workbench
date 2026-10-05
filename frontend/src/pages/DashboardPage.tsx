@@ -36,6 +36,7 @@ import { Button, IconButton } from '@/components/ui/Button'
 import { EmptyState, ErrorState, ProgressBar, Skeleton } from '@/components/ui/feedback'
 import { PriorityBadge, TaskStatusBadge } from '@/components/badges'
 import type { DashboardStats } from '@/lib/types'
+import { LaunchGrid } from '@/features/shell/LaunchGrid'
 
 function KpiRow({ data }: { data: DashboardStats }) {
   const tiles = [
@@ -563,6 +564,10 @@ export default function DashboardPage() {
           </>
         }
       />
+
+      {/* The launch grid is the first thing on the page: the point of the
+          product is "tell it what you want", not "read a dashboard". */}
+      <LaunchGrid />
 
       {isLoading ? (
         <div className="space-y-4">
