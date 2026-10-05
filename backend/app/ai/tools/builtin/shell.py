@@ -27,6 +27,7 @@ import asyncio
 import contextlib
 import os
 import shutil
+import sys
 import time
 from pathlib import Path
 from typing import Any
@@ -41,7 +42,63 @@ MAX_TIMEOUT = 900.0
 DEFAULT_TIMEOUT = 120.0
 
 
-def _shell_for(interpreter: str) -> tuple[str, list[str]]:
+def resolve_interpreter(name: str, cwd: Path | None = None) -> str:
+    """Find the interpreter that belongs to the project, not just to the PATH.
+
+    This matters more than it looks. `shutil.which("python")` returns whatever the
+    machine happens to have first on PATH, which on a developer box is frequently
+    a bare system Python with none of the project's dependencies. An agent asked
+    to run a project's tests would then get "No module named pytest" and conclude
+    the *code* was broken — when the only problem was that it ran the wrong
+    interpreter.
+
+    Order, most specific first:
+
+    1. a virtual environment inside the working directory (``.venv``, ``venv``)
+    2. a virtual environment in a parent directory, which is the usual layout
+       (``<repo>/.venv`` while working in ``<repo>/backend``)
+    3. the interpreter running this backend — in this deployment that *is* the
+       project's venv, so it is the right answer when nothing else is found
+    4. whatever is on PATH, as a last resort
+
+    Node has the same problem in miniature, so a project-local ``node_modules``
+    is preferred for ``node`` too.
+    """
+    if name == "python":
+        candidates: list[Path] = []
+        search_roots = [cwd] if cwd else []
+        if cwd:
+            search_roots.extend(list(cwd.parents)[:4])
+
+        for root in search_roots:
+            if root is None:
+                continue
+            candidates.extend(
+                [
+                    root / ".venv" / "Scripts" / "python.exe",
+                    root / ".venv" / "bin" / "python",
+                    root / "venv" / "Scripts" / "python.exe",
+                    root / "venv" / "bin" / "python",
+                ]
+            )
+        for candidate in candidates:
+            if candidate.is_file():
+                return str(candidate)
+
+        # The backend's own interpreter. In this product that is the project venv,
+        # so it is a better guess than an unrelated Python on PATH.
+        if sys.executable and Path(sys.executable).is_file():
+            return sys.executable
+
+    found = shutil.which(name)
+    if not found and name == "python":
+        found = shutil.which("python3")
+    if not found:
+        raise ValidationError(f"{name} was not found on PATH")
+    return found
+
+
+def _shell_for(interpreter: str, cwd: Path | None = None) -> tuple[str, list[str]]:
     """Resolve the executable and the flag that runs a command string."""
     if interpreter == "powershell":
         exe = shutil.which("powershell") or shutil.which("pwsh")
@@ -54,15 +111,9 @@ def _shell_for(interpreter: str) -> tuple[str, list[str]]:
             raise ValidationError("cmd.exe was not found")
         return exe, ["/d", "/s", "/c"]
     if interpreter == "python":
-        exe = shutil.which("python") or shutil.which("python3")
-        if not exe:
-            raise ValidationError("Python was not found on PATH")
-        return exe, ["-c"]
+        return resolve_interpreter("python", cwd), ["-c"]
     if interpreter == "node":
-        exe = shutil.which("node")
-        if not exe:
-            raise ValidationError("Node.js was not found on PATH")
-        return exe, ["-e"]
+        return resolve_interpreter("node", cwd), ["-e"]
     raise ValidationError(f"Unsupported interpreter '{interpreter}'")
 
 
@@ -196,7 +247,9 @@ class _TerminalTool(Tool):
                     details={"command": command[:500], "risk": verdict.risk.value},
                 )
 
-        exe, flags = _shell_for(self.interpreter)
+        # Resolved against the working directory so a project's own virtual
+        # environment wins over whatever happens to be first on PATH.
+        exe, flags = _shell_for(self.interpreter, working)
         budget = min(float(timeout_seconds or DEFAULT_TIMEOUT), MAX_TIMEOUT)
 
         outcome = await _run_process(

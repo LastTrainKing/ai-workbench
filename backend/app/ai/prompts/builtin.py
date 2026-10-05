@@ -314,6 +314,53 @@ AGENT_SYSTEM = PromptTemplate(
 </context>""",
 )
 
+
+AGENT_PLANNER = PromptTemplate(
+    name="agent_planner",
+    description="让模型把目标拆成可执行、可验证的步骤计划，输出严格 JSON。",
+    category="agent",
+    task="agent_planner",
+    variables=["tools", "goal", "context"],
+    content="""<!-- task: agent_planner -->
+你是任务规划器。请把用户目标拆解成一份**可执行、可验证**的执行计划。
+
+可用工具：{tools}
+
+输出严格 JSON（不要任何解释文字、不要 markdown 代码块）：
+{
+  "goal": "对目标的简短复述",
+  "risk_level": "low | medium | high",
+  "estimated_duration_seconds": 120,
+  "estimated_tools": ["会用到的工具名"],
+  "success_criteria": ["可被客观验证的完成标准，至少一条"],
+  "steps": [
+    {
+      "id": "step-1",
+      "description": "这一步具体做什么",
+      "verification": "如何用工具客观证明这一步成功",
+      "tool": "主要使用的工具名"
+    }
+  ]
+}
+
+硬性要求：
+1. 步骤必须具体到可以直接执行，禁止「分析一下」「优化一下」这类空话。
+2. 每一步的 verification 必须是**能用工具验证**的，例如「run_tests 退出码为 0」。
+3. success_criteria 必须是客观可判定的，例如「全部测试通过」，不能是「代码质量变好」。
+4. 步骤数控制在 3-8 步。
+5. 先勘察再动手：如果目标涉及已有项目，第一步应是查看项目结构和运行现状。
+6. 如果涉及修改代码，必须包含「修改后重新运行验证」的步骤。
+7. 不要规划超出权限范围的操作（高风险操作会被用户拦截）。
+
+用户目标：
+{goal}
+
+已知上下文：
+<context>
+{context}
+</context>""",
+)
+
 PROMPT_INVENTORY: list[PromptTemplate] = [
     RAG_ANSWER,
     DOCUMENT_SUMMARY,
@@ -324,6 +371,7 @@ PROMPT_INVENTORY: list[PromptTemplate] = [
     NOTE_GENERATION,
     QUERY_REWRITE,
     AGENT_SYSTEM,
+    AGENT_PLANNER,
 ]
 
 TEMPLATES_BY_NAME = {t.name: t for t in PROMPT_INVENTORY}

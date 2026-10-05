@@ -464,6 +464,15 @@ def detect_project(root: Path) -> dict[str, Any]:
             pyproject.read_text(encoding="utf-8", errors="ignore") if pyproject.is_file() else ""
         )):
             commands["lint"] = "python -m ruff check ."
+    elif any(root.glob("*.py")):
+        # A directory of Python files with no manifest is still a Python project.
+        # Requiring a manifest meant an agent that had just written `foo.py` and
+        # `test_foo.py` into a fresh workspace could not run them — it reported
+        # "no test command detected" for a project it had created itself.
+        kind = "python"
+        runner = "python"
+        if any(root.glob("test_*.py")) or any(root.glob("*_test.py")) or (root / "tests").is_dir():
+            commands["test"] = "python -m pytest -q"
 
     return {"kind": kind, "runner": runner, "commands": commands, "root": str(root)}
 
@@ -495,10 +504,22 @@ class _ProjectCommandTool(Tool):
                 summary=f"no {self.action} command detected",
             )
 
-        exe, flags = _shell_for("powershell")
-        outcome = await _run_process(
-            exe=exe, args=[*flags, chosen], cwd=root, timeout=BUILD_TIMEOUT
-        )
+        # A project command must run through the project's own interpreter.
+        # Otherwise a bare `python -m pytest` picks up an unrelated Python
+        # without the dependencies and reports a failure that has nothing to
+        # do with the code under test.
+        runner = info.get("runner") or ""
+        if runner == "python":
+            exe, _ = _shell_for("python", root)
+            parts = chosen.split()
+            args = ["-m", *parts[2:]] if len(parts) > 2 else ["-m", "pytest", "-q"]
+        elif runner == "node":
+            exe, _ = _shell_for("node", root)
+            args = ["-e", chosen]
+        else:
+            exe, flags = _shell_for("cmd", root)
+            args = [*flags, chosen]
+        outcome = await _run_process(exe=exe, args=args, cwd=root, timeout=BUILD_TIMEOUT)
         ok = outcome["exit_code"] == 0 and not outcome["timed_out"]
         return ToolResult(
             ok=ok,
