@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import {
+  Package,
   Activity,
   ArrowLeft,
   FolderKanban,
@@ -10,13 +11,14 @@ import {
   NotebookPen,
 } from 'lucide-react'
 import { api } from '@/lib/api'
+import { deliveryApi, KIND_LABELS, acceptanceLabel, formatSize } from '@/lib/deliveryApi'
 import { formatMs, formatNumber, relativeTime, runStatusTone, runTypeLabel } from '@/lib/utils'
 import { Badge, Card, CardBody, Dot, PageContainer, SectionHeader, StatTile, Tabs } from '@/components/ui/primitives'
 import { EmptyState, ErrorState, Skeleton, SkeletonTable } from '@/components/ui/feedback'
 import { PriorityBadge, TaskStatusBadge } from '@/components/badges'
 import type { ReactNode } from 'react'
 
-type TabKey = 'knowledge' | 'tasks' | 'notes' | 'runs'
+type TabKey = 'knowledge' | 'tasks' | 'notes' | 'runs' | 'deliverables'
 
 function EmptyTab({ icon, title, description }: { icon: ReactNode; title: string; description: string }) {
   return <EmptyState icon={icon} title={title} description={description} className="border-0" />
@@ -42,6 +44,15 @@ export default function ProjectDetailPage() {
     queryKey: ['tasks', { project: projectId }],
     queryFn: ({ signal }) => api.tasks.list({ project_id: projectId, page_size: 50 }, signal),
     enabled: Boolean(projectId) && tab === 'tasks',
+  })
+
+  // What this project has actually produced. The delivery layer is where the
+  // product's value lives, so a project view that cannot show it is a project view
+  // that stops one step short of the point.
+  const deliverablesQuery = useQuery({
+    queryKey: ['delivery', 'deliverables', 'project', projectId],
+    queryFn: () => deliveryApi.deliverables({ limit: 50 }),
+    enabled: Boolean(projectId) && tab === 'deliverables',
   })
 
   const notesQuery = useQuery({
@@ -130,6 +141,7 @@ export default function ProjectDetailPage() {
           { key: 'tasks', label: '任务', icon: <ListChecks className="size-3" /> },
           { key: 'notes', label: '笔记', icon: <NotebookPen className="size-3" /> },
           { key: 'runs', label: 'AI 运行', icon: <Activity className="size-3" /> },
+          { key: 'deliverables', label: '产出物', icon: <Package className="size-3" /> },
         ]}
       />
 
@@ -290,6 +302,43 @@ export default function ProjectDetailPage() {
           </Card>
         )
       ) : null}
+      {tab === 'deliverables' ? (
+        deliverablesQuery.isLoading ? (
+          <Skeleton className="h-40" />
+        ) : deliverablesQuery.isError ? (
+          <ErrorState error={deliverablesQuery.error} onRetry={() => void deliverablesQuery.refetch()} />
+        ) : (deliverablesQuery.data?.deliverables ?? []).length === 0 ? (
+          <EmptyState
+            icon={<Package className="size-5" />}
+            title="这个项目还没有产出"
+            description="在首页说一句你想完成什么，它做出来的文件会出现在这里，并等你验收。"
+            compact
+          />
+        ) : (
+          <div className="space-y-2">
+            {(deliverablesQuery.data?.deliverables ?? []).map((item) => {
+              const state = acceptanceLabel(item)
+              return (
+                <Link
+                  key={item.id}
+                  to={item.build_run_id ? `/workbench/${item.build_run_id}` : '/workbench'}
+                  className="flex items-center gap-3 rounded-xl border border-border bg-surface px-4 py-3 transition-all hover:border-border-strong"
+                >
+                  <Package className="size-4 shrink-0 text-muted" />
+                  <span className="min-w-0 flex-1 truncate text-[13.5px] text-text">
+                    {item.title}
+                    {item.version > 1 && <span className="text-faint"> v{item.version}</span>}
+                  </span>
+                  <Badge tone="neutral">{KIND_LABELS[item.kind] ?? item.kind}</Badge>
+                  <Badge tone={state.tone}>{state.text}</Badge>
+                  <span className="text-[11.5px] text-faint">{formatSize(item.size_bytes)}</span>
+                </Link>
+              )
+            })}
+          </div>
+        )
+      ) : null}
+
     </PageContainer>
   )
 }
