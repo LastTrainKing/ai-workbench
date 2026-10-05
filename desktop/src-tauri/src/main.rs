@@ -17,6 +17,7 @@
 
 mod backend;
 mod commands;
+mod lifecycle;
 
 use std::sync::Arc;
 
@@ -45,11 +46,23 @@ fn main() {
         .build(tauri::generate_context!())
         .expect("failed to build the AI Workbench window")
         .run(|app_handle, event| {
-            // Closing the window must not leave a backend running behind it.
-            if let RunEvent::ExitRequested { .. } = event {
-                if let Some(state) = app_handle.try_state::<Arc<backend::BackendState>>() {
-                    state.stop();
+            // Every branch logs, because "the hook did not fire" was an inference
+            // last time and an inference is not a diagnosis.
+            match event {
+                RunEvent::ExitRequested { .. } => {
+                    lifecycle::log("event: ExitRequested");
+                    match app_handle.try_state::<Arc<backend::BackendState>>() {
+                        Some(state) => {
+                            lifecycle::log("event: ExitRequested -> calling stop()");
+                            state.stop();
+                        }
+                        None => lifecycle::log("event: ExitRequested -> NO STATE (cannot stop)"),
+                    }
                 }
+                RunEvent::Exit => {
+                    lifecycle::log("event: Exit (process is ending)");
+                }
+                _ => {}
             }
         });
 }

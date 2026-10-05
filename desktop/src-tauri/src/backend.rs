@@ -23,6 +23,8 @@ use std::time::{Duration, Instant};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager};
 
+use crate::lifecycle;
+
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
 
@@ -74,6 +76,12 @@ impl StartupStatus {
 pub struct BackendState {
     /// The launcher process, when this shell started one.
     child: Mutex<Option<Child>>,
+    /// Kill-on-close job holding the launcher and everything it spawns.
+    ///
+    /// Held for the life of the process on purpose: the limit fires when the
+    /// last handle closes, and the process exiting closes it for us. Dropping it
+    /// early would kill the backend while the window is still open.
+    job: Mutex<Option<lifecycle::JobGuard>>,
     /// True once `/api/v1/health` answered 200.
     ready: AtomicBool,
     cancelled: AtomicBool,
@@ -85,6 +93,7 @@ impl BackendState {
     pub fn new() -> Self {
         Self {
             child: Mutex::new(None),
+            job: Mutex::new(None),
             ready: AtomicBool::new(false),
             cancelled: AtomicBool::new(false),
             project_root: Mutex::new(None),
@@ -121,29 +130,58 @@ impl BackendState {
     /// Leaving PostgreSQL, Redis, Qdrant and the API alive behind a closed window
     /// is not what a desktop application should do.
     pub fn stop(&self) {
+        lifecycle::log("stop: entered");
         self.cancelled.store(true, Ordering::SeqCst);
 
         {
             let mut guard = self.child.lock().unwrap();
-            if let Some(child) = guard.as_mut() {
-                let pid = child.id();
-                let _ = Command::new("taskkill")
-                    .args(["/PID", &pid.to_string(), "/T", "/F"])
-                    .creation_flags(CREATE_NO_WINDOW)
-                    .stdout(Stdio::null())
-                    .stderr(Stdio::null())
-                    .status();
+            match guard.as_mut() {
+                Some(child) => {
+                    let pid = child.id();
+                    lifecycle::log(&format!("stop: killing launcher tree pid {pid}"));
+                    let _ = Command::new("taskkill")
+                        .args(["/PID", &pid.to_string(), "/T", "/F"])
+                        .creation_flags(CREATE_NO_WINDOW)
+                        .stdout(Stdio::null())
+                        .stderr(Stdio::null())
+                        .status();
+                }
+                None => lifecycle::log("stop: no launcher child (backend was already running)"),
             }
             *guard = None;
         }
 
-        // Stop the detached services. Bounded: the window is already closing and
-        // a hung shutdown must not leave the process hanging around.
-        let Some(root) = self.project_root() else { return };
+        // Resolve the project root here rather than reading stored state.
+        //
+        // The stored root is only written once the startup sequence has located
+        // it, and that sequence returns early when the backend is already
+        // running. So on a second launch — exactly the case a user hits after
+        // reopening the app — the stored root is None and the old code returned
+        // here, silently stopping nothing. `locate_project_root` works at any
+        // time because it walks up from the executable.
+        let root = match self.project_root() {
+            Some(root) => {
+                lifecycle::log(&format!("stop: root from state: {}", root.display()));
+                root
+            }
+            None => match lifecycle::locate_project_root() {
+                Some(root) => {
+                    lifecycle::log(&format!("stop: root located on demand: {}", root.display()));
+                    root
+                }
+                None => {
+                    lifecycle::log("stop: ABORT - project root could not be located");
+                    return;
+                }
+            },
+        };
+
         let script = root.join("scripts").join("stop-desktop.bat");
         if !script.is_file() {
+            lifecycle::log(&format!("stop: ABORT - missing {}", script.display()));
             return;
         }
+        lifecycle::log(&format!("stop: running {}", script.display()));
 
         let spawned = Command::new("cmd")
             .args(["/C", &script.to_string_lossy()])
@@ -156,20 +194,32 @@ impl BackendState {
 
         match spawned {
             Ok(mut child) => {
+                lifecycle::log(&format!("stop: shutdown script started, pid {}", child.id()));
                 let deadline = Instant::now() + Duration::from_secs(45);
-                while Instant::now() < deadline {
+                loop {
+                    if Instant::now() >= deadline {
+                        lifecycle::log("stop: shutdown script exceeded 45s, killing it");
+                        break;
+                    }
                     match child.try_wait() {
-                        Ok(Some(_)) => break,
+                        Ok(Some(status)) => {
+                            lifecycle::log(&format!("stop: shutdown script exited with {status}"));
+                            break;
+                        }
                         Ok(None) => std::thread::sleep(Duration::from_millis(300)),
-                        Err(_) => break,
+                        Err(exc) => {
+                            lifecycle::log(&format!("stop: try_wait failed: {exc}"));
+                            break;
+                        }
                     }
                 }
                 let _ = child.kill();
             }
             Err(exc) => {
-                eprintln!("ai-workbench: the shutdown script could not run: {exc}");
+                lifecycle::log(&format!("stop: shutdown script FAILED to start: {exc}"));
             }
         }
+        lifecycle::log("stop: finished");
     }
 }
 
@@ -273,8 +323,19 @@ fn emit(app: &AppHandle, status: StartupStatus) {
 /// Run the startup sequence on a background thread.
 pub fn spawn_startup(app: AppHandle, state: Arc<BackendState>) {
     std::thread::spawn(move || {
+        lifecycle::log("startup: begin");
+
         // ---------------------------------------------------------- already up --
         if backend_is_healthy() {
+            // Note the consequence: the project root is never *stored* on this
+            // path, which is why stop() must be able to find it itself.
+            lifecycle::log("startup: backend already healthy, returning early");
+            // Still point the log at the project so the shutdown that follows is
+            // recorded next to everything else rather than in the temp folder.
+            if let Some(root) = lifecycle::locate_project_root() {
+                lifecycle::set_log_root(&root);
+                lifecycle::log("startup: log root set on the early-return path");
+            }
             state.set_status(StartupStatus {
                 phase: "ready".into(),
                 message: "Backend already running".into(),
@@ -303,6 +364,8 @@ pub fn spawn_startup(app: AppHandle, state: Arc<BackendState>) {
             }
         };
         *state.project_root.lock().unwrap() = Some(root.clone());
+        lifecycle::set_log_root(&root);
+        lifecycle::log(&format!("startup: project root = {}", root.display()));
 
         // -------------------------------------------------------------- spawn --
         let launcher = root.join("scripts").join("start-desktop.bat");
@@ -322,7 +385,28 @@ pub fn spawn_startup(app: AppHandle, state: Arc<BackendState>) {
             .spawn();
 
         match child {
-            Ok(process) => *state.child.lock().unwrap() = Some(process),
+            Ok(process) => {
+                // The safety net: if this process dies for any reason — a crash,
+                // a force-kill, the user ending it from Task Manager — the
+                // operating system terminates everything in the job. Without it,
+                // only the graceful path cleans up, and that path is the one
+                // that is easiest to miss.
+                let mut job_guard = state.job.lock().unwrap();
+                if job_guard.is_none() {
+                    *job_guard = lifecycle::JobGuard::create();
+                }
+                match job_guard.as_ref() {
+                    Some(job) => {
+                        if !job.assign(&process) {
+                            lifecycle::log("startup: job assignment failed; relying on the graceful path");
+                        }
+                    }
+                    None => lifecycle::log("startup: no job object; relying on the graceful path"),
+                }
+                drop(job_guard);
+
+                *state.child.lock().unwrap() = Some(process);
+            }
             Err(exc) => {
                 let status = StartupStatus::failed(
                     "Could not run the startup script",
