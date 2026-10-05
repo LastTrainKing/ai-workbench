@@ -33,7 +33,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai.agent.plan import RunState
 from app.core.logging import get_logger
-from app.models.ai import ToolCall
+from app.models.ai import ToolAuditLog
 from app.models.delivery import BuildRun, BuildStatus
 from app.services.delivery_service import DeliveryService
 
@@ -298,7 +298,13 @@ async def _collect(
     and a file the agent *said* it wrote is not evidence that it did. The
     intersection is: a successful call to a writing tool, naming a path that exists.
     """
-    # The recorder's run id is the AI run id; tool calls hang off it.
+    # Read the audit log, not `tool_calls`.
+    #
+    # Both tables exist and only one of them is written for agent tool executions:
+    # the executor records an audit row for every invocation, while `tool_calls` is
+    # written by the AI tracing recorder, which the autonomous path does not call.
+    # Reading the wrong one produced a run that had plainly succeeded — the file was
+    # on disk — and reported "no output detected".
     try:
         run_uuid = uuid.UUID(str(ai_run_id))
     except ValueError:
@@ -306,9 +312,9 @@ async def _collect(
         return 0
 
     stmt = (
-        select(ToolCall)
-        .where(ToolCall.ai_run_id == run_uuid)
-        .order_by(ToolCall.created_at.asc())
+        select(ToolAuditLog)
+        .where(ToolAuditLog.ai_run_id == run_uuid)
+        .order_by(ToolAuditLog.created_at.asc())
     )
     calls = list((await session.execute(stmt)).scalars())
     if not calls:
@@ -319,7 +325,9 @@ async def _collect(
     for call in calls:
         if call.tool_name not in ARTIFACT_TOOLS:
             continue
-        # `status` is the field; a call that errored did not leave a file behind.
+        # A denied call left no file behind, and neither did one that errored.
+        if (call.decision or "").lower() != "allow":
+            continue
         if (call.status or "").upper() not in ("SUCCEEDED", "OK"):
             continue
 
