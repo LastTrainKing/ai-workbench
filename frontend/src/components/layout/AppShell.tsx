@@ -3,6 +3,8 @@ import { Outlet } from 'react-router-dom'
 import { useUiStore } from '@/store/ui'
 import { Sidebar } from './Sidebar'
 import { TopBar } from './TopBar'
+import { ConnectionBanner } from '@/features/shell/ConnectionBanner'
+import { useConnection } from '@/features/shell/useConnection'
 import { RightPanel } from './RightPanel'
 import { CommandPalette } from '@/components/CommandPalette'
 import { ShortcutsOverlay } from '@/components/ShortcutsOverlay'
@@ -45,11 +47,14 @@ function useGlobalShortcuts() {
 export function AppShell() {
   useGlobalShortcuts()
 
+  const connection = useConnection()
+
   return (
     <div className="flex h-full overflow-hidden bg-base">
       <Sidebar />
       <div className="flex min-w-0 flex-1 flex-col">
         <TopBar />
+        <ConnectionBanner connection={connection} />
         <div className="flex min-h-0 flex-1">
           <main className="aiw-scroll min-w-0 flex-1">
             <Outlet />

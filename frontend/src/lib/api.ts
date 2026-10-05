@@ -215,7 +215,10 @@ export async function requestResult<T>(path: string, options: RequestOptions = {
     if (error instanceof DOMException && error.name === 'AbortError') throw toApiError(error)
     throw new ApiError({
       code: 'network_error',
-      message: '无法连接到后端服务，请确认服务是否已启动（http://127.0.0.1:8000）',
+      // Desktop tone, not developer tone. The user does not know what a backend
+      // is, does not need a URL, and cannot act on either. The banner explains
+      // what is happening and retries on its own.
+      message: 'AI Workbench 的后台服务暂时没有响应，正在自动重试。',
       status: 0,
     })
   }

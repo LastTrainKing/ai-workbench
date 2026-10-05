@@ -348,3 +348,35 @@
   margin-right: 0.4em;
   accent-color: rgb(var(--c-accent));
 }
+
+
+/* ---------------------------------------------------------------------------
+   Desktop shell
+   ---------------------------------------------------------------------------
+   The class is added by `installDesktopShell()` at startup. It removes the
+   "drag to select across the whole page" behaviour that makes a WebView feel
+   like a document, while leaving form controls selectable — copying a path out
+   of an input is a normal thing to do and blocking it would be a regression,
+   not a polish.
+   --------------------------------------------------------------------------- */
+.aw-desktop-shell {
+  user-select: none;
+  -webkit-user-select: none;
+  cursor: default;
+}
+
+.aw-desktop-shell input,
+.aw-desktop-shell textarea,
+.aw-desktop-shell select,
+.aw-desktop-shell [contenteditable='true'],
+.aw-desktop-shell .selectable,
+.aw-desktop-shell pre,
+.aw-desktop-shell code {
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+/* Images are never a drag source in an application window. */
+.aw-desktop-shell img {
+  -webkit-user-drag: none;
+}

@@ -5,7 +5,18 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import App from './App'
 import './index.css'
 import { setUnauthorizedHandler, toApiError } from '@/lib/api'
+import { installDesktopShell, isDesktopShell } from '@/lib/desktopShell'
 import { handleUnauthorized, useAuthStore } from '@/store/auth'
+
+// Install the shell guards before React mounts, so a keystroke arriving
+// during the first paint is already handled.
+installDesktopShell({ blockContextMenu: true })
+
+// Exposed for the browser test: it asserts that the guards are active
+// rather than trusting that the call above ran.
+if (typeof window !== 'undefined') {
+  ;(window as unknown as { __awShell?: unknown }).__awShell = { isDesktopShell }
+}
 
 export const queryClient = new QueryClient({
   defaultOptions: {
