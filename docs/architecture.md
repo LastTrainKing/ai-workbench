@@ -357,3 +357,75 @@ limitation is stated again in [deployment.md](deployment.md) and
 * [deployment.md](deployment.md) — running the stack
 * [security.md](security.md) — threat model and implemented controls
 * [development.md](development.md) — layering rules and how to extend the system
+
+---
+
+## Update — autonomous agent, personal context, desktop shell
+
+The layering below is unchanged. Three subsystems were added on top of it, and each
+respects the same boundaries.
+
+### Autonomous agent
+
+`app/ai/agent/` gained four modules beyond the original single-step executor:
+
+| Module | Responsibility |
+|---|---|
+| `plan.py` | `ExecutionPlan`, `PlanStep`, `RunState`, `RunEvent`. States are one enum, not a pile of booleans — the impossible combinations are where the bugs live. |
+| `control.py` | Pause, resume, cancel and the live event stream. Cancel cancels the running asyncio task, which propagates into the process runner and kills the child tree. |
+| `snapshot.py` | Capture, diff and restore. Records both the pre-run and the post-run manifest, which is what lets rollback tell the agent's edits from the user's. |
+| `autonomous.py` | The loop itself, bounded on every axis. |
+
+The design rule that shapes all of it: **the model decides what to do, the code decides
+whether it worked.** Verification is a tool call whose exit code is read. See
+[`autonomous-agent.md`](autonomous-agent.md).
+
+### Personal context
+
+`app/ai/memory/` and `app/models/context.py`. Four things kept strictly apart:
+
+```
+Profile      who the user is           one row, always loaded, compressed
+Memory       facts worth keeping       few, confirmed, scored
+Knowledge    files the user supplied   the existing RAG system, untouched
+Project      what they are working on  derived from projects/tasks, not new
+```
+
+`evaluator.py` decides what is worth remembering and refuses to guess.
+`assembler.py` builds the context block a model call receives, under a hard token budget,
+and writes the exact rendered text to `context_snapshots`.
+
+Five new tables: `user_profile`, `user_preferences`, `memory_entries`,
+`memory_candidates`, `context_snapshots` (migration `1867e3419108`).
+
+### Desktop shell
+
+`desktop/src-tauri/` is a Windows host, not a second application. It owns exactly three
+things: the native window, starting the backend, and stopping it. It contains no business
+logic.
+
+Two modules worth knowing:
+
+- `lifecycle.rs` — a lifecycle log written to an absolute path with a temp fallback, and a
+  job object with `KILL_ON_JOB_CLOSE`. The services are started detached, so
+  `taskkill /T` cannot reach them; the job object makes the operating system clean up even
+  on a force-kill.
+- `menu.rs` — the native menu. Item ids are shared constants between the builder and the
+  handler, because a mismatch there fails silently.
+
+### Where the new code sits in the layer diagram
+
+```
+Tauri shell  ─────────────────────  no business logic
+    │
+FastAPI api/ ─────────────────────  new: /profile, /memories, /memory-candidates,
+    │                                     /preferences, /context/*
+services/    ─────────────────────  new: autonomous_service, wiring in ai_services
+repositories/ ────────────────────  unchanged
+models/      ─────────────────────  new: context.py (5 tables, 29 total)
+    │
+Agent → Tool → Permission Manager → Tool Executor
+                                        │
+                          Computer tools (44, was 42)
+                          new: document_write, document_read
+```

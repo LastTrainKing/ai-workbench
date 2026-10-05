@@ -252,3 +252,38 @@ noisy without the plugin.
 * [deployment.md](deployment.md) — how to bring the stack up first
 * [../docs/thesis/09-系统测试.md](thesis/09-系统测试.md) — the Chinese test chapter
 * [api.md](api.md) — the endpoints the smoke test exercises
+
+---
+
+## Update — verification scripts
+
+Unit tests verify logic. They do not verify **wiring**, and in this project every
+expensive bug has been a wiring bug: a function written correctly and never called, or
+called with the wrong argument. Those need a real process and a real click.
+
+Eleven scripts now run against a live server and assert on observed behaviour:
+
+| Script | Assertions | What it proves |
+|---|---|---|
+| `verify-desktop-entry.ps1` | 12 | Shortcut opens a native window; three exit paths leave zero processes |
+| `verify_shortcut.py` | 7 | The `.lnk` bytes point at the executable, read without the Shell API |
+| `verify-agent-ui.mjs` | 26 | 暂停 issues `POST /pause`; polling stops on terminal state and unmount |
+| `verify-context-ui.mjs` | 22 | 添加 issues `POST /memories`; the wizard writes nothing before confirmation |
+| `verify-shell-behaviour.mjs` | 21 | F5 does not reload; right-click still works in inputs; the offline banner clears |
+| `verify-focus-grid.mjs` | 17 | Arrow keys move focus; Enter opens; Tab is not swallowed |
+| `verify-splash.mjs` | 10 | Per-service rows render from a real payload |
+| `verify-sidebar.mjs` | 10 | All 16 old routes still resolve after the restructure |
+| `test_context_api.py` | 31 | Every endpoint: success, 404 and validation failure |
+| `test_memory_loop.py` | 18 | Noodles are not remembered; a contradiction becomes a question |
+| `test_personalisation.py` | 8 | One goal, two profiles, two different plans (similarity 0.298) |
+
+### Two lessons these encode
+
+**Assert on the request, not on the render.** A button whose `onClick` is empty passes
+typecheck, lint and build. The tests assert that clicking 暂停 produces `POST /pause`,
+because that is the claim being made.
+
+**A test that always takes the same path is a test with a hole.** The desktop suite
+originally stopped everything before each scenario, so it always exercised the "spawn a
+fresh backend" path — and missed that the job object was only created there. A real user
+reopening the app takes the *other* path. Scenario I-3 was added for exactly that.

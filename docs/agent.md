@@ -226,3 +226,21 @@ automatically — no prompt change is required.
 * [ai.md](ai.md) — providers and tracing
 * [rag.md](rag.md) — the retrieval the tools rely on
 * [development.md](development.md) — layering rules
+
+---
+
+## Update — this document describes the business-tool agent
+
+The agent described here calls the eleven business tools: knowledge search, task and
+project queries, the planner, and the note and task writers. It is bounded, it cannot
+reach the database, and it is still what runs when you use the original agent endpoint.
+
+A second agent was added that operates the machine itself — files, code, git, terminal,
+builds, processes, the network — with a plan/execute/verify/fix loop and the full
+permission system in front of it.
+
+**That one is documented separately: [`autonomous-agent.md`](autonomous-agent.md).**
+
+The two share the executor's tool plumbing but not their prompts, their limits or their
+purpose. Reading one and assuming it describes the other will be misleading, which is why
+this note is here rather than a merge.

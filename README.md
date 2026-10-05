@@ -1,37 +1,62 @@
 # AI Workbench
 
-**A local-first AI knowledge & task execution platform.**
-Upload your documents, ask grounded questions with citations, turn knowledge into an
-executable task tree, and let a tool-calling agent do the work — with a full audit
-trail of every AI call.
+**A local-first personal AI agent for Windows.**
 
-It is not a chat wrapper. It closes one loop:
+Say what you want done. It plans, uses tools on your own machine — files, code, git,
+terminal, documents — verifies the result against real evidence, and fixes what failed.
+Every action is permission-gated, auditable, and reversible.
+
+It is not a chat wrapper, and it is not a dashboard. It closes one loop:
 
 ```
-资料 → 知识 → 任务 → 执行 → 结果 → 再沉淀为知识
-documents → knowledge → tasks → execution → results → back into knowledge
+你说目标 → 它规划 → 调用工具 → 验证结果 → 失败就修 → 你确认 → 它更懂你
 ```
 
+## What makes it different
+
+**The model decides what to do. The code decides whether it worked.**
+
+Verification is a tool call whose exit code is read, not the model's opinion of its own
+output. If `pytest` exits 1, the step failed, whatever the model says about it. Without
+that rule, an agent framework is just a model complimenting itself.
+
+**It remembers, and it asks first.**
+
+Facts worth keeping are separated from noise by a filter that rejects far more than it
+keeps: nine evaluations wrote zero memories in the last measured run. Anything the system
+is not sure about becomes a question, and a fact that contradicts an existing one becomes
+a question too — never a silent overwrite. Recording something wrong is worse than
+recording nothing.
+
+**It shows you what it knows.**
+
+Every fact the system holds about you is listed, editable and deletable. Every proposed
+fact waits for your decision. The context preview shows the exact text that would be sent
+to the model, block by block, with the token cost of each.
+
+**It runs as a desktop application.**
+
+A native window — no browser, no address bar, no console. Closing it stops the backend,
+guaranteed by a Windows job object, so a crash or a force-kill cannot leave PostgreSQL,
+Redis and Qdrant running behind a closed window.
+
 <p align="center">
-  <img src="screenshots/01-dashboard.png" alt="Dashboard" width="49%">
-  <img src="screenshots/04-rag-chat.png" alt="Grounded RAG chat with citations" width="49%">
+  <img src="screenshots/ui-verification/51-home-grid.png" alt="Home: keyboard-navigable launch grid" width="49%">
+  <img src="screenshots/ui-verification/05-agent-result.png" alt="Agent: plan, live execution, verified result" width="49%">
 </p>
 <p align="center">
-  <img src="screenshots/05-task-planner.png" alt="Task planner" width="49%">
-  <img src="screenshots/06-agent.png" alt="Tool-calling agent trajectory" width="49%">
-</p>
-<p align="center">
-  <img src="screenshots/02-knowledge.png" alt="Knowledge bases" width="49%">
-  <img src="screenshots/07-ai-runs.png" alt="AI execution traces" width="49%">
-</p>
-<p align="center">
-  <img src="screenshots/10-ai-provider.png" alt="AI Provider settings — switch model at runtime" width="49%">
-  <img src="screenshots/09-graph.png" alt="Knowledge graph" width="49%">
+  <img src="screenshots/ui-verification/10-my-ai-memory.png" alt="My AI: profile, memory and preferences" width="49%">
+  <img src="screenshots/ui-verification/13-my-ai-context.png" alt="Context preview: exactly what is sent" width="49%">
 </p>
 
 ---
 
 ## Table of contents
+
+- [Autonomous agent](docs/autonomous-agent.md) — the loop, the states, the limits
+- [Permissions](docs/permissions.md) — what the agent may do, and why the defaults are what they are
+- [Interview questions](docs/interview.md) — 20 questions with the real implementation behind each
+- [Resume description](docs/resume.md) — what was built, and what was not
 
 - [Why this project exists](#why-this-project-exists)
 - [Core features](#core-features)
@@ -106,6 +131,50 @@ cannot touch the database; it can only call tools, which call services, which ca
 repositories. Duplicate-call loop detection and a per-run write-operation cap keep it
 safe.
 
+**Autonomous agent** — PLAN → EXECUTE → OBSERVE → VERIFY → FIX → RETRY → DONE. It
+commits to a plan whose every step declares how it will be verified, snapshots the
+workspace before touching anything, and checks each step against a real tool result
+rather than its own prose. Pause, resume and cancel are live controls; cancel reaches
+into the running process tree. Bounded on every axis — steps, tool calls, retries,
+wall clock, files modified. See [docs/autonomous-agent.md](docs/autonomous-agent.md).
+
+**Computer tools** — 44 tools across filesystem, code, git, terminal, build-and-test,
+process, network and observation. Each carries a permission level, a risk level, a
+timeout and an audit row. A missing library is reported as a failure, never silently
+downgraded.
+
+**Permission system** — four levels (observe / workspace / system / full control) and
+three modes (assist / supervised / autonomous). Deny beats allow, always. Protected
+locations — SSH keys, browser credential stores, the project's own `.env` — are merged
+in from the built-in policy on every load, so a settings file can add protections but
+never remove them. High-risk commands prompt, and the prompt explains the reason and the
+impact. See [docs/permissions.md](docs/permissions.md).
+
+**Snapshots, diff and rollback** — the workspace is captured before a run and the state
+it left behind is recorded afterwards. Rollback compares against the second manifest, so
+a file the *user* edited after the run is reported as a conflict instead of being
+silently overwritten.
+
+**Personal context** — profile, memory, preferences and knowledge kept as four separate
+things, because merging them into one vector store is how "an AI that knows me" becomes
+"an AI that recalls irrelevant fragments". A memory is stored only when the evaluator is
+confident or the user confirms; contradictions become questions; sensitive content is
+never stored at any confidence. Every injection is recorded so "what did it know when it
+said that" is answerable afterwards.
+
+**Document generation** — `document_write` produces docx, xlsx, pptx, pdf, md and csv
+from structured input; `document_read` reads them back. Style comes from user
+preferences, so the same request produces a different document for a different person.
+**Generation is not completion**: the tool reports `verified: false` and the agent must
+read the file back and check the page count, the row count, the size.
+
+**Windows desktop shell** — Tauri + WebView2. No browser, no address bar, no console
+window. A splash reports per-service readiness from real TCP and HTTP probes. The window
+blocks the browser tells (context menu, F5, Ctrl+P, F12, Ctrl+wheel zoom) while leaving
+text selection and right-click working inside form fields. Closing the window stops the
+backend, guaranteed by a job object with `KILL_ON_JOB_CLOSE` — a crash or a force-kill
+cannot leave services running.
+
 **Prompt versioning** — prompts are database rows with an immutable version history.
 Business code requests a prompt *by name*; every AI run records which version answered.
 
@@ -160,6 +229,35 @@ identity matters for this project).
 ---
 
 ## Architecture
+
+Four layers, and the boundaries are enforced rather than documented:
+
+```
+Windows desktop shell (Tauri + WebView2)
+    └── starts the backend, owns the window, guarantees shutdown
+            │
+        FastAPI  ─────────────────────────────────────────────
+            api/         HTTP surface, request validation
+            services/    use cases, transactions
+            repositories/ data access
+            models/      SQLAlchemy, 29 tables
+            │
+        Agent → Tool → Permission Manager → Tool Executor
+            │              │
+            │         Service → Repository → Database
+            │
+        Computer tools (44) — filesystem, code, git, terminal,
+            build/test, process, network, observation
+```
+
+**The agent never touches the database.** It calls tools; tools call services; services
+call repositories. That is what makes every action nameable, classifiable and
+interruptible — and what makes the audit trail meaningful, because a row says "called
+`file_write` on `x.py`", not "executed an UPDATE".
+
+**The desktop shell holds no business logic.** It starts processes, shows a window and
+stops processes. Everything else is FastAPI.
+
 
 ```mermaid
 flowchart TB
@@ -435,21 +533,57 @@ cd backend
 ..\.venv\Scripts\python.exe -m pytest tests/unit           # fast, no services needed
 ..\.venv\Scripts\python.exe -m pytest --cov=app            # with coverage
 
-# end-to-end against a running server (75 assertions)
-python scripts/smoke_test.py
-
 # frontend
 cd frontend
-npm run test          # Vitest
+npm run test          # Vitest — 114 assertions
 npm run typecheck     # tsc --noEmit
 npm run lint          # ESLint
 npm run build         # production build
 ```
 
+### Verification scripts
+
+These are the tests that catch what unit tests cannot: whether the wiring is real, and
+whether the packaged application behaves like an application. All of them run against a
+live server and assert on observed behaviour rather than on code structure.
+
+| Script | Assertions | What it proves |
+|---|---|---|
+| `scripts/verify-desktop-entry.ps1` | 12 | The shortcut opens a native window; no browser, no console, no port 5173; three exit paths leave zero processes behind |
+| `scripts/verify_shortcut.py` | 7 | The `.lnk` bytes point at the executable, read without the Shell API |
+| `scripts/verify-agent-ui.mjs` | 26 | Clicking 暂停 issues `POST /pause`; polling stops on a terminal state and on unmount |
+| `scripts/verify-context-ui.mjs` | 22 | 添加 issues `POST /memories`; the wizard writes nothing until the confirm step |
+| `scripts/verify-shell-behaviour.mjs` | 21 | F5 does not reload, right-click still works in inputs, the offline banner appears and clears itself |
+| `scripts/verify-focus-grid.mjs` | 17 | Arrow keys move focus, Enter opens, Tab is not swallowed |
+| `scripts/verify-splash.mjs` | 10 | Per-service rows render from a real status payload |
+| `scripts/verify-sidebar.mjs` | 10 | All 16 old routes still resolve after the sidebar was restructured |
+| `scripts/test_context_api.py` | 31 | Every endpoint: success, 404 and validation failure |
+| `scripts/test_memory_loop.py` | 18 | Noodles are not remembered, passwords never land, a contradiction becomes a question |
+| `scripts/test_personalisation.py` | 8 | The same goal produces two different plans for two different profiles (similarity 0.298) |
+
 The backend suite runs against a dedicated `aiworkbench_test` database and Redis
 database index 1, so it never touches development data.
 
 See [`docs/testing.md`](docs/testing.md) for the full strategy.
+
+---
+
+## Known limits
+
+Stated plainly, because a project that hides its edges is a project you cannot trust:
+
+- **No browser control.** `screenshot` and `screen_read` observe the screen; there is no
+  click, no typing, no page automation.
+- **No mouse or keyboard control.**
+- **No OCR.** A scanned PDF with no text layer is reported as such rather than returned
+  as an empty document.
+- **Embeddings are offline hashes**, not a semantic model — DeepSeek does not expose an
+  embedding endpoint. Retrieval quality is correspondingly limited.
+- **Ollama and OpenAI-compatible endpoints are not tested against a live server.** The
+  code paths exist and degrade correctly when unreachable, but no real endpoint was used.
+- **The Docker path is unverified.** It is written and documented; it has not been run.
+- **The installer still expects the project directory to exist.** It is not a
+  self-contained install.
 
 ---
 

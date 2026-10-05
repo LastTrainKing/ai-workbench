@@ -379,3 +379,48 @@ production SaaS. Before exposing it to untrusted networks:
 * [architecture.md](architecture.md) — topology and the worker
 * [security.md](security.md) — threat model
 * [testing.md](testing.md) — how to verify the deployment
+
+---
+
+## Update — desktop application delivery
+
+### The shortcut points at the executable
+
+```
+AI Workbench.lnk
+  → desktop\src-tauri\target\release\ai-workbench-desktop.exe
+       → starts PostgreSQL / Redis / Qdrant / API itself
+            → opens its own window on http://127.0.0.1:8000/
+```
+
+No browser. No port 5173. No console window.
+
+`scripts/create-shortcut.ps1` **fails loudly** if the executable has not been built,
+printing the build command, and explicitly refuses to fall back to a browser launcher.
+A shortcut that quietly opens Edge instead of the application is worse than no shortcut,
+because the user only finds out after double-clicking it. A `-Browser` switch keeps the
+old behaviour for development.
+
+`scripts/start.bat` and `scripts/restart.bat` no longer open a browser by default;
+`--browser` is the opt-in.
+
+### Shutdown
+
+Closing the window stops the backend. This is guaranteed at the operating-system level by
+a job object, not by the application asking nicely — see
+[`security.md`](security.md#process-lifecycle).
+
+### Verifying a build
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\verify-desktop-entry.ps1
+```
+
+Twelve assertions across three exit scenarios, printing PASS or FAIL with the evidence
+that decided it. The script also prints the lifecycle log, so the close path can be
+checked against the log rather than against the script's own conclusion.
+
+### What the installer is not
+
+It still expects the project directory to exist. It is not a self-contained install, and
+saying otherwise would be the kind of claim that falls apart on someone else's machine.

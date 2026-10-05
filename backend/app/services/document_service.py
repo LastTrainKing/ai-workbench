@@ -20,6 +20,7 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.ai.memory import ContextAssembler
 from app.ai.parsers.documents import ParsedDocument, parse_file
 from app.ai.prompts.registry import get_prompt
 from app.ai.providers.factory import build_llm_provider
@@ -520,6 +521,24 @@ class DocumentService:
         llm, info = build_llm_provider()
         content = await self._document_text(document, max_tokens=7000)
 
+        # The personal block, assembled once and reused by every analysis branch.
+        #
+        # Document analysis is where style matters most: the same paper summarised
+        # for someone learning the subject and for someone who works in it should
+        # not read the same, and the profile is what carries that difference.
+        #
+        # A failure here must not break the analysis, so it degrades to an empty
+        # string rather than propagating.
+        personal = ""
+        try:
+            assembler = ContextAssembler(self.session, user_id=owner_id)
+            assembled = await assembler.assemble(include_knowledge=False)
+            if not assembled.is_empty:
+                await assembler.persist(assembled, purpose="document")
+                personal = assembled.render()
+        except Exception as exc:
+            logger.warning("document_context_failed", extra={"error": f"{type(exc).__name__}: {exc}"})
+
         recorder = await RunRecorder.start(
             self.session,
             run_type=RunType.DOCUMENT_SUMMARY if wanted == ["summary"] else RunType.KNOWLEDGE_EXTRACTION,
@@ -546,7 +565,8 @@ class DocumentService:
                     [
                         ChatMessage(
                             role="system",
-                            content=prompt.render(title=document.title, content=content),
+                            content=(f"{personal}\n\n" if personal else "")
+                            + prompt.render(title=document.title, content=content),
                         ),
                         ChatMessage(role="user", content=f"请分析文档《{document.title}》。"),
                     ],

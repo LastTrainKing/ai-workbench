@@ -170,3 +170,60 @@ following gaps are real and are not implemented:
 * [deployment.md](deployment.md) — production hardening notes
 * [architecture.md](architecture.md) — the request lifecycle and error handling
 * [../docs/thesis/03-可行性分析.md](thesis/03-可行性分析.md) — security feasibility in Chinese
+
+---
+
+## Update — process lifecycle, encoding traps, and two audit corrections
+
+### Process lifecycle
+
+The backend services are started **detached**, so they are not in the launcher's process
+tree. `taskkill /T` cannot reach them. Three mechanisms now cover the gap:
+
+1. **A job object** with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`, created before any branch
+   is taken. When the desktop process ends — gracefully, by crash, or by `taskkill /F` —
+   the operating system terminates everything in the job. The handle is deliberately never
+   closed: the limit fires when the last handle goes, and the process exiting closes it.
+2. **`scripts/stop-desktop.bat`**, run on window close. It stops the API and the
+   infrastructure through their own pid files and port-ownership checks, scoped to this
+   project. There is deliberately no `taskkill /IM python.exe`.
+3. **A lifecycle log** at `.runtime/logs/desktop-lifecycle.log`, with a temp-directory
+   fallback so nothing is lost before the project root is known. Every early-return branch
+   writes a line.
+
+### Encoding traps
+
+Both of these cost real debugging time and are now checked rather than remembered:
+
+- **`.bat` files must be pure ASCII.** `cmd.exe` reads a batch file as ANSI. A UTF-8 em
+  dash in a `REM` comment was mangled into bytes that ended the comment, and the following
+  words were executed as commands — the shutdown script exited 255 in 0.3 seconds without
+  stopping anything.
+- **`.ps1` files containing non-ASCII must carry a UTF-8 BOM**, or Windows PowerShell 5.1
+  reads them as ANSI.
+
+All ten `.ps1` scripts carry a BOM; every `.bat` is pure ASCII.
+
+### Two audit corrections
+
+**Refusals were recorded as allowed.** A tool-level refusal — `file_read` is permitted,
+but the path it was handed is on the denied list — wrote `decision=allow`, because the
+coarse tool check passed and the path check happens inside the tool. An audit trail that
+reports "allow" for something it blocked is worse than no trail. A refusal raised inside a
+tool now rewrites the verdict to `deny` and carries the risk and the concrete target.
+
+**The target column was empty** for allowed calls, which is the one question an audit row
+exists to answer. It is now derived from the arguments.
+
+Verified: `.ssh`, `C:\Windows` and the project's own `.env` all record
+`deny / high / DENIED` with the correct target; a workspace write records
+`allow / low / SUCCEEDED`.
+
+### Memory and sensitive content
+
+Sensitive content is never stored, at any confidence. The patterns are matched before the
+model is consulted at all.
+
+One real defect found here: the patterns used `\b` around the Chinese alternatives, and
+Python's word boundaries are defined against ASCII word characters — so `\b密码\b` never
+matched "我的密码是…". **A safety rule that silently does not fire is worse than no rule.**
