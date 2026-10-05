@@ -4,13 +4,6 @@ Importing this package makes every mapper available to Alembic autogenerate and
 to ``Base.metadata.create_all`` in tests.
 """
 
-from app.models.context import (
-    ContextSnapshot,
-    MemoryCandidate,
-    MemoryEntry,
-    UserPreference,
-    UserProfile,
-)
 from app.models.ai import (
     AgentRun,
     AIRun,
@@ -21,6 +14,13 @@ from app.models.ai import (
     ToolCall,
 )
 from app.models.base import Base, TimestampMixin, UUIDPrimaryKeyMixin, utcnow
+from app.models.context import (
+    ContextSnapshot,
+    MemoryCandidate,
+    MemoryEntry,
+    UserPreference,
+    UserProfile,
+)
 from app.models.job import ActivityEvent, Job
 from app.models.knowledge import (
     Concept,
