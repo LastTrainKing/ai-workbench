@@ -236,6 +236,12 @@ export default function AgentWorkbenchPage() {
     return (last?.data as { answer?: string } | undefined)?.answer ?? ''
   }, [run.events])
 
+  // The backend reaches a terminal state a second or two before it emits the
+  // final summary, so "no answer yet" is a normal intermediate state rather than
+  // a failure. Saying "未生成文字总结" during that window reads like the run lost
+  // its result.
+  const awaitingAnswer = !finalAnswer && run.status !== null && !run.error
+
   async function rollback() {
     if (!run.runId) return
     const { agentApi } = await import('@/lib/agentApi')
@@ -517,7 +523,13 @@ export default function AgentWorkbenchPage() {
               </div>
             )}
             <div className="text-[13px] leading-relaxed text-text">
-              <Markdown>{finalAnswer || '运行已结束，未生成文字总结。'}</Markdown>
+              {awaitingAnswer ? (
+                <span className="flex items-center gap-2 text-faint">
+                  <Loader2 className="size-3.5 animate-spin" /> 正在生成执行总结…
+                </span>
+              ) : (
+                <Markdown>{finalAnswer || '本次运行没有产生文字总结，请查看上方事件流。'}</Markdown>
+              )}
             </div>
             <div className="mt-4 flex flex-wrap gap-2">
               <Button size="sm" variant="outline" onClick={() => void run.refreshDiff()}>

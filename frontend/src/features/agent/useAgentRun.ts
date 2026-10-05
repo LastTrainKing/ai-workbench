@@ -89,6 +89,14 @@ export function useAgentRun(): AgentRunController {
       if (batch.finished || isTerminal(state.state)) {
         finished.current = true
         stopPolling()
+        // The controller reaches a terminal state *before* the backend has
+        // finished persisting and emitting the final `result` event, so a poll
+        // that observes "done" can arrive in the gap between the two. A single
+        // delayed fetch is not enough either — persistence takes as long as it
+        // takes — so this retries briefly until the event lands. Without it the
+        // result panel renders empty for every run, which is exactly what the
+        // real browser test caught and typechecking cannot.
+        void collectFinalEvents()
         // The diff is only meaningful once the workspace has stopped changing.
         agentApi.diff(runId).then(setDiff).catch(() => undefined)
       }
@@ -106,6 +114,28 @@ export function useAgentRun(): AgentRunController {
       }
     }
   }, [runId, stopPolling])
+
+  /**
+   * After the run reports a terminal state, keep asking for events for a short
+   * while until the backend's final `result` event arrives.
+   */
+  const collectFinalEvents = useCallback(async () => {
+    if (!runId) return
+    for (let attempt = 0; attempt < 10; attempt++) {
+      await new Promise((resolve) => window.setTimeout(resolve, 700))
+      if (!alive.current) return
+      try {
+        const batch = await agentApi.events(runId, lastSeq.current)
+        if (batch.events.length) {
+          lastSeq.current = batch.last_seq
+          setEvents((prev) => [...prev, ...batch.events].slice(-MAX_EVENTS))
+          if (batch.events.some((e) => e.kind === 'result')) return
+        }
+      } catch {
+        /* the run is over; a failed final fetch must not surface as an error */
+      }
+    }
+  }, [runId])
 
   useEffect(() => {
     if (!runId || finished.current) return

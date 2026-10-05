@@ -73,7 +73,7 @@ def _build_agent(session: AsyncSession, owner_id: uuid.UUID, controller: RunCont
 
 async def _execute_run(
     run_id: str,
-    recorder_run_id: str,
+    db_run_id: uuid.UUID,
     goal: str,
     context: str,
     owner_id: uuid.UUID,
@@ -88,33 +88,23 @@ async def _execute_run(
 
             # Persist the plan, the event stream and the outcome onto the AI run,
             # so the run can be replayed after the process restarts.
-            from app.repositories.ai_repo import AIRunRepository
-
-            repo = AIRunRepository(session)
-            run = await repo.get(uuid.UUID(recorder_run_id))
-            if run is not None:
-                run.status = (
-                    RunStatus.SUCCEEDED
-                    if result.state is RunState.COMPLETED
-                    else RunStatus.FAILED
-                    if result.state is RunState.FAILED
-                    else RunStatus.CANCELLED
+            #
+            # Wrapped separately on purpose: the agent has already done the work
+            # by this point, and a bookkeeping failure must not turn a completed
+            # run into a failed one. That is exactly what happened when this
+            # parsed the display id ("run_ab12...") as a UUID and threw.
+            try:
+                await _persist_run(session, db_run_id, result)
+            except Exception as exc:
+                logger.error(
+                    "autonomous_run_persist_failed",
+                    extra={"run_id": run_id, "error": f"{type(exc).__name__}: {exc}"},
                 )
-                run.response_text = result.answer
-                run.error_message = result.error
-                if run.agent_run is not None:
-                    run.agent_run.steps_used = result.steps_used
-                    run.agent_run.scratchpad = {
-                        "plan": result.plan.as_dict() if result.plan else None,
-                        "state": result.state.value,
-                        "verified": result.verified,
-                        "snapshot_id": result.snapshot_id,
-                        "retries": result.retries,
-                        "files_modified": result.files_modified,
-                        "verification_evidence": result.verification_evidence,
-                    }
             await session.commit()
 
+            # Emitted after persistence so a replay finds the same record, and
+            # outside the persistence try-block so a bookkeeping failure still
+            # reports the agent's actual outcome to the UI.
             controller.emit(
                 "result",
                 message=f"运行结束：{result.state.value}",
@@ -131,6 +121,50 @@ async def _execute_run(
         controller.emit("error", message=f"{type(exc).__name__}: {exc}")
     finally:
         _tasks.pop(run_id, None)
+
+
+async def _persist_run(session: AsyncSession, db_run_id: uuid.UUID, result: Any) -> None:
+    """Write the plan, counters and outcome onto the AI run record.
+
+    Takes the row's UUID. The controller's run id is a display string
+    (``run_ab12...``) and is *not* a UUID — parsing it was a real bug that turned
+    every completed run into a failure.
+    """
+    # `agent_run` is a lazy relationship. Touching it from async code without
+    # eager-loading makes SQLAlchemy attempt blocking IO inside the event loop and
+    # raise MissingGreenlet — which silently skipped the whole write and left
+    # every completed run without a result. Load it up front instead.
+    from sqlalchemy import select
+    from sqlalchemy.orm import selectinload
+
+    from app.models.ai import AIRun
+
+    stmt = select(AIRun).where(AIRun.id == db_run_id).options(selectinload(AIRun.agent_run))
+    run = (await session.execute(stmt)).scalar_one_or_none()
+    if run is None:
+        logger.warning("autonomous_run_row_missing", extra={"run_id": str(db_run_id)})
+        return
+
+    run.status = (
+        RunStatus.SUCCEEDED
+        if result.state is RunState.COMPLETED
+        else RunStatus.FAILED
+        if result.state is RunState.FAILED
+        else RunStatus.CANCELLED
+    )
+    run.response_text = result.answer
+    run.error_message = result.error
+    if run.agent_run is not None:
+        run.agent_run.steps_used = result.steps_used
+        run.agent_run.scratchpad = {
+            "plan": result.plan.as_dict() if result.plan else None,
+            "state": result.state.value,
+            "verified": result.verified,
+            "snapshot_id": result.snapshot_id,
+            "retries": result.retries,
+            "files_modified": result.files_modified,
+            "verification_evidence": result.verification_evidence,
+        }
 
 
 async def start_run(
@@ -165,7 +199,7 @@ async def start_run(
     task = asyncio.create_task(
         _execute_run(
             recorder.run_id,
-            recorder.run_id,
+            recorder.model_row.id,
             goal,
             context,
             owner_id,
