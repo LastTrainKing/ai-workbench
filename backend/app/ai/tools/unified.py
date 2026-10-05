@@ -96,15 +96,45 @@ class UnifiedToolRegistry:
         return sorted(set(names))
 
     def specs(self) -> list[Any]:
-        """Business first, then computer tools.
+        """Business first, then computer tools, deduplicated by name.
 
         Order matters slightly: the business tools are the ones the original
         prompts were written around, so keeping them at the front means an
         existing prompt keeps selecting them the way it did before.
+
+        Deduplication is not defensive padding — it is load-bearing. The provider
+        rejects a tool list containing two entries with the same name, with HTTP
+        400 "Tool names must be unique", and the agent then cannot run at all. That
+        happened: a business tool and a computer tool were both called
+        `document_read`. The failure surfaced as a provider error on every call,
+        which reads like a network problem rather than a naming collision in our
+        own registry, so the collision is logged loudly here as well as prevented.
         """
-        specs = list(self.business.specs())
+        seen: set[str] = set()
+        specs: list[Any] = []
+        duplicates: list[str] = []
+
+        for spec in self.business.specs():
+            if spec.name in seen:
+                duplicates.append(spec.name)
+                continue
+            seen.add(spec.name)
+            specs.append(spec)
+
         if self.computer:
-            specs += self.computer.specs()
+            for spec in self.computer.specs():
+                if spec.name in seen:
+                    # The business tool wins, matching the ordering rationale above.
+                    duplicates.append(spec.name)
+                    continue
+                seen.add(spec.name)
+                specs.append(spec)
+
+        if duplicates:
+            logger.warning(
+                "duplicate_tool_names",
+                extra={"names": sorted(set(duplicates))},
+            )
         return specs
 
     def catalog(self) -> list[dict[str, Any]]:

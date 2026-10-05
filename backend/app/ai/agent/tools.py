@@ -287,8 +287,11 @@ class KnowledgeSearchTool(Tool):
 
 class DocumentReadTool(Tool):
     spec = ToolSpec(
-        name="document_read",
-        description="读取知识库中某篇文档的正文内容（可指定字符范围）。",
+        # Renamed from `document_read`: it reads a knowledge-base document by id,
+        # which is not the same operation as reading a file from the workspace.
+        # The two sharing a name made the API reject every request.
+        name="knowledge_document_read",
+        description="读取知识库中某篇文档的正文内容（按文档 UUID，可指定字符范围）。",
         category="read",
         parameters={
             "type": "object",
