@@ -20,8 +20,10 @@ from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 
 from app.ai.memory import ContextAssembler, MemoryEvaluator, record_preference
+from app.ai.types import ChatMessage
 from app.api.deps import CurrentUser, DbSession
 from app.core.errors import NotFoundError, ValidationError
+from app.core.logging import get_logger
 from app.core.response import ok
 from app.models.context import (
     ContextSnapshot,
@@ -32,6 +34,8 @@ from app.models.context import (
 )
 
 router = APIRouter(prefix="", tags=["personal-context"])
+
+logger = get_logger(__name__)
 
 #: The kinds a memory can have, mirrored from the evaluator so the API can
 #: validate them rather than accepting anything and storing a typo.
@@ -310,7 +314,66 @@ async def update_preferences(
 # --------------------------------------------------------------------------- #
 # Context preview
 # --------------------------------------------------------------------------- #
+class ProfileExtractRequest(BaseModel):
+    description: str = Field(min_length=2, max_length=1000)
+
+
+@router.post("/profile/extract", summary="Parse a self-description into profile fields")
+async def extract_profile(payload: ProfileExtractRequest, user: CurrentUser) -> dict[str, Any]:
+    """Turn one free-form sentence into structured fields — for confirmation, not storage.
+
+    Nothing is written here. The first-run wizard shows the result back and the
+    user decides; the same principle as memory candidates. An onboarding flow that
+    silently commits its interpretation of you is the thing this design exists to
+    avoid.
+    """
+    import json as _json
+
+    from app.ai.providers.factory import build_llm_provider
+
+    llm, _ = build_llm_provider()
+    system = (
+        "从用户的一句话自我介绍里抽取结构化信息。只输出 JSON：\n"
+        "{\n"
+        '  "identity": "身份/职业，例如「计算机专业大三学生」",\n'
+        '  "stage": "所处阶段，例如「准备毕业设计」",\n'
+        '  "domain": "关注的领域",\n'
+        '  "current_goals": ["当前目标，最多 4 条"],\n'
+        '  "bio": "协作偏好或需要特别注意的地方，没有就留空"\n'
+        "}\n"
+        "没有提到的字段留空字符串或空数组，不要编造。"
+    )
+    try:
+        chat = await llm.chat(
+            [
+                ChatMessage(role="system", content=system),
+                ChatMessage(role="user", content=payload.description),
+            ],
+            temperature=0.0,
+            max_tokens=500,
+            json_mode=True,
+        )
+        parsed = _json.loads(chat.content)
+    except Exception as exc:
+        logger.warning("profile_extract_failed", extra={"error": f"{type(exc).__name__}: {exc}"})
+        raise ValidationError("暂时无法解析这段描述，你可以直接进入，之后再手动填写档案") from exc
+
+    goals = parsed.get("current_goals") or []
+    if isinstance(goals, str):
+        goals = [goals]
+    return ok(
+        {
+            "identity": str(parsed.get("identity") or "")[:200],
+            "stage": str(parsed.get("stage") or "")[:120],
+            "domain": str(parsed.get("domain") or "")[:200],
+            "current_goals": [str(g)[:120] for g in goals][:4],
+            "bio": str(parsed.get("bio") or "")[:400],
+        }
+    )
+
+
 @router.get("/context/preview", summary="What the model would be told right now")
+
 async def preview_context(
     user: CurrentUser,
     session: DbSession,

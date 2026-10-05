@@ -19,6 +19,8 @@ const TasksPage = lazy(() => import('@/pages/TasksPage'))
 const NotesPage = lazy(() => import('@/pages/NotesPage'))
 const AgentWorkbenchPage = lazy(() => import('@/pages/AgentWorkbenchPage'))
 const AgentPermissionsPage = lazy(() => import('@/pages/AgentPermissionsPage'))
+const MyAIPage = lazy(() => import('@/pages/MyAIPage'))
+const OnboardingPage = lazy(() => import('@/pages/OnboardingPage'))
 const AIRunsPage = lazy(() => import('@/pages/AIRunsPage'))
 const AIRunDetailPage = lazy(() => import('@/pages/AIRunDetailPage'))
 const GraphPage = lazy(() => import('@/pages/GraphPage'))
@@ -52,6 +54,9 @@ export default function App() {
             <Route path="graph" element={<GraphPage />} />
             <Route path="settings" element={<SettingsPage />} />
             <Route path="settings/agent" element={<AgentPermissionsPage />} />
+            <Route path="me" element={<MyAIPage />} />
+            <Route path="me/:tab" element={<MyAIPage />} />
+            <Route path="welcome" element={<OnboardingPage />} />
             <Route path="*" element={<NotFoundPage />} />
           </Route>
         </Route>

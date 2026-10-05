@@ -1,5 +1,6 @@
 import type { ComponentType } from 'react'
 import {
+  UserCircle,
   ShieldCheck,
   Activity,
   Bot,
@@ -52,6 +53,7 @@ export const NAV_SECTIONS: NavSection[] = [
     items: [
       { to: '/planner', label: '任务规划', icon: CalendarRange },
       { to: '/tasks', label: '任务', icon: ListChecks, prefix: true },
+      { to: '/me', label: '我的 AI', icon: UserCircle },
       { to: '/agent', label: 'Agent', icon: Bot },
     ],
   },
