@@ -191,6 +191,44 @@ $left2Names = ($left2 | Select-Object -ExpandProperty Name | Sort-Object -Unique
 Assert-That 'I-2' '强杀后无残留（作业对象生效）' ($left2.Count -eq 0) "残留进程 = $($left2.Count) [$left2Names]"
 
 Write-Host ''
+Write-Host '=== I-3. 双重启动（程序已在运行时再次双击）===' -ForegroundColor Cyan
+& powershell -ExecutionPolicy Bypass -NoProfile -File 'scripts\stop.bat' *> $null
+Start-Sleep -Seconds 4
+Start-Process -FilePath $link
+[void](Wait-Api)
+Start-Sleep -Seconds 5
+
+$apiBefore = @(Get-ApiProcesses | Where-Object { $_.Name -eq 'python.exe' }).Count
+$appBefore = @(Get-Process -Name 'ai-workbench-desktop' -ErrorAction SilentlyContinue).Count
+Write-Host "  before second launch: app=$appBefore api=$apiBefore"
+
+# Launch again while it is already running. This is the path a user takes every
+# time they reopen the application.
+Start-Process -FilePath $link
+Start-Sleep -Seconds 12
+$apiAfter = @(Get-ApiProcesses | Where-Object { $_.Name -eq 'python.exe' }).Count
+$appAfter = @(Get-Process -Name 'ai-workbench-desktop' -ErrorAction SilentlyContinue).Count
+Write-Host "  after second launch:  app=$appAfter api=$apiAfter"
+
+Assert-That 'I-3a' '第二次启动不产生第二个后端' ($apiAfter -le $apiBefore) "python.exe $apiBefore -> $apiAfter"
+
+# The early-return path must still have created a job object, or force-killing
+# this instance would leave every service running. The lifecycle log is the
+# evidence, not the test's own inference.
+$logText = if (Test-Path $lifecycle) { Get-Content $lifecycle -Raw } else { '' }
+# The job is created *before* the health check, so on the early-return path the
+# two lines appear in that order: "job object ready" then "already healthy".
+# Looking for the reverse was a bug in this assertion, not in the product.
+$earlyReturnWithJob = $logText -match 'job object ready \(before any branch\)[\s\S]{0,600}backend already healthy'
+Assert-That 'I-3b' '早退路径也创建了作业对象' $earlyReturnWithJob "生命周期日志中 'job object ready (before any branch)' 紧邻 'already healthy' 出现"
+
+& taskkill /F /IM ai-workbench-desktop.exe *> $null
+Start-Sleep -Seconds 20
+$left3 = Get-ApiProcesses
+$left3Names = ($left3 | Select-Object -ExpandProperty Name | Sort-Object -Unique) -join ','
+Assert-That 'I-3c' '早退路径强杀后无残留' ($left3.Count -eq 0) "残留进程 = $($left3.Count) [$left3Names]"
+
+Write-Host ''
 Write-Host ('=' * 72)
 $failed = @($results | Where-Object { -not $_.Ok })
 Write-Host ("  {0}/{1} 条断言通过" -f ($results.Count - $failed.Count), $results.Count)

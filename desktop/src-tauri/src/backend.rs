@@ -323,7 +323,32 @@ fn emit(app: &AppHandle, status: StartupStatus) {
 /// Run the startup sequence on a background thread.
 pub fn spawn_startup(app: AppHandle, state: Arc<BackendState>) {
     std::thread::spawn(move || {
+        // Point the log at the project first, so one launch produces one file.
+        // Without this the first few lines land in the temp fallback and the
+        // record is split in two.
+        if let Some(root) = lifecycle::locate_project_root() {
+            lifecycle::set_log_root(&root);
+        }
+
         lifecycle::log("startup: begin");
+
+        // Create the job object before any branch is taken.
+        //
+        // It used to be created inside the spawn path, which meant a launch that
+        // found the backend already running had no safety net at all: force-kill
+        // that instance and PostgreSQL, Redis, Qdrant and the API all survive.
+        // The lifecycle log is what made this visible — the early-return path
+        // logged no `job: created` line.
+        {
+            let mut guard = state.job.lock().unwrap();
+            if guard.is_none() {
+                *guard = lifecycle::JobGuard::create();
+            }
+            match guard.as_ref() {
+                Some(_) => lifecycle::log("startup: job object ready (before any branch)"),
+                None => lifecycle::log("startup: job object unavailable; relying on the graceful path"),
+            }
+        }
 
         // ---------------------------------------------------------- already up --
         if backend_is_healthy() {
@@ -388,13 +413,8 @@ pub fn spawn_startup(app: AppHandle, state: Arc<BackendState>) {
             Ok(process) => {
                 // The safety net: if this process dies for any reason — a crash,
                 // a force-kill, the user ending it from Task Manager — the
-                // operating system terminates everything in the job. Without it,
-                // only the graceful path cleans up, and that path is the one
-                // that is easiest to miss.
-                let mut job_guard = state.job.lock().unwrap();
-                if job_guard.is_none() {
-                    *job_guard = lifecycle::JobGuard::create();
-                }
+                // operating system terminates everything in the job.
+                let job_guard = state.job.lock().unwrap();
                 match job_guard.as_ref() {
                     Some(job) => {
                         if !job.assign(&process) {
