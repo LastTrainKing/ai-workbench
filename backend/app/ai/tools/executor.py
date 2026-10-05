@@ -35,7 +35,7 @@ from app.ai.tools.permissions import (
     PermissionVerdict,
     RiskLevel,
 )
-from app.core.errors import AppError, ValidationError
+from app.core.errors import AppError, PermissionDeniedError, ValidationError
 from app.core.logging import get_logger
 
 logger = get_logger(__name__)
@@ -210,6 +210,55 @@ class ResourceLimits:
 # --------------------------------------------------------------------------- #
 # Executor
 # --------------------------------------------------------------------------- #
+def _denied_verdict(verdict: PermissionVerdict, exc: BaseException) -> PermissionVerdict:
+    """Rewrite the verdict so the audit row reflects the refusal that happened.
+
+    The tool passed the coarse check (its *kind* is permitted) and then refused a
+    specific argument. Carrying the original ALLOW verdict into the audit would
+    record the opposite of what occurred.
+    """
+    details = getattr(exc, "details", None) or {}
+    return PermissionVerdict(
+        decision=Decision.DENY,
+        reason=str(exc) or "Refused by policy",
+        risk=RiskLevel(details.get("risk", verdict.risk.value))
+        if details.get("risk") in {r.value for r in RiskLevel}
+        else verdict.risk,
+        detail=str(details.get("detail", "")),
+        operation=verdict.operation,
+        target=str(details.get("path", verdict.target)),
+        impact="The policy refuses this specific target.",
+    )
+
+
+def _derive_target(tool: str, arguments: dict[str, Any], verdict_target: str) -> str:
+    """Work out what the call actually acted on.
+
+    The permission verdict only carries a target when the *policy* named one. For
+    an allowed call the policy often has nothing specific to say, which would
+    leave the audit row unable to answer the question it exists for: which file,
+    which command, which host?
+
+    So the target is taken from the arguments, preferring the field that names the
+    thing acted on. Path-like keys come first because the file tools are the ones
+    where "which file?" matters most.
+    """
+    if verdict_target:
+        return verdict_target
+
+    for key in ("path", "source", "destination", "file", "url", "command", "root", "target", "pid", "port"):
+        value = arguments.get(key)
+        if value not in (None, ""):
+            return str(value)
+
+    # No obviously-named argument: fall back to a short rendering of whatever was
+    # passed, which is still better than an empty cell.
+    if arguments:
+        rendered = ", ".join(f"{k}={v}" for k, v in list(arguments.items())[:3])
+        return rendered[:500]
+    return ""
+
+
 class ToolExecutor:
     """Runs tools. The agent never calls a tool any other way."""
 
@@ -245,7 +294,7 @@ class ToolExecutor:
                 reason=verdict.reason if verdict else "",
                 risk_level=(verdict.risk.value if verdict else RiskLevel.LOW.value),
                 permission_level=permission_level,
-                target=(verdict.target if verdict else ""),
+                target=_derive_target(tool, arguments, verdict.target if verdict else ""),
                 arguments=arguments,
                 status=outcome.status,
                 exit_code=outcome.exit_code,
@@ -459,13 +508,19 @@ class ToolExecutor:
             raise
         except Exception as exc:
             kind = classify_failure(exc)
+            # A tool can refuse a *concrete argument* even when the tool itself is
+            # permitted: `file_read` is allowed, but the path it was handed may be
+            # on the denied list. That refusal must be recorded as a denial, not
+            # as a failure of an allowed call — an audit trail that reports
+            # "allow" for something it blocked is worse than no trail at all.
+            denied_in_tool = isinstance(exc, PermissionDeniedError)
             outcome = ToolOutcome(
                 ok=False,
-                status="FAILED",
+                status="DENIED" if denied_in_tool else "FAILED",
                 error=f"{type(exc).__name__}: {exc}",
-                failure=kind,
-                verdict=verdict,
-                summary=f"{spec.name} failed",
+                failure=FailureKind.PERMISSION if denied_in_tool else kind,
+                verdict=_denied_verdict(verdict, exc) if denied_in_tool else verdict,
+                summary=f"{spec.name} {'denied' if denied_in_tool else 'failed'}",
             )
         else:
             payload, truncated, size = _cap_payload(

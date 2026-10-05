@@ -133,6 +133,10 @@ def test_no_duplicate_index_names() -> None:
 _SKIP_DIRS = {
     ".git", ".venv", "node_modules", ".runtime", "vendor", "dist",
     "__pycache__", ".pytest_cache", ".ruff_cache", ".mypy_cache", "coverage",
+    # Build output. Not scanned because it is generated, not authored, and the
+    # Rust target directory alone is tens of thousands of files — walking it made
+    # this test time out rather than fail.
+    "target", "build", "out", "gen", ".next", ".turbo", "bin", "obj",
 }
 
 #: Patterns that indicate a real credential rather than a placeholder.

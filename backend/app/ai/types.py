@@ -193,6 +193,10 @@ class ToolResult:
     error: str = ""
     latency_ms: int = 0
     summary: str = ""
+    #: Process exit code for the terminal and project tools. ``None`` for tools
+    #: that do not run a process, which is most of them — so it stays optional
+    #: and the existing tools are unaffected.
+    exit_code: int | None = None
 
     def to_payload(self, limit: int = 4000) -> dict[str, Any]:
         payload: dict[str, Any] = {"ok": self.ok}

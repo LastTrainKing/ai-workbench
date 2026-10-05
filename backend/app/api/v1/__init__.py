@@ -2,6 +2,7 @@
 
 from fastapi import APIRouter
 
+from app.api.v1.agent import router as agent_router
 from app.api.v1.ai import airuns_router
 from app.api.v1.ai import router as ai_router
 from app.api.v1.ai_config import router as ai_config_router
@@ -29,6 +30,7 @@ api_router.include_router(tasks_router)
 api_router.include_router(notes_router)
 api_router.include_router(ai_router)
 api_router.include_router(ai_config_router)
+api_router.include_router(agent_router)
 api_router.include_router(airuns_router)
 api_router.include_router(insights_router)
 

@@ -31,6 +31,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.ai.agent.tools import ToolContext, ToolRegistry, get_tool_registry
 from app.ai.prompts.registry import get_prompt
 from app.ai.providers.factory import build_llm_provider
+from app.ai.tools.audit import make_audit_sink
+from app.ai.tools.confirmation import get_broker
+from app.ai.tools.executor import ResourceLimits, ToolExecutor
+from app.ai.tools.permissions import AgentPolicy, default_workspace
+from app.ai.tools.registry import ComputerToolRegistry, build_computer_registry
+from app.ai.tools.unified import UnifiedToolRegistry
 from app.ai.tracing import RunRecorder
 from app.ai.types import ChatMessage, ToolResult, estimate_tokens
 from app.core.config import settings
@@ -72,30 +78,83 @@ class AgentOutcome:
 
 
 class AgentExecutor:
+    """Runs the plan/execute/observe loop.
+
+    When a permission policy is supplied the agent also gets the computer tool
+    system: files, shell, git, processes and the network, each gated by the policy
+    and recorded in the audit trail. Without one, behaviour is exactly as before —
+    the eleven business tools only — so nothing that already worked changes.
+    """
+
     def __init__(
         self,
         registry: ToolRegistry | None = None,
         max_steps: int = DEFAULT_MAX_STEPS,
+        *,
+        policy: AgentPolicy | None = None,
+        enabled_capabilities: dict[str, bool] | None = None,
     ) -> None:
-        self.registry = registry or get_tool_registry()
+        business = registry or get_tool_registry()
         self.max_steps = max_steps
         self.llm, self.llm_info = build_llm_provider()
+        self.policy = policy
+
+        if policy is not None:
+            self.computer_registry: ComputerToolRegistry | None = build_computer_registry(
+                policy, enabled=enabled_capabilities
+            )
+            self.registry: Any = UnifiedToolRegistry(business, self.computer_registry)
+        else:
+            self.computer_registry = None
+            self.registry = business
 
     # ------------------------------------------------------------------ prompt --
-    def _tool_catalogue(self) -> str:
+    def _tool_catalogue(self, registry: Any) -> str:
+        """Describe the available tools to the model.
+
+        Computer tools are grouped by capability and annotated with their risk, so
+        the model can prefer a narrow tool (``file_read``) over a broad one
+        (``terminal_exec``) and knows which calls will stop to ask the user.
+        """
         lines: list[str] = []
-        for spec in self.registry.specs():
-            params = ", ".join((spec.parameters or {}).get("properties", {}))
-            marker = "[写操作]" if spec.category == "write" else "[只读]"
-            lines.append(f"- {spec.name}{marker}: {spec.description} 参数: {params or '无'}")
+        specs = registry.specs()
+        business = [s for s in specs if s.category in {"knowledge", "task", "project", "note", "ai", "general"}]
+        computer = [s for s in specs if s not in business]
+
+        if business:
+            lines.append("业务工具（读写知识库、任务、项目，不直接访问操作系统）：")
+            for spec in business:
+                params = ", ".join((spec.parameters or {}).get("properties", {}))
+                marker = "[写操作]" if spec.mutates_state else "[只读]"
+                lines.append(f"- {spec.name}{marker}: {spec.description} 参数: {params or '无'}")
+
+        if computer:
+            lines.append("")
+            lines.append(
+                "计算机工具（在授权范围内操作本机；标 [需确认] 的调用会先向用户请求许可）："
+            )
+            by_category: dict[str, list[Any]] = {}
+            for spec in computer:
+                by_category.setdefault(spec.category, []).append(spec)
+            for category, group in sorted(by_category.items()):
+                lines.append(f"  {category}:")
+                for spec in group:
+                    params = ", ".join((spec.parameters or {}).get("properties", {}))
+                    flags = []
+                    if spec.mutates_state:
+                        flags.append("写")
+                    if spec.requires_confirmation or spec.risk_level in {"high", "critical"}:
+                        flags.append("需确认")
+                    suffix = f" [{'/'.join(flags)}]" if flags else ""
+                    lines.append(f"  - {spec.name}{suffix}: {spec.description} 参数: {params or '无'}")
         return "\n".join(lines)
 
     async def _system_prompt(
-        self, session: AsyncSession, goal: str, context: str
+        self, session: AsyncSession, goal: str, context: str, registry: Any
     ) -> tuple[str, str, int]:
         prompt = await get_prompt(session, "agent_system")
         rendered = prompt.render(
-            tools=self._tool_catalogue(),
+            tools=self._tool_catalogue(registry),
             goal=goal,
             context=context or "（无）",
             max_steps=self.max_steps,
@@ -119,8 +178,45 @@ class AgentExecutor:
             raise AIError("Agent goal must not be empty", status_code=422)
 
         steps_allowed = max(1, min(max_steps or self.max_steps, 16))
+
+        # When a policy is in force the agent also gets the computer tools, and
+        # the run starts in the agent workspace. Relative paths resolve there, so
+        # the working directory is never whatever the process happened to have.
+        permission_manager = None
+        workspace = default_workspace()
+        limits: ResourceLimits | None = None
+        registry = self.registry
+
+        if self.policy is not None:
+            from app.ai.tools.permissions import PermissionManager
+
+            permission_manager = PermissionManager(self.policy)
+            workspace = self.policy.workspace
+            workspace.mkdir(parents=True, exist_ok=True)
+
+            # Resource ceilings for this run. The executor checks them before
+            # every call, so a runaway agent hits a wall rather than the user's
+            # patience.
+            limits = ResourceLimits(
+                max_output_bytes=self.policy.max_output_bytes,
+                max_files_modified=self.policy.max_files_modified,
+                max_tool_calls=self.policy.max_tool_calls,
+                max_runtime_seconds=self.policy.max_runtime_seconds,
+            )
+            # A per-run registry rather than mutating self.registry: two runs
+            # must not share an audit sink bound to the other one's session.
+            # Confirmation goes to the broker, which is what puts a high-risk
+            # operation in front of the user instead of guessing.
+            registry = UnifiedToolRegistry(
+                get_tool_registry(),
+                self.computer_registry,
+                ToolExecutor(self.policy, audit=make_audit_sink(session)),
+                confirm=get_broker().request,
+                limits=limits,
+            )
+
         system_prompt, prompt_name, prompt_version = await self._system_prompt(
-            session, goal, context
+            session, goal, context, registry
         )
 
         recorder = await RunRecorder.start(
@@ -134,7 +230,7 @@ class AgentExecutor:
             request_payload={
                 "goal": goal,
                 "max_steps": steps_allowed,
-                "tools": self.registry.names(),
+                "tools": registry.names(),
                 "project_id": str(project_id) if project_id else None,
             },
             project_id=project_id,
@@ -148,6 +244,8 @@ class AgentExecutor:
             project_id=project_id,
             knowledge_base_ids=list(knowledge_base_ids or []),
             run_id=recorder.run_id,
+            permissions=permission_manager,
+            working_directory=str(workspace),
         )
 
         messages: list[ChatMessage] = [
@@ -165,7 +263,7 @@ class AgentExecutor:
                     messages,
                     temperature=0.0,
                     max_tokens=max(1024, min(settings.ai_max_tokens, 3000)),
-                    tools=self.registry.specs(),
+                    tools=registry.specs(),
                 )
                 recorder.record_usage(chat.usage)
 
@@ -200,7 +298,7 @@ class AgentExecutor:
                     )
                     break
 
-                result: ToolResult = await self.registry.execute(
+                result: ToolResult = await registry.execute(
                     ctx, request.name, request.arguments
                 )
                 step = AgentStep(
