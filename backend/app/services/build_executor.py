@@ -332,12 +332,25 @@ async def _collect(
             continue
 
         arguments = call.arguments if isinstance(call.arguments, dict) else {}
-        raw = arguments.get("path")
+        # `arguments` holds what the model passed; `target` holds what the tool
+        # resolved it to. Preferring the argument and ignoring `target` meant the
+        # collector saw nothing, because the audit row's path lives in `target`.
+        raw = arguments.get("path") or getattr(call, "target", "") or ""
         if not raw:
             continue
+
         target = Path(str(raw))
         if not target.is_absolute():
-            continue
+            # Tool arguments are relative to the workspace, which is where they were
+            # resolved from in the first place.
+            try:
+                from app.ai.tools.permissions import default_workspace
+
+                target = default_workspace() / target
+            except Exception:
+                continue
+
+        target = target.resolve(strict=False)
         if str(target) in seen:
             continue
         seen.add(str(target))

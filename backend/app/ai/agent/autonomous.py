@@ -147,6 +147,69 @@ def trim_history(messages: list[ChatMessage], limit: int) -> list[ChatMessage]:
     return window
 
 
+def repair_tool_pairing(messages: list[ChatMessage]) -> list[ChatMessage]:
+    """Return the messages with tool-call pairing made valid.
+
+    The provider requires two invariants and rejects the whole request with HTTP 400
+    when either is broken:
+
+      * every `role="tool"` message follows an assistant message whose `tool_calls`
+        contain its `tool_call_id`;
+      * every assistant `tool_calls` entry has a following result.
+
+    The agent's step loop builds its message list incrementally, and there are
+    several ways to end up invalid: an early `break` after a tool ran but before the
+    assistant message was recorded, a retry that re-enters with a half-built list, a
+    tool that produced no result. Rather than audit every path, the list is repaired
+    before it is sent — cheap, and it makes the invariant a property of the request
+    rather than a property of the caller being careful.
+
+    Orphaned tool results are dropped (their request is gone, so they carry no
+    context), and unanswered requests are dropped too.
+    """
+    repaired: list[ChatMessage] = []
+    pending_ids: set[str] = set()
+
+    for message in messages:
+        role = str(getattr(message, "role", ""))
+        if role == "tool":
+            # Keep it only if the assistant that asked for it is still in the list.
+            if getattr(message, "tool_call_id", None) in pending_ids:
+                pending_ids.discard(message.tool_call_id)
+                repaired.append(message)
+            continue
+
+        if role == "assistant":
+            calls = getattr(message, "tool_calls", None) or []
+            # A previous assistant's unanswered requests are dropped when the next
+            # assistant message arrives: the model moved on without their results.
+            if pending_ids:
+                repaired = [
+                    m
+                    for m in repaired
+                    if not (str(getattr(m, "role", "")) == "assistant" and getattr(m, "tool_calls", None))
+                ]
+                pending_ids.clear()
+            if calls:
+                pending_ids = {
+                    str(call.get("id")) for call in calls if isinstance(call, dict) and call.get("id")
+                }
+            repaired.append(message)
+            continue
+
+        repaired.append(message)
+
+    # A trailing assistant request with no results is invalid on its own.
+    while repaired:
+        last = repaired[-1]
+        if str(getattr(last, "role", "")) == "assistant" and getattr(last, "tool_calls", None):
+            repaired.pop()
+            continue
+        break
+
+    return repaired
+
+
 class AutonomousAgent:
     """Drives one goal from plan to verified completion."""
 
@@ -300,9 +363,11 @@ class AutonomousAgent:
         for _ in range(MAX_TOOLS_PER_STEP):
             await self.controller.checkpoint()
 
+            # Repaired before it is sent: the invariant is enforced here rather
+            # than assumed of every path that built the list.
             chat = await asyncio.wait_for(
                 self.llm.chat(
-                    messages,
+                    repair_tool_pairing(messages),
                     temperature=0.0,
                     max_tokens=min(settings.ai_max_tokens, 2500),
                     tools=self.registry.specs(),
@@ -414,7 +479,7 @@ class AutonomousAgent:
         try:
             chat = await asyncio.wait_for(
                 self.llm.chat(
-                    messages,
+                    repair_tool_pairing(messages),
                     temperature=0.0,
                     max_tokens=1200,
                     tools=self.registry.specs(),
@@ -644,7 +709,12 @@ class AutonomousAgent:
         ]
         try:
             chat = await asyncio.wait_for(
-                self.llm.chat(messages, temperature=0.0, max_tokens=1200, tools=self.registry.specs()),
+                self.llm.chat(
+                    repair_tool_pairing(messages),
+                    temperature=0.0,
+                    max_tokens=1200,
+                    tools=self.registry.specs(),
+                ),
                 timeout=120,
             )
         except (TimeoutError, Exception) as exc:
