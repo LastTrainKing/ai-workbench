@@ -139,7 +139,7 @@ describe('error envelope → ApiError', () => {
     const error = (await request('/x').catch((e) => e)) as ApiError
     expect(error.code).toBe('network_error')
     expect(error.status).toBe(0)
-    expect(error.message).toContain('后端服务')
+    expect(error.message).toContain('后台服务')
   })
 })
 
