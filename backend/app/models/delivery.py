@@ -126,10 +126,12 @@ class BuildRun(Base, UUIDPrimaryKeyMixin, TimestampMixin):
         ForeignKey("context_snapshots.id", ondelete="SET NULL"), nullable=True
     )
 
-    #: The underlying autonomous run, when there is one. The agent runtime is reused,
-    #: not reimplemented, so this is the bridge to it.
-    agent_run_id: Mapped[uuid.UUID | None] = mapped_column(
-        ForeignKey("agent_runs.id", ondelete="SET NULL"), nullable=True
+    #: The AI run this build drove. The agent runtime is reused, not reimplemented,
+    #: so this is the bridge to it — and it is the `ai_runs` row, not the
+    #: `agent_runs` row, because that is the id the recorder hands back and the one
+    #: tool calls hang off.
+    ai_run_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("ai_runs.id", ondelete="SET NULL"), nullable=True
     )
 
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -198,7 +200,7 @@ class BuildRun(Base, UUIDPrimaryKeyMixin, TimestampMixin):
             payload["context_snapshot_id"] = (
                 str(self.context_snapshot_id) if self.context_snapshot_id else None
             )
-            payload["agent_run_id"] = str(self.agent_run_id) if self.agent_run_id else None
+            payload["ai_run_id"] = str(self.ai_run_id) if self.ai_run_id else None
         return payload
 
 

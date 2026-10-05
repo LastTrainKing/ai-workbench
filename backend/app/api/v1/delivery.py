@@ -19,7 +19,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from app.api.deps import CurrentUser, DbSession
-from app.core.errors import NotFoundError
+from app.core.errors import NotFoundError, ValidationError
 from app.core.response import ok
 from app.models.delivery import BuildStatus
 from app.services.delivery_service import DeliveryService
@@ -134,9 +134,79 @@ async def build_run_context(
     return ok(payload)
 
 
+@router.post("/build-runs/{build_run_id}/execute", summary="Start working on it")
+async def execute_build_run_endpoint(
+    build_run_id: uuid.UUID, user: CurrentUser, session: DbSession
+) -> dict[str, Any]:
+    """Hand the goal to the agent.
+
+    Returns immediately with the ids; the work runs in the background. An agent run
+    takes minutes, and holding the request open for it would time out while freezing
+    every other request on the same worker.
+    """
+    from app.services.build_executor import execute_build_run
+
+    service = DeliveryService(session)
+    run = await service.get_build_run(owner_id=user.id, build_run_id=build_run_id)
+    if run.status not in (BuildStatus.DRAFT.value, BuildStatus.READY.value):
+        raise ValidationError(f"当前状态（{run.status}）下不能开始执行")
+
+    # Assemble and record what this run will be told about the user, then hand the
+    # same block to the agent — so "what did it know" and "what was it given" are
+    # the same string rather than two things that ought to match.
+    context = await service.attach_context(run)
+    result = await execute_build_run(session, build_run_id=build_run_id, context=context)
+    return ok(result, message="已开始执行")
+
+
+@router.post("/build-runs/{build_run_id}/pause", summary="Pause")
+async def pause_build_run(
+    build_run_id: uuid.UUID, user: CurrentUser, session: DbSession
+) -> dict[str, Any]:
+    from app.services.autonomous_service import control
+
+    service = DeliveryService(session)
+    run = await service.get_build_run(owner_id=user.id, build_run_id=build_run_id)
+    if run.ai_run_id is None:
+        raise ValidationError("这次任务还没有开始执行")
+    result = control(str(run.ai_run_id), "pause")
+    return ok(result)
+
+
+@router.post("/build-runs/{build_run_id}/resume", summary="Resume")
+async def resume_build_run(
+    build_run_id: uuid.UUID, user: CurrentUser, session: DbSession
+) -> dict[str, Any]:
+    from app.services.autonomous_service import control
+
+    service = DeliveryService(session)
+    run = await service.get_build_run(owner_id=user.id, build_run_id=build_run_id)
+    if run.ai_run_id is None:
+        raise ValidationError("这次任务还没有开始执行")
+    result = control(str(run.ai_run_id), "resume")
+    return ok(result)
+
+
+@router.post("/build-runs/{build_run_id}/cancel", summary="Cancel")
+async def cancel_build_run(
+    build_run_id: uuid.UUID, user: CurrentUser, session: DbSession
+) -> dict[str, Any]:
+    from app.services.autonomous_service import control
+
+    service = DeliveryService(session)
+    run = await service.get_build_run(owner_id=user.id, build_run_id=build_run_id)
+    if run.ai_run_id is None:
+        raise ValidationError("这次任务还没有开始执行")
+    result = control(str(run.ai_run_id), "cancel")
+    if result.get("ok"):
+        await service.set_status(run, BuildStatus.CANCELLED)
+    return ok(result)
+
+
 # --------------------------------------------------------------------------- #
 # Deliverables
 # --------------------------------------------------------------------------- #
+
 @router.get("/deliverables", summary="List deliverables")
 async def list_deliverables(
     user: CurrentUser,

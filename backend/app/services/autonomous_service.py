@@ -240,7 +240,12 @@ async def start_run(
     _tasks[recorder.run_id] = task
 
     return {
+        # The short id used by the controller registry and the event stream.
         "run_id": recorder.run_id,
+        # The database primary key. Different value, different purpose: the first
+        # addresses a live controller, the second addresses a row. Returning both
+        # keeps callers from guessing which one they were handed.
+        "db_run_id": str(recorder.model_row.id),
         "state": controller.state.value,
         "goal": goal,
         "policy": {"mode": policy.mode.value, "level": int(policy.level)},

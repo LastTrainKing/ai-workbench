@@ -66,7 +66,7 @@ export interface BuildRun {
   deliverable_count: number
   plan?: Record<string, unknown>
   context_snapshot_id?: string | null
-  agent_run_id?: string | null
+  ai_run_id?: string | null
   deliverables?: Deliverable[]
 }
 

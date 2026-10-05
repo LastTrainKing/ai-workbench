@@ -379,9 +379,9 @@ export default function WorkbenchPage() {
               <p className="text-[12.5px] text-faint">暂无执行记录。</p>
             )}
 
-            {data.agent_run_id && (
+            {data.ai_run_id && (
               <Link
-                to={`/ai-runs/${data.agent_run_id}`}
+                to={`/ai-runs/${data.ai_run_id}`}
                 className="mt-3 inline-flex items-center gap-1.5 text-[12px] text-muted underline-offset-2 hover:text-text hover:underline"
               >
                 <ExternalLink className="size-3" /> 查看完整执行轨迹
