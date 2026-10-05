@@ -68,7 +68,7 @@ export const NAV_SECTIONS: NavSection[] = [
   {
     title: '工作',
     items: [
-      { to: '/agent', label: 'Agent', icon: Bot, hint: '把目标交给它' },
+      { to: '/workbench', label: '工作台', icon: Bot, prefix: true, hint: '它正在做什么' },
       { to: '/projects', label: '项目', icon: FolderKanban, prefix: true },
       { to: '/tasks', label: '任务', icon: ListChecks, prefix: true },
       { to: '/planner', label: '计划', icon: CalendarRange },
@@ -85,6 +85,7 @@ export const NAV_SECTIONS: NavSection[] = [
     collapsible: true,
     items: [
       { to: '/ai-runs', label: '执行记录', icon: Activity, prefix: true },
+      { to: '/agent', label: 'Agent 控制台', icon: Bot, prefix: true },
       { to: '/settings/agent', label: '权限', icon: ShieldCheck },
       { to: '/graph', label: '知识图谱', icon: Network },
       { to: '/settings', label: '设置', icon: SlidersHorizontal },

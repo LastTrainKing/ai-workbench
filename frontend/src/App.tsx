@@ -19,6 +19,8 @@ const TasksPage = lazy(() => import('@/pages/TasksPage'))
 const NotesPage = lazy(() => import('@/pages/NotesPage'))
 const AgentWorkbenchPage = lazy(() => import('@/pages/AgentWorkbenchPage'))
 const AgentPermissionsPage = lazy(() => import('@/pages/AgentPermissionsPage'))
+const HomePage = lazy(() => import('@/pages/HomePage'))
+const WorkbenchPage = lazy(() => import('@/pages/WorkbenchPage'))
 const MyAIPage = lazy(() => import('@/pages/MyAIPage'))
 const OnboardingPage = lazy(() => import('@/pages/OnboardingPage'))
 const AIRunsPage = lazy(() => import('@/pages/AIRunsPage'))
@@ -37,7 +39,10 @@ export default function App() {
 
         <Route element={<ProtectedRoute />}>
           <Route element={<AppShell />}>
-            <Route index element={<DashboardPage />} />
+            <Route index element={<HomePage />} />
+            <Route path="dashboard" element={<DashboardPage />} />
+            <Route path="workbench" element={<WorkbenchPage />} />
+            <Route path="workbench/:runId" element={<WorkbenchPage />} />
             <Route path="projects" element={<ProjectsPage />} />
             <Route path="projects/:projectId" element={<ProjectDetailPage />} />
             <Route path="knowledge" element={<KnowledgePage />} />

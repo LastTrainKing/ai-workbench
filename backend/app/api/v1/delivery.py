@@ -102,9 +102,11 @@ async def get_build_run(
     service = DeliveryService(session)
     run = await service.get_build_run(owner_id=user.id, build_run_id=build_run_id)
     payload = run.as_dict(include_plan=True)
-    payload["deliverables"] = [
-        item.as_dict(include_verification=False) for item in run.deliverables
-    ]
+    # Verification is included here on purpose. The workbench's whole claim is that
+    # the user can see *why* a file is considered good, and an endpoint that omits
+    # the evidence makes that claim unkeepable - the UI had a "验证证据" heading with
+    # nothing under it.
+    payload["deliverables"] = [item.as_dict() for item in run.deliverables]
     return ok(payload)
 
 
