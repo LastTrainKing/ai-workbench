@@ -1,5 +1,7 @@
 import { NavLink } from 'react-router-dom'
-import { LogOut, Moon, PanelLeftClose, PanelLeftOpen, Sparkles, Sun, X } from 'lucide-react'
+import { ChevronRight, LogOut, Moon, PanelLeftClose, PanelLeftOpen, Sparkles, Sun, X } from 'lucide-react'
+import { useState } from 'react'
+
 import { cn } from '@/lib/utils'
 import { useAuthStore } from '@/store/auth'
 import { useUiStore } from '@/store/ui'
@@ -40,6 +42,15 @@ function SidebarBody({ collapsed, onNavigate }: { collapsed: boolean; onNavigate
   const toggleSidebar = useUiStore((state) => state.toggleSidebar)
   const toast = useToastStore((state) => state.success)
 
+  // Collapsible sections start closed: the point is that the first three
+  // sections stay scannable without the machinery competing for attention.
+  const [openSections, setOpenSections] = useState<Record<string, boolean>>({})
+  const toggleSection = (title: string) =>
+    setOpenSections((prev) => ({ ...prev, [title]: !prev[title] }))
+  /** A section is closed unless the user has opened it. */
+  const isClosed = (section: { title: string; collapsible?: boolean }) =>
+    Boolean(section.collapsible) && !openSections[section.title]
+
   return (
     <div className="flex h-full flex-col bg-surface">
       {/* brand */}
@@ -54,22 +65,44 @@ function SidebarBody({ collapsed, onNavigate }: { collapsed: boolean; onNavigate
 
       {/* nav */}
       <nav className="aiw-scroll flex-1 space-y-4 px-2 py-3">
-        {NAV_SECTIONS.map((section) => (
+        {NAV_SECTIONS.map((section) => {
+          const closed = isClosed(section)
+          return (
           <div key={section.title}>
             {!collapsed ? (
-              <p className="mb-1 px-2 text-2xs font-semibold uppercase tracking-wider text-faint">
-                {section.title}
-              </p>
+              section.collapsible ? (
+                <button
+                  type="button"
+                  onClick={() => toggleSection(section.title)}
+                  aria-expanded={!closed}
+                  className="mb-1 flex w-full items-center gap-1 px-2 text-2xs font-semibold uppercase tracking-wider text-faint transition-colors hover:text-muted"
+                >
+                  <ChevronRight
+                    className={cn('size-3 transition-transform', !closed && 'rotate-90')}
+                  />
+                  {section.title}
+                </button>
+              ) : (
+                <p className="mb-1 px-2 text-2xs font-semibold uppercase tracking-wider text-faint">
+                  {section.title}
+                </p>
+              )
             ) : (
               <div className="mx-2 mb-1.5 h-px bg-subtle" />
             )}
-            <div className="space-y-0.5">
-              {section.items.map((item) => (
-                <NavEntry key={item.to} item={item} collapsed={collapsed} onNavigate={onNavigate} />
-              ))}
-            </div>
+            {/* A collapsed section still renders its entries in the DOM when the
+                sidebar itself is icon-only, because the icons are the only
+                navigation available at that width. */}
+            {(collapsed || !closed) && (
+              <div className="space-y-0.5">
+                {section.items.map((item) => (
+                  <NavEntry key={item.to} item={item} collapsed={collapsed} onNavigate={onNavigate} />
+                ))}
+              </div>
+            )}
           </div>
-        ))}
+          )
+        })}
       </nav>
 
       {/* footer */}

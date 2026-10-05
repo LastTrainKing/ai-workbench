@@ -18,10 +18,15 @@
 mod backend;
 mod commands;
 mod lifecycle;
+mod menu;
 
 use std::sync::Arc;
 
-use tauri::{Manager, RunEvent};
+use tauri::{Emitter, Manager, RunEvent};
+use std::os::windows::process::CommandExt;
+
+/// Windows: never show a console window for a spawned helper process.
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 fn main() {
     let state = Arc::new(backend::BackendState::new());
@@ -34,8 +39,61 @@ fn main() {
             commands::open_log_folder,
             commands::window_ready,
         ])
+        .on_menu_event(|app, event| {
+            // One place, keyed by id. A menu whose items silently do nothing is
+            // worse than no menu, so every id below has a branch.
+            let id = event.id().as_ref();
+            lifecycle::log(&format!("menu: {id}"));
+            match id {
+                menu::ID_RESTART => {
+                    if let Some(state) = app.try_state::<Arc<backend::BackendState>>() {
+                        let _ = commands::restart_backend(app.clone(), state);
+                    }
+                }
+                menu::ID_LOGS => {
+                    if let Some(state) = app.try_state::<Arc<backend::BackendState>>() {
+                        let _ = commands::open_log_folder(state);
+                    }
+                }
+                menu::ID_FOCUS_SEARCH => {
+                    // The command palette lives in the frontend; the menu asks it
+                    // to open rather than reimplementing it here.
+                    let _ = app.emit("menu://focus-search", ());
+                }
+                menu::ID_ABOUT => {
+                    let _ = app.emit("menu://about", ());
+                }
+                menu::ID_API_DOCS => {
+                    // Opened in the user's browser on purpose: API documentation
+                    // is a web page, and forcing it into the application window
+                    // would replace the app with a reference document.
+                    let _ = std::process::Command::new("cmd")
+                        .args(["/C", "start", "", "http://127.0.0.1:8000/docs"])
+                        .creation_flags(CREATE_NO_WINDOW)
+                        .spawn();
+                }
+                menu::ID_FULLSCREEN => {
+                    if let Some(window) = app.get_webview_window("main") {
+                        let current = window.is_fullscreen().unwrap_or(false);
+                        let _ = window.set_fullscreen(!current);
+                    }
+                }
+                _ => {}
+            }
+        })
         .setup(move |app| {
             let handle = app.handle().clone();
+
+            // The menu is installed before the window is shown, so it is there
+            // from the first frame rather than appearing a moment later.
+            match menu::build(app.handle()) {
+                Ok(menu) => {
+                    if let Err(exc) = app.set_menu(menu) {
+                        lifecycle::log(&format!("menu: could not be installed: {exc}"));
+                    }
+                }
+                Err(exc) => lifecycle::log(&format!("menu: could not be built: {exc}")),
+            }
 
             // Startup runs on its own thread so the splash window paints
             // immediately. Every step reports progress through events.
