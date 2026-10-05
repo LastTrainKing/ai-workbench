@@ -17,7 +17,8 @@ const ChatPage = lazy(() => import('@/pages/ChatPage'))
 const PlannerPage = lazy(() => import('@/pages/PlannerPage'))
 const TasksPage = lazy(() => import('@/pages/TasksPage'))
 const NotesPage = lazy(() => import('@/pages/NotesPage'))
-const AgentPage = lazy(() => import('@/pages/AgentPage'))
+const AgentWorkbenchPage = lazy(() => import('@/pages/AgentWorkbenchPage'))
+const AgentPermissionsPage = lazy(() => import('@/pages/AgentPermissionsPage'))
 const AIRunsPage = lazy(() => import('@/pages/AIRunsPage'))
 const AIRunDetailPage = lazy(() => import('@/pages/AIRunDetailPage'))
 const GraphPage = lazy(() => import('@/pages/GraphPage'))
@@ -45,11 +46,12 @@ export default function App() {
             <Route path="planner" element={<PlannerPage />} />
             <Route path="tasks" element={<TasksPage />} />
             <Route path="notes" element={<NotesPage />} />
-            <Route path="agent" element={<AgentPage />} />
+            <Route path="agent" element={<AgentWorkbenchPage />} />
             <Route path="ai-runs" element={<AIRunsPage />} />
             <Route path="ai-runs/:runId" element={<AIRunDetailPage />} />
             <Route path="graph" element={<GraphPage />} />
             <Route path="settings" element={<SettingsPage />} />
+            <Route path="settings/agent" element={<AgentPermissionsPage />} />
             <Route path="*" element={<NotFoundPage />} />
           </Route>
         </Route>
