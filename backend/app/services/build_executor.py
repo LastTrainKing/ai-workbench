@@ -31,6 +31,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.ai.agent.plan import RunState
 from app.core.logging import get_logger
 from app.models.ai import ToolCall
 from app.models.delivery import BuildRun, BuildStatus
@@ -40,6 +41,21 @@ logger = get_logger(__name__)
 
 #: Tools whose successful invocation means a file now exists at a known path.
 ARTIFACT_TOOLS = {"document_write", "file_write"}
+
+#: States in which there is nothing left to watch.
+#:
+#: Taken from the enum rather than written out, because writing them out is how the
+#: previous version ended up comparing lowercase strings against uppercase values
+#: and never terminating. `RunState` is the source of truth; this derives from it.
+TERMINAL_STATES: frozenset[str] = frozenset(
+    {
+        RunState.COMPLETED.value,
+        RunState.FAILED.value,
+        RunState.CANCELLED.value,
+        RunState.LIMIT_REACHED.value,
+        RunState.WAITING_CONFIRMATION.value,
+    }
+)
 
 #: How long to wait between polls of the agent run.
 POLL_SECONDS = 3.0
@@ -161,7 +177,7 @@ async def _watch(
             # reconstructed from events.
             await _sync_progress(build_run_id, controller)
 
-            if state in ("completed", "failed", "cancelled", "limit_reached"):
+            if state.upper() in TERMINAL_STATES:
                 break
 
         async with session_scope() as session:
@@ -179,12 +195,13 @@ async def _watch(
             collected = await _collect(session, service, run=run, ai_run_id=db_run_id)
 
             mapping = {
-                "completed": BuildStatus.COMPLETED,
-                "failed": BuildStatus.FAILED,
-                "cancelled": BuildStatus.CANCELLED,
-                "limit_reached": BuildStatus.LIMIT_REACHED,
+                "COMPLETED": BuildStatus.COMPLETED,
+                "FAILED": BuildStatus.FAILED,
+                "CANCELLED": BuildStatus.CANCELLED,
+                "LIMIT_REACHED": BuildStatus.LIMIT_REACHED,
+                "WAITING_CONFIRMATION": BuildStatus.WAITING_USER,
             }
-            final = mapping.get(state, BuildStatus.FAILED)
+            final = mapping.get(state.upper(), BuildStatus.FAILED)
 
             if final is BuildStatus.COMPLETED and collected == 0:
                 # Finishing without producing a file is not a completed delivery for a
