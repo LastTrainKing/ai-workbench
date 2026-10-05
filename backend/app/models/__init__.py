@@ -21,6 +21,7 @@ from app.models.context import (
     UserPreference,
     UserProfile,
 )
+from app.models.delivery import BuildRun, BuildStatus, Deliverable
 from app.models.job import ActivityEvent, Job
 from app.models.knowledge import (
     Concept,
@@ -61,7 +62,10 @@ __all__ = [  # noqa: RUF022 - grouped by domain layer, which is more readable he
     "PromptVersion",
     "AIRun",
     "AgentRun",
+    "BuildRun",
+    "BuildStatus",
     "ContextSnapshot",
+    "Deliverable",
     "MemoryCandidate",
     "MemoryEntry",
     "UserPreference",
