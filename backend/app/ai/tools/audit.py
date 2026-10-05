@@ -26,6 +26,55 @@ from app.models.ai import ToolAuditLog
 logger = get_logger(__name__)
 
 
+#: Short run id -> database UUID, for the lifetime of the process.
+#:
+#: The agent works with the recorder's short run id (`run_...`), which addresses a
+#: live controller; the audit row needs the `ai_runs` primary key. Converting the
+#: short id with `uuid.UUID()` fails, and the failure is silent: the column is
+#: nullable, so every audit row was written with `ai_run_id = NULL`.
+#:
+#: That mattered downstream — the BuildRun collector looked up audit rows by run id,
+#: found none, and reported "no output detected" for a run that had plainly produced
+#: a file. Cached because the mapping never changes and a lookup per tool call would
+#: be a query per tool call.
+_RUN_ID_CACHE: dict[str, uuid.UUID] = {}
+
+
+async def resolve_run_uuid(session: AsyncSession, run_id: str | None) -> uuid.UUID | None:
+    """Turn whatever run id we were handed into the `ai_runs` primary key.
+
+    Accepts a UUID string as-is, and looks up a short run id. Returns None rather
+    than raising: an audit row without a run id is still worth keeping.
+    """
+    if not run_id:
+        return None
+
+    text = str(run_id)
+    try:
+        return uuid.UUID(text)
+    except (ValueError, AttributeError, TypeError):
+        pass
+
+    cached = _RUN_ID_CACHE.get(text)
+    if cached is not None:
+        return cached
+
+    try:
+        from sqlalchemy import select
+
+        from app.models.ai import AIRun
+
+        row = (
+            await session.execute(select(AIRun.id).where(AIRun.run_id == text))
+        ).scalar_one_or_none()
+        if row is not None:
+            _RUN_ID_CACHE[text] = row
+        return row
+    except Exception as exc:
+        logger.warning("audit_run_id_lookup_failed", extra={"run_id": text, "error": str(exc)})
+        return None
+
+
 def make_audit_sink(session: AsyncSession):
     """Build the sink the executor calls after each tool invocation.
 
@@ -53,12 +102,9 @@ def make_audit_sink(session: AsyncSession):
         latency_ms: int,
         confirmed_by_user: bool | None,
     ) -> None:
-        run_uuid: uuid.UUID | None = None
-        if run_id:
-            try:
-                run_uuid = uuid.UUID(str(run_id))
-            except (ValueError, AttributeError, TypeError):
-                run_uuid = None
+        # Resolved, not parsed. The agent hands us a short run id, and parsing it
+        # as a UUID silently produced NULL on every row.
+        run_uuid = await resolve_run_uuid(session, run_id)
 
         row = ToolAuditLog(
             ai_run_id=run_uuid,
