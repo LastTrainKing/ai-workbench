@@ -126,6 +126,27 @@ def _decode(raw: bytes) -> str:
     return raw.decode("utf-8", errors="replace")
 
 
+def _venv_bin_dir(cwd: Path) -> Path | None:
+    """The ``Scripts`` (or ``bin``) directory of the project containing *cwd*.
+
+    Putting it first on PATH is what "activating" a virtual environment does, and
+    it is the only way to make a command the agent types — ``python -m pytest``,
+    ``pip install -r ...``, ``npm test`` — resolve to the project's own toolchain
+    instead of whatever happens to be first on the machine's PATH.
+
+    Without this, `terminal_exec` in a project with a virtual environment ran a
+    bare system Python with none of the dependencies, and the agent spent a
+    hundred tool calls trying to fix code that was never broken. Demo 2 found it.
+    """
+    for root in [cwd, *list(cwd.parents)[:4]]:
+        for name in (".venv", "venv"):
+            for sub in ("Scripts", "bin"):
+                candidate = root / name / sub
+                if candidate.is_dir():
+                    return candidate
+    return None
+
+
 async def _run_process(
     *,
     exe: str,
@@ -143,6 +164,13 @@ async def _run_process(
     env = os.environ.copy()
     env["PYTHONIOENCODING"] = "utf-8"
     env["PYTHONUNBUFFERED"] = "1"
+
+    # Make the project's own toolchain win, the way activating a venv would.
+    bin_dir = _venv_bin_dir(cwd)
+    if bin_dir is not None:
+        env["PATH"] = f"{bin_dir}{os.pathsep}{env.get('PATH', '')}"
+        env["VIRTUAL_ENV"] = str(bin_dir.parent)
+
     if env_extra:
         env.update(env_extra)
 

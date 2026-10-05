@@ -46,6 +46,28 @@ EVIDENCE_TOOLS = {
 #: How many tool calls a single step may use before it is considered stuck.
 MAX_TOOLS_PER_STEP = 12
 
+#: Phrases that mark a step as *diagnostic* rather than *assertive*.
+#:
+#: "Run the tests and record which ones fail" is a step whose whole purpose is to
+#: see a non-zero exit code. Treating that as a failure made the agent retry the
+#: diagnosis three times and never reach the fix — which is exactly what Demo 2
+#: did, repeatedly, against a bug it had already identified correctly.
+#:
+#: A step is diagnostic when its description or its verification says so. For
+#: those, producing real output is the success criterion; the exit code still
+#: decides every step that asserts a result.
+_DIAGNOSTIC_MARKERS = (
+    "记录", "读取", "观察", "定位", "分析", "查看", "列出", "确认失败", "复现",
+    "record", "read", "observe", "locate", "analyse", "analyze", "inspect",
+    "list", "reproduce", "capture", "identify",
+)
+
+
+def is_diagnostic_step(step: PlanStep) -> bool:
+    """True when the step is meant to gather information, not to assert success."""
+    text = f"{step.description} {step.verification}".lower()
+    return any(marker in text for marker in _DIAGNOSTIC_MARKERS)
+
 
 @dataclass
 class RunResult:
@@ -190,6 +212,8 @@ class AutonomousAgent:
             f"6. 可用工具：{', '.join(self.registry.names())}"
         )
 
+        diagnostic = is_diagnostic_step(step)
+
         messages: list[ChatMessage] = [ChatMessage(role="system", content=system)]
         messages.extend(self._tool_messages[-6:])  # keep recent context, bounded
         messages.append(ChatMessage(role="user", content=f"请执行第 {step.id} 步：{step.description}"))
@@ -242,9 +266,14 @@ class AutonomousAgent:
                 data=observation,
             )
 
-            if request.name in EVIDENCE_TOOLS and getattr(result, "exit_code", None) not in (None, 0):
-                # A failing command ends the step early: continuing would pile more
-                # changes on top of a broken state.
+            if (
+                request.name in EVIDENCE_TOOLS
+                and getattr(result, "exit_code", None) not in (None, 0)
+                and not diagnostic
+            ):
+                # For an assertive step, a failing command ends it early: continuing
+                # would pile more changes on top of a broken state. A diagnostic
+                # step is the opposite case — the failure *is* the finding.
                 summary = f"{request.name} 退出码 {result.exit_code}"
                 break
 
@@ -333,7 +362,18 @@ class AutonomousAgent:
         self.controller.tool_calls += 1
 
         exit_code = getattr(result, "exit_code", None)
-        if exit_code is not None:
+        diagnostic = is_diagnostic_step(step)
+        produced_evidence = bool(
+            (result.data or {}).get("stdout") or (result.data or {}).get("stderr")
+            if isinstance(result.data, dict)
+            else result.data
+        )
+
+        if diagnostic:
+            # The step set out to observe something. It succeeded if it observed
+            # it, whatever the exit code says about the state of the project.
+            passed = produced_evidence or result.ok
+        elif exit_code is not None:
             passed = result.ok and exit_code == 0
         else:
             passed = result.ok
@@ -346,6 +386,7 @@ class AutonomousAgent:
             "summary": result.summary,
             "error": result.error,
             "passed": passed,
+            "diagnostic": diagnostic,
         }
         self.controller.emit(
             "verification",

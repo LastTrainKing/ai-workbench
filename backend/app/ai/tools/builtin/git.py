@@ -419,6 +419,47 @@ class GitRestoreTool(_GitTool):
 # --------------------------------------------------------------------------- #
 # project commands
 # --------------------------------------------------------------------------- #
+#: Directories never searched when deciding what kind of project this is.
+_PROJECT_SCAN_SKIP = {
+    ".git", ".venv", "venv", "node_modules", "__pycache__", ".pytest_cache",
+    ".ruff_cache", ".mypy_cache", "target", "dist", "build", ".next", ".runtime",
+}
+
+
+def _sample_files(root: Path, suffixes: tuple[str, ...], limit: int = 400) -> list[Path]:
+    """A bounded sample of files under *root* with one of *suffixes*.
+
+    Bounded because this runs before every project command: walking a large tree
+    to answer "is this a Python project?" would make every test run slower than
+    the tests.
+    """
+    found: list[Path] = []
+    for path in root.rglob("*"):
+        if len(found) >= limit:
+            break
+        if not path.is_file():
+            continue
+        if any(part in _PROJECT_SCAN_SKIP for part in path.relative_to(root).parts):
+            continue
+        if path.suffix.lower() in suffixes:
+            found.append(path)
+    return found
+
+
+def _looks_like_python(root: Path) -> bool:
+    """True when this directory holds Python source, at any depth."""
+    return bool(_sample_files(root, (".py",), limit=1))
+
+
+def _has_python_tests(root: Path) -> bool:
+    """True when this directory holds something pytest would collect."""
+    for path in _sample_files(root, (".py",), limit=400):
+        name = path.name
+        if name.startswith("test_") or name.endswith("_test.py") or name == "conftest.py":
+            return True
+    return (root / "tests").is_dir()
+
+
 def detect_project(root: Path) -> dict[str, Any]:
     """Work out how to build and test whatever is in this directory."""
     kind = "unknown"
@@ -464,14 +505,17 @@ def detect_project(root: Path) -> dict[str, Any]:
             pyproject.read_text(encoding="utf-8", errors="ignore") if pyproject.is_file() else ""
         )):
             commands["lint"] = "python -m ruff check ."
-    elif any(root.glob("*.py")):
+    elif _looks_like_python(root):
         # A directory of Python files with no manifest is still a Python project.
-        # Requiring a manifest meant an agent that had just written `foo.py` and
-        # `test_foo.py` into a fresh workspace could not run them — it reported
-        # "no test command detected" for a project it had created itself.
+        # Two things had to be learned here the hard way:
+        #   * requiring a manifest meant an agent that had just written `foo.py`
+        #     and `test_foo.py` could not run them;
+        #   * looking only at the top level meant a normal `src/` + `tests/`
+        #     layout was reported as `kind=unknown`, so the agent could not run
+        #     the tests of a project it was staring straight at.
         kind = "python"
         runner = "python"
-        if any(root.glob("test_*.py")) or any(root.glob("*_test.py")) or (root / "tests").is_dir():
+        if _has_python_tests(root):
             commands["test"] = "python -m pytest -q"
 
     return {"kind": kind, "runner": runner, "commands": commands, "root": str(root)}
