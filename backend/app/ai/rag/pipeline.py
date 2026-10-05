@@ -118,6 +118,10 @@ class RAGPipeline:
         top_k: int | None = None,
         history: list[dict[str, str]] | None = None,
         project_id: uuid.UUID | None = None,
+        #: Personal context block assembled by ContextAssembler. Prepended to the
+        #: retrieved material so the answer can reflect who is asking without the
+        #: caller having to know how that block is built.
+        extra_context: str = "",
     ) -> RAGAnswer:
         question = (question or "").strip()
         if not question:
@@ -214,7 +218,11 @@ class RAGPipeline:
                 history_text = "（无）"
 
             rendered = prompt.render(
-                context=context, question=question, history=history_text
+                context=(
+                    f"{extra_context}\n\n{context}" if extra_context.strip() else context
+                ),
+                question=question,
+                history=history_text
             )
             chat = await self.llm.chat(
                 [

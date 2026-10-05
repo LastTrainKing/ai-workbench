@@ -102,6 +102,11 @@ async def _execute_run(
                 )
             await session.commit()
 
+            # An autonomous run is a strong signal about the user: it states a
+            # goal in their own words and the outcome shows what they actually
+            # wanted. Worth offering to the evaluator, which will usually decline.
+            await _consider_run_memories(session, owner_id=owner_id, goal=goal, result=result)
+
             # Emitted after persistence so a replay finds the same record, and
             # outside the persistence try-block so a bookkeeping failure still
             # reports the agent's actual outcome to the UI.
@@ -121,6 +126,31 @@ async def _execute_run(
         controller.emit("error", message=f"{type(exc).__name__}: {exc}")
     finally:
         _tasks.pop(run_id, None)
+
+
+async def _consider_run_memories(
+    session: AsyncSession, *, owner_id: uuid.UUID, goal: str, result: Any
+) -> None:
+    """Offer an autonomous run to the memory evaluator.
+
+    Only the goal is offered, not the transcript: a run's goal is what the user
+    wanted, while its tool calls are mechanics. And only a run that finished,
+    because a failed run says more about the environment than about the person.
+    """
+    from app.ai.memory import MemoryEvaluator
+    from app.ai.providers.factory import build_llm_provider
+
+    if result.state is not RunState.COMPLETED:
+        return
+    try:
+        llm, _ = build_llm_provider()
+        evaluator = MemoryEvaluator(session, llm, user_id=owner_id)
+        verdict = await evaluator.evaluate(
+            goal, context=f"用户让 Agent 完成的任务（已成功）：{goal}", source="agent"
+        )
+        logger.info("memory_verdict_from_run", extra={"routing": verdict.routing.value})
+    except Exception as exc:
+        logger.warning("memory_pass_failed", extra={"error": f"{type(exc).__name__}: {exc}"})
 
 
 async def _persist_run(session: AsyncSession, db_run_id: uuid.UUID, result: Any) -> None:

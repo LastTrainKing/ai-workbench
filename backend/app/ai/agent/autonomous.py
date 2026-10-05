@@ -142,6 +142,31 @@ class AutonomousAgent:
         )
         self._tool_messages: list[ChatMessage] = []
 
+    async def _personal_context(self, *, purpose: str = "agent") -> str:
+        """Assemble the personal block and record what was injected.
+
+        Returns an empty string when there is nothing to say — a new user with no
+        profile is a normal state, and the agent runs exactly as before.
+
+        A failure here must not stop the run: personalisation is an enhancement,
+        and an enhancement that can break the core task is a liability.
+        """
+        try:
+            from app.ai.memory import ContextAssembler
+
+            assembler = ContextAssembler(self.session, user_id=self.owner_id)
+            assembled = await assembler.assemble()
+            if assembled.is_empty:
+                return ""
+            await assembler.persist(assembled, run_id=self.controller.run_id, purpose=purpose)
+            return assembled.render()
+        except Exception as exc:
+            logger.warning(
+                "personal_context_failed",
+                extra={"purpose": purpose, "error": f"{type(exc).__name__}: {exc}"},
+            )
+            return ""
+
     def _permissions(self) -> Any:
         from app.ai.tools.permissions import PermissionManager
 
@@ -154,8 +179,14 @@ class AutonomousAgent:
         prompt = await get_prompt(self.session, "agent_planner")
         catalogue = ", ".join(self.registry.names())
 
+        # The personal block goes into the planner as well as the executor, so
+        # the plan itself reflects who is asking: language, depth, whether to
+        # confirm first, which working directory to prefer.
+        personal = await self._personal_context(purpose="planner")
+        combined = "\n\n".join(part for part in (personal, context) if part.strip()) or "（无）"
+
         messages = [
-            ChatMessage(role="system", content=prompt.render(tools=catalogue, goal=goal, context=context or "（无）")),
+            ChatMessage(role="system", content=prompt.render(tools=catalogue, goal=goal, context=combined)),
             ChatMessage(role="user", content=f"目标：{goal}"),
         ]
 
@@ -198,12 +229,14 @@ class AutonomousAgent:
     # ================================================================= execute ==
     async def _run_tools_for_step(self, step: PlanStep, plan: ExecutionPlan) -> list[dict[str, Any]]:
         """Let the model work on one step until it stops calling tools."""
+        personal = await self._personal_context(purpose="executor")
         system = (
             "你是运行在用户 Windows 电脑上的私人 AI Agent。\n"
             f"总目标：{plan.goal}\n"
             f"当前步骤（第 {step.id} 步）：{step.description}\n"
             f"该步骤的验收方式：{step.verification or '由你调用工具确认结果'}\n\n"
-            "要求：\n"
+            + (f"{personal}\n\n" if personal else "")
+            + "要求：\n"
             "1. 只处理当前这一步，不要跳到后面的步骤。\n"
             "2. 需要操作时调用工具，一次一个。\n"
             "3. 看到工具结果后再决定下一步。\n"

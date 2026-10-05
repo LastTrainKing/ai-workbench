@@ -161,8 +161,16 @@ class MemoryEvaluator:
         )
         return list((await self.session.execute(stmt)).scalars())
 
-    async def _judge(self, statement: str, context: str) -> dict[str, Any]:
-        """Ask the model the specific questions, not "is this interesting?"."""
+    async def _judge(
+        self, statement: str, context: str, existing: list[MemoryEntry]
+    ) -> dict[str, Any]:
+        """Ask the model the specific questions, not "is this interesting?".
+
+        The existing memories are included so the model can answer the one
+        question a lexical comparison cannot: does this contradict something we
+        already believe? It replies with the index of the memory it conflicts
+        with, or -1.
+        """
         system = (
             "你在决定一段话是否值得作为「关于用户的长期记忆」保存。\n"
             "标准是：**记错比不记更糟**。宁可漏掉，也不要存进无关内容。\n\n"
@@ -173,14 +181,23 @@ class MemoryEvaluator:
             f'  "kind": {"|".join(MEMORY_KINDS)},\n'
             '  "scope": "global 或 project",\n'
             '  "confidence": 0.0~1.0,\n'
-            '  "content": "改写成的、对未来有用的陈述句"\n'
+            '  "content": "改写成的、对未来有用的陈述句",\n'
+            '  "contradicts": 已有记忆中与它矛盾的编号（没有则 -1）\n'
             "}\n\n"
             "判定要点：\n"
             "- 长期有效的偏好、身份、技能、约束、决定 → 值得\n"
             "- 一次性的、当天的、寒暄的、能从别处查到的事实 → 不值得\n"
             "- 「我正在做毕业设计」属于项目状态，不值得存为记忆\n"
             "- 「我以后所有项目都用 React」是长期偏好，值得\n"
-            "- 置信度低于 0.5 就填低分，不要勉强"
+            "- 置信度低于 0.5 就填低分，不要勉强\n"
+            "- 如果候选内容与下面某条已有记忆**语义相反**（不是补充，是矛盾），"
+            "把那条的编号填进 contradicts；只是相关或更具体，填 -1\n"
+            + (
+                "\n已有记忆：\n"
+                + "\n".join(f"{i}. {entry.content}" for i, entry in enumerate(existing, start=1))
+                if existing
+                else "\n（还没有任何已有记忆）"
+            )
         )
         messages = [
             ChatMessage(role="system", content=system),
@@ -208,8 +225,10 @@ class MemoryEvaluator:
         if is_noise(text):
             return Verdict(Routing.DROP, "寒暄或一次性事务，没有长期价值", content=text)
 
+        existing = await self._existing()
+
         try:
-            judged = await self._judge(text, context)
+            judged = await self._judge(text, context, existing)
         except Exception as exc:
             logger.warning("memory_judge_failed", extra={"error": f"{type(exc).__name__}: {exc}"})
             return Verdict(Routing.DROP, f"判定失败：{type(exc).__name__}", content=text)
@@ -232,8 +251,6 @@ class MemoryEvaluator:
         if confidence < CANDIDATE_FLOOR:
             return Verdict(Routing.DROP, "置信度过低", kind=kind, confidence=confidence, content=content)
 
-        existing = await self._existing()
-
         # Dedup: a restatement bumps the existing row rather than adding one.
         for entry in existing:
             if entry.kind == kind and _similarity(content, entry.content) >= 0.82:
@@ -250,10 +267,20 @@ class MemoryEvaluator:
                 )
 
         # Conflict: a contradiction becomes a question, never an overwrite.
-        for entry in existing:
-            if entry.kind != kind:
-                continue
-            if _is_contradiction(content, entry.content):
+        #
+        # The model's answer is authoritative when it names a memory. The lexical
+        # check stays as a fallback for the near-copy case, where a restatement
+        # with a flipped negation is easy to miss semantically.
+        try:
+            named = int(judged.get("contradicts", -1))
+        except (TypeError, ValueError):
+            named = -1
+
+        for index, entry in enumerate(existing, start=1):
+            contradicted = named == index or (
+                entry.kind == kind and _is_contradiction(content, entry.content)
+            )
+            if contradicted:
                 candidate = MemoryCandidate(
                     user_id=self.user_id,
                     proposed_kind=kind,

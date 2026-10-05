@@ -10,6 +10,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai.agent.executor import AgentExecutor, AgentOutcome
+from app.ai.memory import ContextAssembler, MemoryEvaluator
 from app.ai.prompts.registry import get_prompt
 from app.ai.providers.factory import build_llm_provider
 from app.ai.rag.pipeline import RAGAnswer, RAGPipeline, request_structured
@@ -152,7 +153,14 @@ class ChatService:
                     "No knowledge base available. Create one and upload documents first."
                 )
 
-        return await self.pipeline.answer(
+        # Assemble the personal block and record it. Retrieval happens inside the
+        # pipeline, so the knowledge part is added there; this contributes the
+        # profile, the memories and the preferences.
+        assembler = ContextAssembler(self.session, user_id=owner_id)
+        assembled = await assembler.assemble(include_knowledge=False)
+        await assembler.persist(assembled, purpose="rag")
+
+        answer = await self.pipeline.answer(
             self.session,
             question=question,
             owner_id=owner_id,
@@ -162,7 +170,46 @@ class ChatService:
             top_k=top_k,
             history=history,
             project_id=project_id,
+            extra_context=assembled.render(),
         )
+
+        # Consider what the turn revealed about the user. Deliberately quiet: a
+        # failure here must not turn a successful answer into an error, and the
+        # evaluator itself drops almost everything it is shown.
+        await _consider_memories(
+            self.session,
+            owner_id=owner_id,
+            statement=question,
+            context=f"用户提问：{question}\n助手回答：{answer.answer[:800]}",
+            source="conversation",
+        )
+        return answer
+
+
+async def _consider_memories(
+    session: AsyncSession,
+    *,
+    owner_id: uuid.UUID,
+    statement: str,
+    context: str = "",
+    source: str = "conversation",
+) -> None:
+    """Offer a statement to the memory evaluator, swallowing nothing silently.
+
+    The evaluator is allowed to fail without breaking the caller's task, but the
+    failure is logged and counted rather than hidden. A memory pass that quietly
+    stops working would make the product look like it had stopped learning.
+    """
+    try:
+        llm, _ = build_llm_provider()
+        evaluator = MemoryEvaluator(session, llm, user_id=owner_id)
+        verdict = await evaluator.evaluate(statement, context=context, source=source)
+        logger.info(
+            "memory_verdict",
+            extra={"routing": verdict.routing.value, "kind": verdict.kind, "reason": verdict.reason[:120]},
+        )
+    except Exception as exc:
+        logger.warning("memory_pass_failed", extra={"error": f"{type(exc).__name__}: {exc}"})
 
 
 # ===========================================================================
@@ -195,10 +242,31 @@ class PlannerService:
             knowledge_base_ids=knowledge_base_ids,
             top_k=6,
         )
-        context = "\n\n".join(
+        knowledge_context = "\n\n".join(
             f"【资料 {i}】{c.document_title} / {c.heading}\n{c.content[:1200]}"
             for i, c in enumerate(retrieval.chunks, start=1)
         ) or "（知识库中没有检索到相关资料，请基于通用方法论拆解）"
+
+        # Personal context first, then the grounded material.
+        #
+        # This is what makes the same goal produce a different plan for a
+        # different person: a student writing a thesis and a professional
+        # shipping a feature get different steps for the same sentence. It is
+        # also the clearest evidence that the personalisation is real rather
+        # than a stored preference nobody reads.
+        assembler = ContextAssembler(session, user_id=owner_id)
+        assembled = await assembler.assemble(
+            knowledge_chunks=[
+                {
+                    "document_title": c.document_title,
+                    "content": c.content[:800],
+                    "chunk_id": str(getattr(c, "chunk_id", "") or ""),
+                }
+                for c in retrieval.chunks
+            ]
+        )
+        personal = assembled.render()
+        context = f"{personal}\n\n{knowledge_context}" if personal else knowledge_context
 
         prompt = await get_prompt(session, "task_planner")
         recorder = await RunRecorder.start(
@@ -239,6 +307,11 @@ class PlannerService:
                 max_tokens=settings.ai_max_tokens,
             )
             recorder.record_usage(chat.usage)
+
+            # Record what was injected, now that the run has an id. This is the
+            # transparency guarantee: "what did it know about me when it planned
+            # this" is answerable afterwards rather than a claim.
+            await assembler.persist(assembled, run_id=recorder.run_id, purpose="planner")
             plan = self._normalise_plan(raw, goal, horizon_days)
 
             await recorder.add_sources(
