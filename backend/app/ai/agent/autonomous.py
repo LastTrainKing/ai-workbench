@@ -105,6 +105,48 @@ class RunResult:
         }
 
 
+def trim_history(messages: list[ChatMessage], limit: int) -> list[ChatMessage]:
+    """Keep the last `limit` messages, without breaking tool-call pairing.
+
+    The OpenAI contract requires two things that a naive slice violates:
+
+      * a `role="tool"` message must be preceded by an assistant message whose
+        `tool_calls` include its `tool_call_id`;
+      * an assistant message with `tool_calls` must be followed by tool results.
+
+    Slicing a long conversation at an arbitrary index breaks whichever of the two
+    the boundary lands on, and the provider rejects the whole request with HTTP 400.
+    That is exactly what happened: the agent got two steps into a run, the history
+    was cut mid-pair, and every subsequent call failed with
+
+        Messages with role 'tool' must be a response to a preceding message with
+        'tool_calls'
+
+    So the boundary is repaired rather than assumed: leading tool results are
+    dropped (their request is gone, so they carry no context anyway), and a
+    trailing assistant tool-call request with no results is dropped too.
+    """
+    if limit <= 0:
+        return []
+    window = list(messages[-limit:])
+
+    # Drop leading tool results whose requesting assistant was cut off.
+    start = 0
+    while start < len(window) and str(getattr(window[start], "role", "")) == "tool":
+        start += 1
+    window = window[start:]
+
+    # Drop a trailing assistant request that has no results in the window.
+    while window:
+        last = window[-1]
+        if str(getattr(last, "role", "")) == "assistant" and getattr(last, "tool_calls", None):
+            window = window[:-1]
+            continue
+        break
+
+    return window
+
+
 class AutonomousAgent:
     """Drives one goal from plan to verified completion."""
 
@@ -248,7 +290,8 @@ class AutonomousAgent:
         diagnostic = is_diagnostic_step(step)
 
         messages: list[ChatMessage] = [ChatMessage(role="system", content=system)]
-        messages.extend(self._tool_messages[-6:])  # keep recent context, bounded
+        # Bounded, and repaired at the boundary — see `trim_history`.
+        messages.extend(trim_history(self._tool_messages, 6))
         messages.append(ChatMessage(role="user", content=f"请执行第 {step.id} 步：{step.description}"))
 
         observations: list[dict[str, Any]] = []
