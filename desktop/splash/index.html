@@ -122,7 +122,19 @@
       button.primary { background: var(--accent-dim); border-color: transparent; color: #04121a; font-weight: 600; }
       button.primary:hover { background: #0d8fa8; }
       .hint { margin-top: 14px; color: var(--muted); font-size: 12px; }
-    </style>
+    
+      .services { list-style: none; margin: 0 0 18px; padding: 0; display: grid; gap: 6px; }
+      .services li { display: flex; align-items: center; gap: 10px; font-size: 13px; color: var(--muted); }
+      .services li .name { min-width: 96px; color: var(--text); }
+      .services li .state { margin-left: auto; letter-spacing: 0.04em; font-variant-numeric: tabular-nums; }
+      .services li .pip { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); flex: none; }
+      .services li[data-state="ready"] .pip { background: #3fb950; }
+      .services li[data-state="ready"] .state { color: #3fb950; }
+      .services li[data-state="failed"] .pip { background: #f85149; }
+      .services li[data-state="failed"] .state { color: #f85149; }
+      .services li[data-state="pending"] .pip { animation: aw-pulse 1.2s ease-in-out infinite; }
+      @keyframes aw-pulse { 0%, 100% { opacity: 0.35; } 50% { opacity: 1; } }
+</style>
   </head>
   <body>
     <div class="wrap">
@@ -148,6 +160,11 @@
             <span class="elapsed" id="elapsed">0s</span>
           </div>
           <div class="track"><i></i></div>
+          <!-- Per-service readiness. Every row comes from a TCP or HTTP probe in
+               the shell, not from a timer: a checklist that lights up on schedule
+               would lie exactly when the user is looking for truth. -->
+          <ul class="services" id="services"></ul>
+
           <ol class="steps" id="steps">
             <li data-phase="launching"><span class="dot"></span>Starting PostgreSQL, Redis and Qdrant</li>
             <li data-phase="waiting"><span class="dot"></span>Waiting for the API to report healthy</li>
@@ -187,6 +204,7 @@
         errorTitle: document.getElementById("errorTitle"),
         errorDetail: document.getElementById("errorDetail"),
         errorLog: document.getElementById("errorLog"),
+        services: document.getElementById("services"),
         retry: document.getElementById("retry"),
         logs: document.getElementById("logs"),
       };
@@ -205,10 +223,27 @@
         });
       }
 
+      function renderServices(list) {
+        if (!Array.isArray(list) || !list.length) return;
+        els.services.innerHTML = "";
+        list.forEach((service) => {
+          const li = document.createElement("li");
+          li.dataset.state = service.state || "pending";
+          li.innerHTML = '<span class="pip"></span><span class="name"></span><span class="state"></span>';
+          // textContent, not innerHTML: these strings come from the shell and
+          // must never be able to inject markup into the window.
+          li.querySelector(".name").textContent = service.name || "";
+          li.querySelector(".state").textContent =
+            service.state === "ready" ? "READY" : service.state === "failed" ? "FAILED" : "...";
+          els.services.appendChild(li);
+        });
+      }
+
       function showProgress(status) {
         els.progress.style.display = "";
         els.error.classList.remove("show");
         els.phaseLabel.textContent = status.message || "Starting";
+        renderServices(status.services);
         markSteps(status.phase);
       }
 
@@ -224,6 +259,7 @@
         if (!status) return;
         if (status.ok && status.finished) {
           els.phaseLabel.textContent = "Ready";
+          renderServices(status.services);
           markSteps("ready");
           return;
         }

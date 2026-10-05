@@ -42,6 +42,15 @@ const STARTUP_TIMEOUT: Duration = Duration::from_secs(300);
 /// Interval between health probes.
 const POLL_INTERVAL: Duration = Duration::from_millis(700);
 
+/// One service's readiness, as observed rather than assumed.
+#[derive(Debug, Clone, Serialize)]
+pub struct ServiceStatus {
+    pub name: String,
+    /// "pending" | "ready" | "failed"
+    pub state: String,
+    pub detail: String,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct StartupStatus {
     pub phase: String,
@@ -49,6 +58,41 @@ pub struct StartupStatus {
     pub detail: String,
     pub ok: bool,
     pub finished: bool,
+    /// Per-service readiness, in the order the user should read it.
+    pub services: Vec<ServiceStatus>,
+}
+
+/// The services the startup script brings up, with the port that proves it.
+const SERVICES: [(&str, u16); 3] = [("PostgreSQL", 5432), ("Redis", 6379), ("Qdrant", 6333)];
+
+/// Probe every service. Cheap TCP connects; called on each poll tick.
+///
+/// The API is not in this list because it is checked over HTTP elsewhere and a
+/// port being open is not the same as the API being ready to answer.
+fn probe_services() -> Vec<ServiceStatus> {
+    let mut out: Vec<ServiceStatus> = SERVICES
+        .iter()
+        .map(|(name, port)| {
+            let open = std::net::TcpStream::connect_timeout(
+                &format!("127.0.0.1:{port}")
+                    .parse()
+                    .unwrap_or_else(|_| "127.0.0.1:1".parse().expect("literal")),
+                Duration::from_millis(400),
+            )
+            .is_ok();
+            ServiceStatus {
+                name: (*name).to_string(),
+                state: if open { "ready" } else { "pending" }.into(),
+                detail: format!("127.0.0.1:{port}"),
+            }
+        })
+        .collect();
+    out.push(ServiceStatus {
+        name: "API".into(),
+        state: if backend_is_healthy() { "ready" } else { "pending" }.into(),
+        detail: format!("http://{API_HOST}:{API_PORT}"),
+    });
+    out
 }
 
 impl StartupStatus {
@@ -59,6 +103,7 @@ impl StartupStatus {
             detail: String::new(),
             ok: false,
             finished: false,
+            services: probe_services(),
         }
     }
 
@@ -69,6 +114,7 @@ impl StartupStatus {
             detail: detail.into(),
             ok: false,
             finished: true,
+            services: probe_services(),
         }
     }
 }
@@ -367,6 +413,7 @@ pub fn spawn_startup(app: AppHandle, state: Arc<BackendState>) {
                 detail: format!("http://{API_HOST}:{API_PORT}"),
                 ok: true,
                 finished: true,
+                services: probe_services(),
             });
             state.ready.store(true, Ordering::SeqCst);
             emit(&app, state.status());
@@ -454,6 +501,7 @@ pub fn spawn_startup(app: AppHandle, state: Arc<BackendState>) {
                     detail: format!("http://{API_HOST}:{API_PORT}"),
                     ok: true,
                     finished: true,
+                    services: probe_services(),
                 });
                 emit(&app, state.status());
                 navigate_to_app(&app);
