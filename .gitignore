@@ -111,3 +111,13 @@ scratch/
 # --------------------------------------------------- assistant workspace data --
 # Local notes/state kept alongside the project; not part of the deliverable.
 .workbuddy-ai/
+
+# ------------------------------------------------------------------- rust/tauri --
+# The Tauri shell's build output. Several gigabytes of intermediate artefacts
+# that are fully reproducible from Cargo.toml; committing them would dwarf the
+# source tree.
+desktop/src-tauri/target/
+desktop/src-tauri/gen/
+desktop/node_modules/
+desktop/dist/
+*.pdb

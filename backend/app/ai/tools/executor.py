@@ -1,0 +1,564 @@
+"""The gate every computer-tool call passes through.
+
+Nothing reaches the operating system without going through :class:`ToolExecutor`.
+It is the only place that combines the five things a safe agent needs, and it does
+them in a fixed order:
+
+    1. validate the arguments against the tool's declared schema
+    2. ask the PermissionManager (deny beats allow; risk decides the prompt)
+    3. obtain user confirmation when the verdict requires it
+    4. run under a hard timeout, with the working directory enforced
+    5. write an audit row — including for the calls that were refused
+
+Steps 2 and 5 are what make this different from a shell wrapper. A model that
+invents a path outside the workspace is stopped at step 2, and a model that tries
+something it is not allowed to do leaves a record at step 5.
+
+Failure classification lives here too, because the retry policy needs to tell a
+transient network blip apart from a permission refusal: the first is worth
+retrying, the second never is.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import time
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass, field
+from enum import StrEnum
+from typing import Any
+
+from app.ai.tools.permissions import (
+    AgentPolicy,
+    Decision,
+    PermissionManager,
+    PermissionVerdict,
+    RiskLevel,
+)
+from app.core.errors import AppError, ValidationError
+from app.core.logging import get_logger
+
+logger = get_logger(__name__)
+
+
+# --------------------------------------------------------------------------- #
+# Failure classification
+# --------------------------------------------------------------------------- #
+class FailureKind(StrEnum):
+    """Why something failed, which decides whether retrying could help."""
+
+    TRANSIENT = "transient"  # network blip, lock contention — retry
+    PERMISSION = "permission"  # refused by policy — never retry
+    VALIDATION = "validation"  # bad arguments — never retry
+    TOOL = "tool"  # the tool itself failed — retry once at most
+    NETWORK = "network"  # DNS, TLS, timeout — retry with backoff
+    MODEL = "model"  # the model produced something unusable — retry
+    TIMEOUT = "timeout"  # exceeded its budget — retry once
+    CANCELLED = "cancelled"  # the user stopped it — never retry
+    FATAL = "fatal"  # cannot continue — never retry
+    CONFIRMATION = "confirmation"  # waiting for a human — never auto-retry
+
+    @property
+    def retryable(self) -> bool:
+        return self in {
+            FailureKind.TRANSIENT,
+            FailureKind.TOOL,
+            FailureKind.NETWORK,
+            FailureKind.MODEL,
+            FailureKind.TIMEOUT,
+        }
+
+
+_TRANSIENT_HINTS = (
+    "temporarily unavailable",
+    "connection reset",
+    "connection refused",
+    "deadlock",
+    "lock wait timeout",
+    "too many connections",
+    "temporarily",
+    "try again",
+)
+_NETWORK_HINTS = (
+    "getaddrinfo",
+    "name or service not known",
+    "nodename nor servname",
+    "ssl",
+    "certificate",
+    "connection aborted",
+    "network is unreachable",
+    "timed out",
+)
+
+
+def classify_failure(exc: BaseException | str) -> FailureKind:
+    """Map an exception or message onto a retry decision."""
+    if isinstance(exc, asyncio.CancelledError):
+        return FailureKind.CANCELLED
+    if isinstance(exc, TimeoutError):
+        return FailureKind.TIMEOUT
+    if isinstance(exc, ValidationError):
+        return FailureKind.VALIDATION
+    if isinstance(exc, PermissionError):
+        return FailureKind.PERMISSION
+    if isinstance(exc, AppError):
+        code = getattr(exc, "code", "") or ""
+        if code.startswith("ai_"):
+            return FailureKind.MODEL
+        if code in {"not_found", "conflict"}:
+            return FailureKind.FATAL
+
+    text = str(exc).lower()
+    if any(hint in text for hint in _NETWORK_HINTS):
+        return FailureKind.NETWORK
+    if any(hint in text for hint in _TRANSIENT_HINTS):
+        return FailureKind.TRANSIENT
+    return FailureKind.TOOL
+
+
+# --------------------------------------------------------------------------- #
+# Results
+# --------------------------------------------------------------------------- #
+@dataclass(slots=True)
+class ToolOutcome:
+    """What happened, in the shape both the agent loop and the UI need."""
+
+    ok: bool
+    data: Any = None
+    error: str = ""
+    summary: str = ""
+    latency_ms: int = 0
+    #: SUCCEEDED | FAILED | DENIED | DECLINED | TIMEOUT | CANCELLED
+    status: str = "SUCCEEDED"
+    failure: FailureKind | None = None
+    verdict: PermissionVerdict | None = None
+    exit_code: int | None = None
+    truncated: bool = False
+    output_bytes: int = 0
+
+    @property
+    def retryable(self) -> bool:
+        return bool(self.failure and self.failure.retryable)
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "ok": self.ok,
+            "data": self.data,
+            "error": self.error,
+            "summary": self.summary,
+            "latency_ms": self.latency_ms,
+            "status": self.status,
+            "failure": self.failure.value if self.failure else None,
+            "exit_code": self.exit_code,
+            "truncated": self.truncated,
+            "output_bytes": self.output_bytes,
+        }
+
+
+@dataclass(slots=True)
+class ConfirmationRequest:
+    """What the user is being asked to approve."""
+
+    tool: str
+    arguments: dict[str, Any]
+    verdict: PermissionVerdict
+    run_id: str = ""
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "tool": self.tool,
+            "arguments": self.arguments,
+            "run_id": self.run_id,
+            "operation": self.verdict.operation or self.tool,
+            "target": self.verdict.target,
+            "reason": self.verdict.reason,
+            "risk": self.verdict.risk.value,
+            "impact": self.verdict.impact,
+            "detail": self.verdict.detail,
+        }
+
+
+#: Returns True to proceed. Raising or returning False declines.
+ConfirmHandler = Callable[[ConfirmationRequest], Awaitable[bool]]
+
+
+@dataclass(slots=True)
+class ResourceLimits:
+    """Ceilings a single run must respect."""
+
+    max_output_bytes: int = 200_000
+    max_files_modified: int = 50
+    files_modified: int = 0
+    tool_calls: int = 0
+    max_tool_calls: int = 100
+    started_at: float = field(default_factory=time.monotonic)
+    max_runtime_seconds: int = 1800
+
+    def elapsed(self) -> float:
+        return time.monotonic() - self.started_at
+
+    def exhausted(self) -> str | None:
+        if self.tool_calls >= self.max_tool_calls:
+            return f"reached the tool-call limit ({self.max_tool_calls})"
+        if self.elapsed() >= self.max_runtime_seconds:
+            return f"reached the runtime limit ({self.max_runtime_seconds}s)"
+        if self.files_modified >= self.max_files_modified:
+            return f"reached the file-modification limit ({self.max_files_modified})"
+        return None
+
+
+# --------------------------------------------------------------------------- #
+# Executor
+# --------------------------------------------------------------------------- #
+class ToolExecutor:
+    """Runs tools. The agent never calls a tool any other way."""
+
+    def __init__(self, policy: AgentPolicy, *, audit: Any | None = None) -> None:
+        self.policy = policy
+        self.permissions = PermissionManager(policy)
+        self._audit = audit
+
+    # ---------------------------------------------------------------- audit --
+    async def _record(
+        self,
+        *,
+        tool: str,
+        category: str,
+        arguments: dict[str, Any],
+        outcome: ToolOutcome,
+        run_id: str | None,
+        step_index: int,
+        permission_level: int,
+        confirmed: bool | None,
+    ) -> None:
+        """Persist one audit row. Never raises: auditing must not break a run."""
+        if self._audit is None:
+            return
+        verdict = outcome.verdict
+        try:
+            await self._audit(
+                run_id=run_id,
+                step_index=step_index,
+                tool_name=tool,
+                category=category,
+                decision=verdict.decision.value if verdict else "allow",
+                reason=verdict.reason if verdict else "",
+                risk_level=(verdict.risk.value if verdict else RiskLevel.LOW.value),
+                permission_level=permission_level,
+                target=(verdict.target if verdict else ""),
+                arguments=arguments,
+                status=outcome.status,
+                exit_code=outcome.exit_code,
+                output_bytes=outcome.output_bytes,
+                truncated=outcome.truncated,
+                error_message=outcome.error,
+                latency_ms=outcome.latency_ms,
+                confirmed_by_user=confirmed,
+            )
+        except Exception as exc:
+            logger.warning(
+                "tool_audit_write_failed",
+                extra={"tool": tool, "error": f"{type(exc).__name__}: {exc}"},
+            )
+
+    # -------------------------------------------------------------- execute --
+    async def execute(
+        self,
+        tool: Any,
+        ctx: Any,
+        arguments: dict[str, Any],
+        *,
+        run_id: str | None = None,
+        step_index: int = 0,
+        confirm: ConfirmHandler | None = None,
+        limits: ResourceLimits | None = None,
+    ) -> ToolOutcome:
+        spec = tool.spec
+        started = time.perf_counter()
+
+        def finish(outcome: ToolOutcome, confirmed: bool | None = None) -> ToolOutcome:
+            outcome.latency_ms = int((time.perf_counter() - started) * 1000)
+            return outcome
+
+        # --- 0. resource ceiling -------------------------------------------
+        if limits is not None:
+            exhausted = limits.exhausted()
+            if exhausted:
+                outcome = ToolOutcome(
+                    ok=False,
+                    status="FAILED",
+                    error=f"The run has {exhausted}",
+                    failure=FailureKind.FATAL,
+                    summary=f"stopped: {exhausted}",
+                )
+                await self._record(
+                    tool=spec.name,
+                    category=spec.category,
+                    arguments=arguments,
+                    outcome=outcome,
+                    run_id=run_id,
+                    step_index=step_index,
+                    permission_level=spec.permission_level,
+                    confirmed=None,
+                )
+                return finish(outcome)
+
+        # --- 1. validate ---------------------------------------------------
+        try:
+            cleaned = tool.validate(arguments)
+        except Exception as exc:
+            outcome = ToolOutcome(
+                ok=False,
+                status="FAILED",
+                error=str(exc),
+                failure=FailureKind.VALIDATION,
+                summary=f"invalid arguments for {spec.name}",
+            )
+            await self._record(
+                tool=spec.name,
+                category=spec.category,
+                arguments=arguments,
+                outcome=outcome,
+                run_id=run_id,
+                step_index=step_index,
+                permission_level=spec.permission_level,
+                confirmed=None,
+            )
+            return finish(outcome)
+
+        # --- 2. permission -------------------------------------------------
+        verdict = self.permissions.check_tool(spec, cleaned)
+        if verdict.decision is Decision.DENY:
+            outcome = ToolOutcome(
+                ok=False,
+                status="DENIED",
+                error=verdict.reason,
+                failure=FailureKind.PERMISSION,
+                verdict=verdict,
+                summary=f"denied: {verdict.reason}",
+            )
+            await self._record(
+                tool=spec.name,
+                category=spec.category,
+                arguments=cleaned,
+                outcome=outcome,
+                run_id=run_id,
+                step_index=step_index,
+                permission_level=spec.permission_level,
+                confirmed=None,
+            )
+            return finish(outcome)
+
+        # --- 3. confirmation ------------------------------------------------
+        confirmed: bool | None = None
+        if verdict.decision is Decision.CONFIRM:
+            if confirm is None:
+                outcome = ToolOutcome(
+                    ok=False,
+                    status="DENIED",
+                    error=f"'{spec.name}' needs confirmation, which is not available in this context",
+                    failure=FailureKind.PERMISSION,
+                    verdict=verdict,
+                    summary="confirmation unavailable",
+                )
+                await self._record(
+                    tool=spec.name,
+                    category=spec.category,
+                    arguments=cleaned,
+                    outcome=outcome,
+                    run_id=run_id,
+                    step_index=step_index,
+                    permission_level=spec.permission_level,
+                    confirmed=None,
+                )
+                return finish(outcome)
+
+            request = ConfirmationRequest(
+                tool=spec.name, arguments=cleaned, verdict=verdict, run_id=run_id or ""
+            )
+            try:
+                approved = await asyncio.wait_for(
+                    confirm(request),
+                    timeout=self.policy.confirmation_timeout_seconds,
+                )
+            except TimeoutError:
+                outcome = ToolOutcome(
+                    ok=False,
+                    status="TIMEOUT",
+                    error="No response to the confirmation request",
+                    failure=FailureKind.CONFIRMATION,
+                    verdict=verdict,
+                    summary="confirmation timed out",
+                )
+                await self._record(
+                    tool=spec.name,
+                    category=spec.category,
+                    arguments=cleaned,
+                    outcome=outcome,
+                    run_id=run_id,
+                    step_index=step_index,
+                    permission_level=spec.permission_level,
+                    confirmed=None,
+                )
+                return finish(outcome)
+
+            confirmed = bool(approved)
+            if not approved:
+                outcome = ToolOutcome(
+                    ok=False,
+                    status="DECLINED",
+                    error="The user declined this operation",
+                    failure=FailureKind.PERMISSION,
+                    verdict=verdict,
+                    summary=f"declined: {verdict.operation or spec.name}",
+                )
+                await self._record(
+                    tool=spec.name,
+                    category=spec.category,
+                    arguments=cleaned,
+                    outcome=outcome,
+                    run_id=run_id,
+                    step_index=step_index,
+                    permission_level=spec.permission_level,
+                    confirmed=False,
+                )
+                return finish(outcome)
+
+        # --- 4. run ---------------------------------------------------------
+        timeout = float(getattr(spec, "timeout_seconds", 30.0) or 30.0)
+        try:
+            result = await asyncio.wait_for(tool.execute(ctx, **cleaned), timeout=timeout)
+        except TimeoutError:
+            outcome = ToolOutcome(
+                ok=False,
+                status="TIMEOUT",
+                error=f"'{spec.name}' exceeded its {timeout:g}s budget",
+                failure=FailureKind.TIMEOUT,
+                verdict=verdict,
+                summary=f"timeout after {timeout:g}s",
+            )
+        except asyncio.CancelledError:
+            outcome = ToolOutcome(
+                ok=False,
+                status="CANCELLED",
+                error="Cancelled",
+                failure=FailureKind.CANCELLED,
+                verdict=verdict,
+                summary="cancelled",
+            )
+            await self._record(
+                tool=spec.name,
+                category=spec.category,
+                arguments=cleaned,
+                outcome=outcome,
+                run_id=run_id,
+                step_index=step_index,
+                permission_level=spec.permission_level,
+                confirmed=confirmed,
+            )
+            raise
+        except Exception as exc:
+            kind = classify_failure(exc)
+            outcome = ToolOutcome(
+                ok=False,
+                status="FAILED",
+                error=f"{type(exc).__name__}: {exc}",
+                failure=kind,
+                verdict=verdict,
+                summary=f"{spec.name} failed",
+            )
+        else:
+            payload, truncated, size = _cap_payload(
+                result.data, self.policy.max_output_bytes
+            )
+            outcome = ToolOutcome(
+                ok=bool(result.ok),
+                data=payload,
+                error=result.error,
+                summary=result.summary or (f"{spec.name} ok" if result.ok else f"{spec.name} failed"),
+                status="SUCCEEDED" if result.ok else "FAILED",
+                failure=None if result.ok else classify_failure(result.error or "tool failed"),
+                verdict=verdict,
+                exit_code=getattr(result, "exit_code", None),
+                truncated=truncated,
+                output_bytes=size,
+            )
+
+        if limits is not None:
+            limits.tool_calls += 1
+
+        await self._record(
+            tool=spec.name,
+            category=spec.category,
+            arguments=cleaned,
+            outcome=outcome,
+            run_id=run_id,
+            step_index=step_index,
+            permission_level=spec.permission_level,
+            confirmed=confirmed,
+        )
+        return finish(outcome)
+
+
+def _cap_payload(data: Any, limit: int) -> tuple[Any, bool, int]:
+    """Keep a tool result inside the output ceiling.
+
+    A command that prints a gigabyte must not end up in the database, in the
+    prompt, or in the UI. Strings are cut and flagged; structures are walked and
+    the same rule applied to each string inside them.
+    """
+    if limit <= 0:
+        return data, False, 0
+
+    if isinstance(data, str):
+        size = len(data.encode("utf-8", errors="ignore"))
+        if size <= limit:
+            return data, False, size
+        keep = max(1, limit // 2)
+        head = data[:keep]
+        tail = data[-keep:] if len(data) > keep else ""
+        return (
+            f"{head}\n\n... [{size - len(head.encode()) - len(tail.encode())} bytes omitted: "
+            f"output exceeded the {limit}-byte limit] ...\n\n{tail}",
+            True,
+            limit,
+        )
+
+    if isinstance(data, dict):
+        out: dict[str, Any] = {}
+        truncated = False
+        total = 0
+        for key, value in data.items():
+            capped, was_cut, size = _cap_payload(value, limit)
+            out[key] = capped
+            truncated = truncated or was_cut
+            total += size
+        return out, truncated, total
+
+    if isinstance(data, list):
+        out_list: list[Any] = []
+        truncated = False
+        total = 0
+        for value in data:
+            capped, was_cut, size = _cap_payload(value, limit)
+            out_list.append(capped)
+            truncated = truncated or was_cut
+            total += size
+        return out_list, truncated, total
+
+    if data is None:
+        return None, False, 0
+
+    size = len(str(data).encode("utf-8", errors="ignore"))
+    return data, False, size
+
+
+__all__ = [
+    "ConfirmHandler",
+    "ConfirmationRequest",
+    "FailureKind",
+    "ResourceLimits",
+    "ToolExecutor",
+    "ToolOutcome",
+    "classify_failure",
+]

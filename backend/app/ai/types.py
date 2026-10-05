@@ -131,13 +131,38 @@ class RetrievedChunk:
 
 @dataclass(slots=True)
 class ToolSpec:
-    """Declaration of a tool exposed to the agent."""
+    """Declaration of a tool exposed to the agent.
+
+    The first five fields describe what the tool *does* and are what the model
+    sees. The rest describe what it is *allowed* to do, and are enforced by the
+    permission layer rather than by the model — a model that ignores them changes
+    nothing, because the executor checks them again before anything runs.
+
+    The governance fields all have safe defaults so the existing business tools
+    (knowledge search, tasks, notes) keep working untouched; they are read-only
+    and operate on the database, not on the machine.
+    """
 
     name: str
     description: str
     parameters: dict[str, Any]
     category: str = "general"
     requires_confirmation: bool = False
+
+    # --- governance (enforced by app.ai.tools, not by the model) -------------
+    #: Minimum permission level the caller must hold. 0=observe, 1=workspace,
+    #: 2=system, 3=full control. See app.ai.tools.permissions.PermissionLevel.
+    permission_level: int = 1
+    #: low | medium | high | critical. Drives the confirmation prompt.
+    risk_level: str = "low"
+    #: Hard ceiling on a single invocation, enforced by the executor.
+    timeout_seconds: float = 30.0
+    #: JSON schema of the result, for documentation and UI rendering.
+    output_schema: dict[str, Any] | None = None
+    #: always | on_write | never — how much detail the audit log keeps.
+    audit_policy: str = "always"
+    #: True when the tool can change something on the machine or in the database.
+    mutates_state: bool = False
 
     def to_openai(self) -> dict[str, Any]:
         return {
@@ -147,6 +172,17 @@ class ToolSpec:
                 "description": self.description,
                 "parameters": self.parameters,
             },
+        }
+
+    def governance(self) -> dict[str, Any]:
+        """The part of the spec the UI and the permission layer care about."""
+        return {
+            "permission_level": self.permission_level,
+            "risk_level": self.risk_level,
+            "timeout_seconds": self.timeout_seconds,
+            "audit_policy": self.audit_policy,
+            "mutates_state": self.mutates_state,
+            "output_schema": self.output_schema,
         }
 
 

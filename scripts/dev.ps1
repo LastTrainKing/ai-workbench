@@ -23,7 +23,13 @@ param(
     [string]$Action = 'start',
 
     [Parameter(Position = 1)]
-    [string]$Target = 'api'
+    [string]$Target = 'api',
+
+    # Which application processes to touch. The desktop shell runs the API only:
+    # it loads the UI from the API origin, so there is no dev server and no
+    # second port.
+    [ValidateSet('all', 'api', 'web')]
+    [string]$Only = 'all'
 )
 
 . "$PSScriptRoot\lib.ps1"
@@ -176,30 +182,34 @@ switch ($Action) {
         }
         if (-not (Assert-Infrastructure)) { exit 1 }
 
-        if (-not (Start-Api)) { exit 1 }
-        if (-not (Start-Web)) { exit 1 }
+        if ($Only -ne 'web') {
+            if (-not (Start-Api)) { exit 1 }
+        }
+        if ($Only -ne 'api') {
+            if (-not (Start-Web)) { exit 1 }
+        }
 
         Write-Host ''
         Write-StartupLog -Service 'Application' -State 'READY'
         Write-Host "  API       http://127.0.0.1:$ApiPort"
         Write-Host "  Docs      http://127.0.0.1:$ApiPort/docs"
-        Write-Host "  Frontend  http://127.0.0.1:$WebPort"
+        if ($Only -ne 'api') { Write-Host "  Frontend  http://127.0.0.1:$WebPort" }
         exit 0
     }
     'stop' {
-        Stop-Web
-        Stop-Api
+        if ($Only -ne 'api') { Stop-Web }
+        if ($Only -ne 'web') { Stop-Api }
         Write-Host ''
         Write-StartupLog -Service 'Application' -State 'STOPPED'
         exit 0
     }
     'restart' {
-        Stop-Web
-        Stop-Api
+        if ($Only -ne 'api') { Stop-Web }
+        if ($Only -ne 'web') { Stop-Api }
         # Wait for the ports to be genuinely free before starting again.
         Wait-Until -Condition { -not (Test-PortOpen $ApiPort) -and -not (Test-PortOpen $WebPort) } `
             -TimeoutSeconds 30 | Out-Null
-        & $PSCommandPath start
+        & $PSCommandPath start -Target $Target -Only $Only
         exit $LASTEXITCODE
     }
     'status' {

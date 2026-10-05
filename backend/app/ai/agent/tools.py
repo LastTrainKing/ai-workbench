@@ -33,6 +33,7 @@ import time
 import uuid
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, ClassVar
 
 from sqlalchemy import func, select
@@ -66,6 +67,46 @@ class ToolContext:
     #: the RAG pipeline gives. Without it an agent run would have no
     #: ``ai_run_sources`` rows and the knowledge graph would miss those edges.
     sources: list[dict[str, Any]] = field(default_factory=list)
+    #: The permission manager for this run, when computer tools are in play.
+    #: Tools that touch the machine call ``ctx.check_path`` rather than assuming
+    #: the executor's decision covers them: a tool like ``file_copy`` has two
+    #: paths and both have to be inside the sandbox.
+    permissions: Any | None = None
+    #: Absolute working directory for this run. Relative paths resolve here, so
+    #: a tool can never be steered by the process's own cwd.
+    working_directory: str = ""
+
+    def require_permission(self, path: str | Any, *, write: bool = False) -> Any:
+        """Ask the policy about a path, raising when it is not allowed.
+
+        The executor checks the tool as a whole; this checks the concrete path the
+        arguments name. Both checks matter, and the second one is the one that
+        stops ``file_read("C:\\Users\\me\\.ssh\\id_rsa")``.
+        """
+        if self.permissions is None:
+            return None
+        verdict = self.permissions.check_path(path, write=write)
+        if not verdict.allowed:
+            from app.core.errors import PermissionDeniedError
+
+            raise PermissionDeniedError(
+                verdict.reason,
+                details={
+                    "path": str(path),
+                    "decision": verdict.decision.value,
+                    "risk": verdict.risk.value,
+                    "detail": verdict.detail,
+                },
+            )
+        return verdict
+
+    def resolve(self, path: str) -> str:
+        """Resolve a possibly-relative path against the run's working directory."""
+        candidate = Path(path).expanduser()
+        if candidate.is_absolute():
+            return str(candidate)
+        base = self.working_directory or (self.permissions and str(self.permissions.policy.workspace)) or "."
+        return str((Path(base) / candidate).resolve(strict=False))
 
     def register_artifact(self, kind: str, entity_id: str) -> None:
         self.artifacts.setdefault(kind, []).append(entity_id)

@@ -158,5 +158,54 @@ def main() -> int:
     return 0
 
 
+
+
+def write_png(size: int, path: Path) -> None:
+    """Emit one square as a PNG.
+
+    Tauri's bundler needs a raster icon for several targets, and the ICO's BMP
+    payload is not readable by every tool. Written by hand for the same reason as
+    the ICO: the asset stays reproducible from source.
+    """
+    import struct
+    import zlib
+
+    pixels = render(size)
+    rows = [pixels[i * size * 4 : (i + 1) * size * 4] for i in range(size)]
+    rows.reverse()  # render() is bottom-up for BMP; PNG wants top-down
+
+    raw = bytearray()
+    for row in rows:
+        raw.append(0)  # filter type: None
+        for x in range(size):
+            b, g, r, a = row[x * 4 : x * 4 + 4]
+            raw += bytes((r, g, b, a))
+
+    def chunk(tag: bytes, data: bytes) -> bytes:
+        return (
+            struct.pack(">I", len(data))
+            + tag
+            + data
+            + struct.pack(">I", zlib.crc32(tag + data) & 0xFFFFFFFF)
+        )
+
+    png = b"\x89PNG\r\n\x1a\n"
+    png += chunk(b"IHDR", struct.pack(">IIBBBBB", size, size, 8, 6, 0, 0, 0))
+    png += chunk(b"IDAT", zlib.compress(bytes(raw), 9))
+    png += chunk(b"IEND", b"")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(png)
+    print(f"  wrote {path} ({len(png) / 1024:.1f} KB)")
+
+
+def main_png() -> int:
+    assets = ROOT / "assets"
+    write_png(256, assets / "icon-256.png")
+    write_png(128, assets / "icon-128.png")
+    write_png(32, assets / "icon-32.png")
+    return 0
+
+
 if __name__ == "__main__":
-    raise SystemExit(main())
+    main()
+    raise SystemExit(main_png())

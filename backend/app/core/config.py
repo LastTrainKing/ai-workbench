@@ -40,6 +40,60 @@ class Settings(BaseSettings):
     debug: bool = True
     api_v1_prefix: str = "/api/v1"
 
+    # ------------------------------------------------------------- desktop --
+    # The Tauri desktop shell loads the UI from this very server, so the window
+    # origin is the API origin: no CORS, no second port, no dev server, and the
+    # UI never runs inside Edge or Chrome.
+    serve_frontend: bool = True
+    frontend_dist: str = ""  # empty => <repo>/frontend/dist
+
+    # --------------------------------------------------------- computer agent --
+    # Everything the agent may touch on this machine. These are the defaults for
+    # a *supervised* agent: it works inside the workspace without asking, and has
+    # to be granted anything beyond that. They are overridable at runtime from
+    # Settings -> Agent Permissions.
+    agent_mode: str = "supervised"  # assist | supervised | autonomous
+    agent_permission_level: int = 1  # 0 observe, 1 workspace, 2 system, 3 full
+    #: Writable roots. The agent workspace is always included.
+    agent_allowed_paths: str = ""
+    #: Always refused, even if a broader allowed path would cover them. Secrets
+    #: and system directories live here.
+    agent_denied_paths: str = ""
+    agent_allowed_domains: str = (
+        "github.com,raw.githubusercontent.com,pypi.org,files.pythonhosted.org,"
+        "registry.npmjs.org,npmjs.com,api.deepseek.com,docs.python.org,"
+        "developer.mozilla.org,stackoverflow.com,localhost,127.0.0.1"
+    )
+    #: Hosts the agent may never contact, whatever the allow-list says.
+    agent_blocked_domains: str = ""
+
+    #: Resource ceilings. A runaway agent must hit a wall, not the user's patience.
+    agent_max_tool_calls: int = 100
+    agent_max_runtime_seconds: int = 1800
+    agent_max_retries: int = 3
+    agent_max_output_bytes: int = 200_000
+    agent_max_files_modified: int = 50
+    agent_max_download_bytes: int = 200_000_000
+
+    #: How long a high-risk confirmation stays open before the run gives up.
+    agent_confirmation_timeout_seconds: int = 180
+
+    @property
+    def agent_allowed_path_list(self) -> list[str]:
+        return [p.strip() for p in self.agent_allowed_paths.split(",") if p.strip()]
+
+    @property
+    def agent_denied_path_list(self) -> list[str]:
+        return [p.strip() for p in self.agent_denied_paths.split(",") if p.strip()]
+
+    @property
+    def agent_allowed_domain_list(self) -> list[str]:
+        return [d.strip().lower() for d in self.agent_allowed_domains.split(",") if d.strip()]
+
+    @property
+    def agent_blocked_domain_list(self) -> list[str]:
+        return [d.strip().lower() for d in self.agent_blocked_domains.split(",") if d.strip()]
+
     # ------------------------------------------------------------- security --
     secret_key: str = Field(default="change-me-in-dotenv-please-32-chars-min")
     access_token_expire_minutes: int = 60 * 24

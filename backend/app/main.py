@@ -6,11 +6,13 @@ import asyncio
 import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from pathlib import Path
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 
 from app.api.v1 import api_router
 from app.core.config import settings
@@ -188,6 +190,8 @@ def create_app() -> FastAPI:
 
     app.include_router(api_router, prefix=settings.api_v1_prefix)
 
+    _mount_frontend(app)
+
     @app.get("/", include_in_schema=False)
     async def root() -> JSONResponse:
         return JSONResponse(
@@ -201,6 +205,57 @@ def create_app() -> FastAPI:
         )
 
     return app
+
+
+def _frontend_dist() -> Path | None:
+    """Locate the built UI, if it exists."""
+    if not settings.serve_frontend:
+        return None
+    if settings.frontend_dist:
+        candidate = Path(settings.frontend_dist)
+    else:
+        candidate = Path(__file__).resolve().parents[2] / "frontend" / "dist"
+    return candidate if (candidate / "index.html").is_file() else None
+
+
+def _mount_frontend(app: FastAPI) -> None:
+    """Serve the built single-page app from the API origin.
+
+    The desktop shell points its window straight at this server, which is what
+    removes the browser, the second port and the whole CORS story: the UI and the
+    API share one origin, so the relative ``/api/v1`` calls in the frontend keep
+    working unchanged.
+
+    Routing order matters. This is registered *after* the API router, and the
+    catch-all skips the prefixes the API owns, so ``/api/...``, ``/docs``,
+    ``/redoc`` and ``/openapi.json`` are never swallowed by the SPA fallback.
+    """
+    dist = _frontend_dist()
+    if dist is None:
+        return
+
+    reserved = ("api/", "docs", "redoc", "openapi.json")
+    assets = dist / "assets"
+    if assets.is_dir():
+        app.mount("/assets", StaticFiles(directory=str(assets)), name="assets")
+
+    index = dist / "index.html"
+
+    @app.get("/{full_path:path}", include_in_schema=False)
+    async def spa(full_path: str):
+        if full_path.startswith(reserved):
+            raise HTTPException(status_code=404, detail="Not found")
+        # A real file wins; anything else is a client-side route.
+        candidate = (dist / full_path).resolve()
+        try:
+            candidate.relative_to(dist.resolve())
+        except ValueError:
+            raise HTTPException(status_code=404, detail="Not found") from None
+        if full_path and candidate.is_file():
+            return FileResponse(candidate)
+        return FileResponse(index)
+
+    logger.info("frontend_served_from_api", extra={"dist": str(dist)})
 
 
 app = create_app()

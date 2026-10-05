@@ -1,0 +1,29 @@
+[package]
+name = "ai-workbench-desktop"
+version = "2.0.0"
+description = "AI Workbench - a private AI computer agent for Windows"
+authors = ["AI Workbench"]
+edition = "2021"
+rust-version = "1.77"
+
+# Desktop-only: a single binary target. Tauri's template also ships a `lib.rs`
+# for mobile targets; that is not needed here and would only add indirection.
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+# Kept deliberately small. There is no HTTP client crate here: the backend is
+# polled over a plain loopback TCP socket (see backend.rs), which avoids pulling
+# a TLS stack into a build that only ever talks to 127.0.0.1.
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+url = "2"
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+panic = "abort"
+strip = true

@@ -1,0 +1,261 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>AI Workbench</title>
+    <!--
+      Startup screen for the desktop shell.
+
+      This file is what the WebView2 window shows while the backend boots. It is
+      replaced by the real application as soon as the API answers a health check,
+      so it exists to do three things and nothing else:
+
+        * show that something is happening (a real phase, a real elapsed time)
+        * show a real error with the log path if startup fails, instead of a blank
+          window or a silent exit
+        * look like the product, so the transition into the app is not jarring
+
+      It is a plain file with no bundler and no network access beyond the shell's
+      events, so it cannot fail to load.
+    -->
+    <style>
+      :root {
+        --bg: #05070d;
+        --panel: #0b111c;
+        --edge: #17243a;
+        --accent: #22d3ee;
+        --accent-dim: #0e7490;
+        --text: #e6edf7;
+        --muted: #7c8ba1;
+        --danger: #f87171;
+      }
+      * { box-sizing: border-box; }
+      html, body {
+        margin: 0; height: 100%;
+        background: var(--bg);
+        color: var(--text);
+        font: 14px/1.5 "Segoe UI Variable Display", "Segoe UI", system-ui, sans-serif;
+        -webkit-font-smoothing: antialiased;
+        overflow: hidden;
+        user-select: none;
+      }
+      /* Ambient light, matching the app's own background treatment. */
+      body::before {
+        content: "";
+        position: fixed; inset: 0;
+        background:
+          radial-gradient(1100px 620px at 50% -10%, rgba(34, 211, 238, .13), transparent 62%),
+          radial-gradient(760px 460px at 12% 108%, rgba(56, 118, 255, .10), transparent 60%);
+        pointer-events: none;
+      }
+      .wrap {
+        position: relative;
+        height: 100%;
+        display: flex; flex-direction: column;
+        align-items: center; justify-content: center;
+        gap: 34px; padding: 48px;
+      }
+      .mark { display: flex; align-items: center; gap: 18px; }
+      .mark svg { width: 62px; height: 62px; filter: drop-shadow(0 0 22px rgba(34,211,238,.35)); }
+      .mark h1 { margin: 0; font-size: 27px; font-weight: 600; letter-spacing: .2px; }
+      .mark p { margin: 3px 0 0; color: var(--muted); font-size: 13px; }
+
+      .card {
+        width: min(660px, 100%);
+        background: linear-gradient(180deg, rgba(17,26,43,.92), rgba(9,14,24,.92));
+        border: 1px solid var(--edge);
+        border-radius: 16px;
+        padding: 26px 28px;
+        box-shadow: 0 30px 70px -30px rgba(0,0,0,.9), inset 0 1px 0 rgba(255,255,255,.04);
+        backdrop-filter: blur(12px);
+      }
+      .phase { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; }
+      .phase .label { font-size: 15px; font-weight: 500; }
+      .phase .elapsed { color: var(--muted); font-variant-numeric: tabular-nums; font-size: 12px; }
+
+      .track { margin-top: 16px; height: 4px; border-radius: 999px; background: #101a2b; overflow: hidden; }
+      .track > i {
+        display: block; height: 100%; width: 30%;
+        background: linear-gradient(90deg, var(--accent-dim), var(--accent));
+        border-radius: 999px;
+        animation: sweep 1.5s ease-in-out infinite;
+      }
+      @keyframes sweep {
+        0%   { transform: translateX(-110%); }
+        100% { transform: translateX(360%); }
+      }
+
+      ol.steps { margin: 22px 0 0; padding: 0; list-style: none; display: grid; gap: 9px; }
+      ol.steps li {
+        display: flex; align-items: center; gap: 10px;
+        color: var(--muted); font-size: 13px;
+        transition: color .2s ease;
+      }
+      ol.steps li .dot {
+        width: 7px; height: 7px; border-radius: 50%;
+        background: #23324a; flex: none;
+        transition: background .2s ease, box-shadow .2s ease;
+      }
+      ol.steps li.active { color: var(--text); }
+      ol.steps li.active .dot { background: var(--accent); box-shadow: 0 0 0 4px rgba(34,211,238,.15); }
+      ol.steps li.done { color: #9fb3c8; }
+      ol.steps li.done .dot { background: #34d399; }
+
+      .error { display: none; }
+      .error.show { display: block; }
+      .error h2 { margin: 0 0 8px; font-size: 16px; color: var(--danger); }
+      .error pre {
+        margin: 14px 0 0; padding: 13px 15px;
+        background: #060a12; border: 1px solid #23324a; border-radius: 10px;
+        color: #b9c7da; font: 12px/1.6 "Cascadia Mono", Consolas, monospace;
+        white-space: pre-wrap; word-break: break-word; max-height: 190px; overflow: auto;
+      }
+      .actions { margin-top: 18px; display: flex; gap: 10px; }
+      button {
+        font: inherit; font-size: 13px; cursor: pointer;
+        padding: 9px 17px; border-radius: 9px;
+        border: 1px solid var(--edge); background: #111a2b; color: var(--text);
+        transition: border-color .15s ease, background .15s ease;
+      }
+      button:hover { border-color: #2b405f; background: #16223a; }
+      button.primary { background: var(--accent-dim); border-color: transparent; color: #04121a; font-weight: 600; }
+      button.primary:hover { background: #0d8fa8; }
+      .hint { margin-top: 14px; color: var(--muted); font-size: 12px; }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <div class="mark">
+        <svg viewBox="0 0 64 64" fill="none" aria-hidden="true">
+          <rect x="3" y="3" width="58" height="58" rx="15" stroke="#22d3ee" stroke-opacity=".55" stroke-width="2"/>
+          <path d="M32 18 L19 45 M32 18 L45 45 M19 45 L45 45" stroke="#22d3ee" stroke-width="2.2" stroke-linecap="round"/>
+          <circle cx="32" cy="18" r="6" fill="#8b5cf6"/>
+          <circle cx="32" cy="18" r="2.4" fill="#e6edf7"/>
+          <circle cx="19" cy="45" r="5" fill="#8b5cf6"/>
+          <circle cx="45" cy="45" r="5" fill="#8b5cf6"/>
+        </svg>
+        <div>
+          <h1>AI Workbench</h1>
+          <p>Private AI computer agent</p>
+        </div>
+      </div>
+
+      <div class="card" id="card">
+        <div id="progress">
+          <div class="phase">
+            <span class="label" id="phaseLabel">Starting</span>
+            <span class="elapsed" id="elapsed">0s</span>
+          </div>
+          <div class="track"><i></i></div>
+          <ol class="steps" id="steps">
+            <li data-phase="launching"><span class="dot"></span>Starting PostgreSQL, Redis and Qdrant</li>
+            <li data-phase="waiting"><span class="dot"></span>Waiting for the API to report healthy</li>
+            <li data-phase="ready"><span class="dot"></span>Opening AI Workbench</li>
+          </ol>
+        </div>
+
+        <div class="error" id="error">
+          <h2 id="errorTitle">Startup failed</h2>
+          <div id="errorDetail" style="color: var(--muted)"></div>
+          <pre id="errorLog"></pre>
+          <div class="actions">
+            <button class="primary" id="retry">Try again</button>
+            <button id="logs">Open log folder</button>
+          </div>
+          <div class="hint">
+            Full sequence: <code>.runtime\logs\startup.log</code> &nbsp;·&nbsp;
+            errors: <code>.runtime\logs\startup-error.log</code>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      // The shell injects a narrow API here (see tauri.conf.json
+      // `withGlobalTauri`). Only event listening and the four lifecycle
+      // commands are used — this page never asks the OS to run anything.
+      const api = window.__TAURI__ || {};
+      const started = Date.now();
+
+      const els = {
+        phaseLabel: document.getElementById("phaseLabel"),
+        elapsed: document.getElementById("elapsed"),
+        steps: Array.from(document.querySelectorAll("#steps li")),
+        progress: document.getElementById("progress"),
+        error: document.getElementById("error"),
+        errorTitle: document.getElementById("errorTitle"),
+        errorDetail: document.getElementById("errorDetail"),
+        errorLog: document.getElementById("errorLog"),
+        retry: document.getElementById("retry"),
+        logs: document.getElementById("logs"),
+      };
+
+      setInterval(() => {
+        els.elapsed.textContent = Math.round((Date.now() - started) / 1000) + "s";
+      }, 250);
+
+      function markSteps(phase) {
+        const order = ["launching", "waiting", "ready"];
+        const at = order.indexOf(phase);
+        els.steps.forEach((li) => {
+          const i = order.indexOf(li.dataset.phase);
+          li.classList.toggle("active", i === at);
+          li.classList.toggle("done", at > -1 && i < at);
+        });
+      }
+
+      function showProgress(status) {
+        els.progress.style.display = "";
+        els.error.classList.remove("show");
+        els.phaseLabel.textContent = status.message || "Starting";
+        markSteps(status.phase);
+      }
+
+      function showError(status) {
+        els.progress.style.display = "none";
+        els.error.classList.add("show");
+        els.errorTitle.textContent = status.message || "Startup failed";
+        els.errorDetail.textContent = status.detail ? "" : "No further detail was reported.";
+        els.errorLog.textContent = status.detail || "";
+      }
+
+      function apply(status) {
+        if (!status) return;
+        if (status.ok && status.finished) {
+          els.phaseLabel.textContent = "Ready";
+          markSteps("ready");
+          return;
+        }
+        if (status.phase === "failed") showError(status);
+        else showProgress(status);
+      }
+
+      if (api.event && api.event.listen) {
+        api.event.listen("startup://status", (event) => apply(event.payload));
+      }
+
+      // Pull the current state once: the first events may have fired before this
+      // page finished loading.
+      if (api.core && api.core.invoke) {
+        api.core.invoke("startup_status").then(apply).catch(() => {});
+      }
+
+      els.retry.addEventListener("click", () => {
+        els.error.classList.remove("show");
+        els.progress.style.display = "";
+        els.phaseLabel.textContent = "Restarting...";
+        markSteps("launching");
+        if (api.core && api.core.invoke) {
+          api.core.invoke("restart_backend").catch(() => {});
+        }
+      });
+
+      els.logs.addEventListener("click", () => {
+        if (api.core && api.core.invoke) {
+          api.core.invoke("open_log_folder").catch(() => {});
+        }
+      });
+    </script>
+  </body>
+</html>

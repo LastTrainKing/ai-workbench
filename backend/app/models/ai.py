@@ -211,3 +211,58 @@ class AIRunSource(Base):
     snippet: Mapped[str] = mapped_column(Text, nullable=False, default="")
 
     ai_run: Mapped[AIRun] = relationship(back_populates="sources")
+
+
+class ToolAuditLog(Base, UUIDPrimaryKeyMixin):
+    """One row per computer-tool invocation, whether it ran or not.
+
+    Separate from ``tool_calls`` on purpose. ``tool_calls`` records what the
+    *agent* did as part of a run and is written after the fact. This table
+    records what the *system* decided and what the machine actually experienced:
+    the permission verdict, the risk classification, the resolved target, the
+    exit code and the truncation flag.
+
+    A denied or declined invocation is the most important row in the table, so it
+    is written too — an audit trail that only contains the operations that were
+    allowed cannot answer "what did it try to do?".
+    """
+
+    __tablename__ = "tool_audit_log"
+    __table_args__ = (
+        Index("ix_tool_audit_run_step", "ai_run_id", "step_index"),
+        Index("ix_tool_audit_tool_created", "tool_name", "created_at"),
+    )
+
+    ai_run_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("ai_runs.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    step_index: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    tool_name: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    category: Mapped[str] = mapped_column(String(32), nullable=False, default="general")
+
+    #: allow | confirm | deny
+    decision: Mapped[str] = mapped_column(String(16), nullable=False, default="allow")
+    reason: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    #: low | medium | high | critical
+    risk_level: Mapped[str] = mapped_column(String(16), nullable=False, default="low")
+    permission_level: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+
+    #: The concrete thing acted on — a path, a command, a host. Kept so the log
+    #: answers "which file?" without having to parse the arguments back out.
+    target: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    arguments: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
+
+    #: SUCCEEDED | FAILED | DENIED | DECLINED | TIMEOUT | CANCELLED
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="SUCCEEDED")
+    exit_code: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    output_bytes: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    truncated: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    error_message: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    latency_ms: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+    #: Set when the user was asked and answered, so "who allowed this?" is answerable.
+    confirmed_by_user: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), index=True
+    )

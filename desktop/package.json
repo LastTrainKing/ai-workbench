@@ -1,0 +1,16 @@
+{
+  "name": "ai-workbench-desktop",
+  "private": true,
+  "version": "2.0.0",
+  "description": "AI Workbench desktop shell (Tauri). Hosts the existing React UI in a native WebView2 window and starts the existing FastAPI backend.",
+  "scripts": {
+    "tauri": "tauri",
+    "dev": "tauri dev",
+    "build": "tauri build",
+    "build:debug": "tauri build --debug",
+    "info": "tauri info"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.12.1"
+  }
+}
