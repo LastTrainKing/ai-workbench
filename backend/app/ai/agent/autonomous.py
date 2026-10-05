@@ -510,7 +510,22 @@ class AutonomousAgent:
             else result.data
         )
 
-        if diagnostic:
+        # Some tools succeed at answering "no". `file_exists` returns ok=True with
+        # `exists: false` — the call worked, the file is not there. Treating ok as a
+        # pass let the agent "verify" a step that had produced nothing: it called
+        # file_exists, got a truthful "missing", and the step was marked done.
+        #
+        # So for the tools whose answer *is* the evidence, the answer is read.
+        answer = result.data if isinstance(result.data, dict) else {}
+        answered_no = False
+        if request.name == "file_exists":
+            answered_no = not bool(answer.get("exists"))
+        elif request.name in ("file_read", "document_read") and not result.ok:
+            answered_no = True
+
+        if answered_no:
+            passed = False
+        elif diagnostic:
             # The step set out to observe something. It succeeded if it observed
             # it, whatever the exit code says about the state of the project.
             passed = produced_evidence or result.ok
@@ -528,6 +543,9 @@ class AutonomousAgent:
             "error": result.error,
             "passed": passed,
             "diagnostic": diagnostic,
+            # Recorded so "it said done but nothing exists" is answerable from the
+            # trace rather than requiring a re-run.
+            "answered_no": answered_no,
         }
         self.controller.emit(
             "verification",
