@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import Any
 
 from app.ai.agent.tools import Tool, ToolContext
+from app.ai.tools.builtin.documents import DocumentReadTool, DocumentWriteTool
 from app.ai.types import ToolResult, ToolSpec
 from app.core.errors import ValidationError
 
@@ -778,6 +779,10 @@ def build_filesystem_tools() -> list[Tool]:
         DirectoryCreateTool(),
         DirectoryDeleteTool(),
         FileSearchTool(),
+        # Document generation belongs with the file tools: same permission
+        # checks, same workspace sandbox, same audit trail.
+        DocumentWriteTool(),
+        DocumentReadTool(),
     ]
 
 
