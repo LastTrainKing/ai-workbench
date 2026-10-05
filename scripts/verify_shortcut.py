@@ -1,13 +1,12 @@
 """Independent verification of the desktop shortcut.
 
-Reads the .lnk binary directly — no COM, no Shell API — so the result does not
-depend on the same code path that created the file. The assertions encode the
-requirement: the shortcut must launch the hidden host running the silent
-launcher, not a console window, not the file manager, and not the batch file
-directly.
+Reads the .lnk bytes directly — no COM, no Shell API — so the result does not
+depend on the same code path that created the file.
 
-Also prints the parsed structure so the target, arguments, working directory and
-icon can be read by eye.
+The assertions encode the requirement that caused a real complaint: double-
+clicking the shortcut must open the desktop application, never a browser. The
+forbidden targets are assembled at runtime so this file never contains a
+shell-executable name that could be mistaken for something to run.
 """
 
 from __future__ import annotations
@@ -17,14 +16,12 @@ from pathlib import Path
 
 LINK = Path(r"C:\Users\user\Desktop\AI Workbench.lnk")
 
-# Assembled at runtime so this file never contains a shell-executable name that
-# could be mistaken for something to run.
-HIDDEN_HOST = "w" + "script" + ".exe"
-SHELL_HOST = "c" + "md" + ".exe"
-FILE_MANAGER = "explorer" + ".exe"
-
-HAS_IDLIST, HAS_LINK_INFO, HAS_NAME = 0x1, 0x2, 0x4
-HAS_REL_PATH, HAS_WORKDIR, HAS_ARGS, HAS_ICON, IS_UNICODE = 0x8, 0x10, 0x20, 0x40, 0x80
+DESKTOP_EXE = "ai-workbench-desktop.exe"
+# Assembled from fragments on purpose.
+SCRIPT_HOST = "w" + "script"
+VBS_LAUNCHER = "start-hidden." + "vbs"
+DEV_LAUNCHER = "start" + ".bat"
+BROWSER_LAUNCHER = "start " + '"" "http'
 
 
 def parse(path: Path) -> dict[str, object]:
@@ -32,19 +29,18 @@ def parse(path: Path) -> dict[str, object]:
     flags = struct.unpack_from("<I", data, 20)[0]
     offset = 76  # ShellLinkHeader is fixed at 76 bytes
 
-    if flags & HAS_IDLIST:
-        idlist_size = struct.unpack_from("<H", data, offset)[0]
-        offset += 2 + idlist_size
+    if flags & 0x1:  # HasLinkTargetIDList
+        offset += 2 + struct.unpack_from("<H", data, offset)[0]
 
-    link_info: dict[str, object] = {}
-    if flags & HAS_LINK_INFO:
+    target = ""
+    if flags & 0x2:  # HasLinkInfo
         size = struct.unpack_from("<I", data, offset)[0]
         li_flags = struct.unpack_from("<I", data, offset + 8)[0]
         if li_flags & 0x1:
-            _, base_off = struct.unpack_from("<II", data, offset + 12)
-            start = offset + base_off
+            _, base = struct.unpack_from("<II", data, offset + 12)
+            start = offset + base
             end = data.index(b"\x00", start)
-            link_info["local_base_path"] = data[start:end].decode("mbcs", errors="replace")
+            target = data[start:end].decode("mbcs", errors="replace")
         offset += size
 
     strings: list[str] = []
@@ -53,65 +49,40 @@ def parse(path: Path) -> dict[str, object]:
         if count == 0:
             break
         offset += 2
-        raw = data[offset : offset + count * 2]
-        strings.append(raw.decode("utf-16-le", errors="replace").rstrip("\x00"))
+        strings.append(
+            data[offset : offset + count * 2].decode("utf-16-le", errors="replace").rstrip("\x00")
+        )
         offset += count * 2
 
-    labels = []
-    if flags & HAS_NAME:
-        labels.append("NAME_STRING")
-    if flags & HAS_REL_PATH:
-        labels.append("RELATIVE_PATH")
-    if flags & HAS_WORKDIR:
-        labels.append("WORKING_DIR")
-    if flags & HAS_ARGS:
-        labels.append("COMMAND_LINE_ARGUMENTS")
-    if flags & HAS_ICON:
-        labels.append("ICON_LOCATION")
-
-    return {
-        "data": data,
-        "flags": flags,
-        "link_info": link_info,
-        "strings": strings,
-        "labels": labels,
-        "is_unicode": bool(flags & IS_UNICODE),
-    }
+    return {"target": target, "strings": strings, "size": len(data)}
 
 
 def main() -> int:
+    if not LINK.is_file():
+        print(f"  [FAIL] the shortcut does not exist: {LINK}")
+        return 1
+
     parsed = parse(LINK)
-    data: bytes = parsed["data"]  # type: ignore[assignment]
+    target: str = parsed["target"]  # type: ignore[assignment]
     strings: list[str] = parsed["strings"]  # type: ignore[assignment]
-    labels: list[str] = parsed["labels"]  # type: ignore[assignment]
-    link_info: dict[str, object] = parsed["link_info"]  # type: ignore[assignment]
-    flags: int = parsed["flags"]  # type: ignore[assignment]
+    blob = " ".join([target, *strings]).lower()
 
-    print(f"  file size   : {len(data)} bytes")
-    print(f"  flags       : {flags:#010x}")
-    print(f"  unicode     : {parsed['is_unicode']}")
-    print(f"  LocalBasePath: {link_info.get('local_base_path', '(none)')}")
-    print("  StringData  :")
-    for label, value in zip(labels, strings, strict=False):
-        print(f"    {label:24} = {value}")
-
-    joined = "\n".join(strings) + "\n" + str(link_info.get("local_base_path", ""))
-    lowered = joined.lower()
+    print(f"  file size : {parsed['size']} bytes")
+    print(f"  target    : {target}")
+    for index, value in enumerate(strings):
+        print(f"  string[{index}] : {value}")
 
     checks = [
-        (f"target is the hidden host ({HIDDEN_HOST})", HIDDEN_HOST in lowered),
-        ("runs the silent launcher", "start-hidden.vbs" in lowered),
-        ("working directory is the project root", "ai-workbench" in lowered),
-        ("icon is the project icon", "ai-workbench.ico" in lowered),
-        ("does NOT open a console window", SHELL_HOST not in lowered),
-        ("does NOT open the project folder", FILE_MANAGER not in lowered),
-        ("does NOT run the batch file directly", "start.bat" not in lowered),
-        ("carries a target id list", bool(flags & HAS_IDLIST)),
-        ("carries an absolute target path", "local_base_path" in link_info),
+        (f"target is {DESKTOP_EXE}", DESKTOP_EXE.lower() in target.lower()),
+        ("no script host in the chain", SCRIPT_HOST not in blob),
+        ("no .vbs launcher", VBS_LAUNCHER not in blob),
+        ("does not run the dev launcher", DEV_LAUNCHER not in blob),
+        ("does not open a browser", BROWSER_LAUNCHER not in blob and "http://" not in blob),
+        ("working directory is the project root", "ai-workbench" in blob),
+        ("carries the project icon", "ai-workbench.ico" in blob),
     ]
 
     print()
-    print("=== assertions ===")
     failed = 0
     for label, ok in checks:
         if not ok:

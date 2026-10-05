@@ -109,24 +109,67 @@ impl BackendState {
         *self.status.lock().unwrap() = status;
     }
 
-    /// Terminate the launcher process tree.
+    /// Shut the backend down, so closing the window really closes the app.
     ///
-    /// `taskkill /T` is used on purpose: the launcher spawns PowerShell which
-    /// spawns PostgreSQL, Redis, Qdrant and Python. Killing only the direct child
-    /// would leave all of them running.
+    /// Two things have to happen, and the first alone is not enough:
+    ///
+    /// 1. the launcher process tree is killed — it may still be starting services;
+    /// 2. `stop-desktop.bat` is run — the services themselves are started
+    ///    *detached*, so they are not in the launcher's process tree and would
+    ///    otherwise keep running after the window has gone.
+    ///
+    /// Leaving PostgreSQL, Redis, Qdrant and the API alive behind a closed window
+    /// is not what a desktop application should do.
     pub fn stop(&self) {
         self.cancelled.store(true, Ordering::SeqCst);
-        let mut guard = self.child.lock().unwrap();
-        if let Some(child) = guard.as_mut() {
-            let pid = child.id();
-            let _ = Command::new("taskkill")
-                .args(["/PID", &pid.to_string(), "/T", "/F"])
-                .creation_flags(CREATE_NO_WINDOW)
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .status();
+
+        {
+            let mut guard = self.child.lock().unwrap();
+            if let Some(child) = guard.as_mut() {
+                let pid = child.id();
+                let _ = Command::new("taskkill")
+                    .args(["/PID", &pid.to_string(), "/T", "/F"])
+                    .creation_flags(CREATE_NO_WINDOW)
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .status();
+            }
+            *guard = None;
         }
-        *guard = None;
+
+        // Stop the detached services. Bounded: the window is already closing and
+        // a hung shutdown must not leave the process hanging around.
+        let Some(root) = self.project_root() else { return };
+        let script = root.join("scripts").join("stop-desktop.bat");
+        if !script.is_file() {
+            return;
+        }
+
+        let spawned = Command::new("cmd")
+            .args(["/C", &script.to_string_lossy()])
+            .current_dir(&root)
+            .creation_flags(CREATE_NO_WINDOW)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .stdin(Stdio::null())
+            .spawn();
+
+        match spawned {
+            Ok(mut child) => {
+                let deadline = Instant::now() + Duration::from_secs(45);
+                while Instant::now() < deadline {
+                    match child.try_wait() {
+                        Ok(Some(_)) => break,
+                        Ok(None) => std::thread::sleep(Duration::from_millis(300)),
+                        Err(_) => break,
+                    }
+                }
+                let _ = child.kill();
+            }
+            Err(exc) => {
+                eprintln!("ai-workbench: the shutdown script could not run: {exc}");
+            }
+        }
     }
 }
 

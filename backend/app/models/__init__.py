@@ -4,6 +4,13 @@ Importing this package makes every mapper available to Alembic autogenerate and
 to ``Base.metadata.create_all`` in tests.
 """
 
+from app.models.context import (
+    ContextSnapshot,
+    MemoryCandidate,
+    MemoryEntry,
+    UserPreference,
+    UserProfile,
+)
 from app.models.ai import (
     AgentRun,
     AIRun,
@@ -54,6 +61,11 @@ __all__ = [  # noqa: RUF022 - grouped by domain layer, which is more readable he
     "PromptVersion",
     "AIRun",
     "AgentRun",
+    "ContextSnapshot",
+    "MemoryCandidate",
+    "MemoryEntry",
+    "UserPreference",
+    "UserProfile",
     "ToolAuditLog",
     "ToolCall",
     "AIRunSource",

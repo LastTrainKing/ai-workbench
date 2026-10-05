@@ -23,12 +23,14 @@ set "ROOT=%CD%"
 set "PS=powershell -ExecutionPolicy Bypass -NoProfile -File"
 set "HIDDEN=0"
 set "FULL=0"
+set "OPENBROWSER=0"
 set "EXITCODE=0"
 
 :parse
 if "%~1"=="" goto parsed
 if /i "%~1"=="--full" set "FULL=1"
 if /i "%~1"=="--hidden" set "HIDDEN=1"
+if /i "%~1"=="--browser" set "OPENBROWSER=1"
 shift
 goto parse
 :parsed
@@ -69,7 +71,7 @@ if "%FULL%"=="1" (
     echo   Web UI   http://127.0.0.1:5173
     echo   API      http://127.0.0.1:8000/docs
     echo.
-    start "" "http://127.0.0.1:5173"
+    if "%OPENBROWSER%"=="1" start "" "http://127.0.0.1:5173"
 )
 
 :theend

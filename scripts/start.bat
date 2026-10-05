@@ -19,9 +19,12 @@ REM  A service that does not become ready stops the run with a non-zero exit
 REM  code: the browser is not opened and logs\startup-error.log is written.
 REM
 REM  Usage:
-REM    scripts\start.bat              interactive (visible console)
-REM    scripts\start.bat --hidden     launched by the desktop shortcut
-REM    scripts\start.bat --no-browser start without opening a browser
+REM    scripts\start.bat              interactive (visible console, no browser)
+REM    scripts\start.bat --hidden     no console window
+REM    scripts\start.bat --browser    also open a browser at the dev server
+REM
+REM  For the desktop application, launch ai-workbench-desktop.exe instead: it
+REM  starts its own backend and never opens a browser.
 REM ===========================================================================
 setlocal EnableExtensions
 cd /d "%~dp0\.."
@@ -30,7 +33,9 @@ set "LOGSDIR=%ROOT%\.runtime\logs"
 set "STARTUPLOG=%LOGSDIR%\startup.log"
 set "ERRORLOG=%LOGSDIR%\startup-error.log"
 set "HIDDEN=0"
-set "OPENBROWSER=1"
+REM A browser is opt-in. The desktop application is the normal way to use
+REM this product; opening Edge from a launcher is what users complained about.
+set "OPENBROWSER=0"
 set "EXITCODE=0"
 set "PS=powershell -ExecutionPolicy Bypass -NoProfile -File"
 
@@ -39,6 +44,7 @@ if not exist "%LOGSDIR%" mkdir "%LOGSDIR%" >nul 2>&1
 :parse
 if "%~1"=="" goto parsed
 if /i "%~1"=="--hidden" set "HIDDEN=1"
+if /i "%~1"=="--browser" set "OPENBROWSER=1"
 if /i "%~1"=="--no-browser" set "OPENBROWSER=0"
 shift
 goto parse

@@ -109,6 +109,8 @@ def test_all_models_are_registered_in_metadata() -> None:
         "task_dependencies", "task_tags", "task_documents", "notes", "prompts",
         "prompt_versions", "ai_runs", "agent_runs", "tool_calls", "ai_run_sources",
         "tool_audit_log",
+        "user_profile", "user_preferences", "memory_entries",
+        "memory_candidates", "context_snapshots",
         "jobs", "activity_events",
     }
     assert set(Base.metadata.tables) == expected_tables
