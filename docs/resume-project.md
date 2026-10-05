@@ -1,5 +1,13 @@
 # Resume project description
 
+<!-- scope -->
+> **Scope: the platform.** The original write-up, covering the knowledge pipeline, RAG,
+> the task system and the backend engineering.
+>
+> For the agent, the personal context layer, document generation and the desktop
+> delivery, see [`resume.md`](resume.md). Neither supersedes the other.
+
+
 Copy-ready text for a software-engineering internship application. Three lengths are
 provided: a one-line entry, a standard block, and a detailed version for a
 project-experience section.

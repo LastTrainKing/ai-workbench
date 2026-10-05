@@ -690,7 +690,7 @@ ai-workbench/
 ├── docker-compose.yml
 ├── start.bat / stop.bat / start.sh / stop.sh
 ├── .env.example
-└── FINAL_CHECKLIST.md · PROJECT_DELIVERY.md
+└── DELIVERY.md
 ```
 
 ---

@@ -1,230 +1,186 @@
-# AI Workbench 1.1.0 — 交付包说明
+# Delivery — AI Workbench 2.0.0
 
-这是一个**源码交付包**，用于在另一台 Windows 电脑上继续部署与开发。
-它不是当前机器的运行环境快照：数据库数据、上传文件、向量库数据、虚拟环境、
-依赖缓存与日志均不在包内。
-
----
-
-## 一、包内包含
-
-| 目录 / 文件 | 内容 |
-|---|---|
-| `backend/` | FastAPI 后端：`app/`（api · core · domain · models · repositories · services · ai · infrastructure · worker）、`alembic/` 迁移、`tests/` 测试、`requirements*.txt`、`Dockerfile`、`pyproject.toml` |
-| `frontend/` | React 18 + TypeScript + Vite + Tailwind 前端源码、配置、测试、`Dockerfile`、`nginx.conf` |
-| `worker/` | 独立 Worker 启动器与 Dockerfile |
-| `scripts/` | 运行时下载、基础设施启停、开发进程管理、端到端验收、DeepSeek 验证、截图采集 |
-| `docs/` | 架构 / 数据库 / API / AI / RAG / Agent / 部署 / 测试 / 安全 / 开发 文档，DeepSeek 配置说明，论文支撑包（10 章），简历描述，面试题 |
-| `samples/` | 4 份示例文档（含 PDF）与 PDF 生成脚本 |
-| `screenshots/` | 17 张真实运行截图 |
-| 根目录 | `README.md`、`CHANGELOG.md`、`CONTRIBUTING.md`、`FINAL_CHECKLIST.md`、`PROJECT_DELIVERY.md`、`LICENSE`、`.env.example`、`.gitignore`、`.dockerignore`、`docker-compose.yml`、`start.bat` / `stop.bat` / `start.sh` / `stop.sh` |
-
-**不含**（有意排除）：`node_modules/`、`.venv/`、`.runtime/`（数据库与上传文件）、
-`vendor/runtime/`（约 350 MB 运行时二进制）、`dist/`、各类缓存、日志、
-以及 **`.env`（其中含真实 API Key）**。
+The single authoritative delivery document. Two older files described delivery
+(`PROJECT_DELIVERY.md`, `FINAL_CHECKLIST.md`) and claimed versions 1.0.0 and 1.1.0, which
+contradicted each other and the application. They are kept under `docs/archive/` as
+historical records rather than deleted, because what the system *was* is worth keeping.
 
 ---
 
-## 二、在新电脑上部署
+## 1. What ships
 
-### 1. 前置条件
+| Artifact | Path | Size |
+|---|---|---|
+| Desktop application | `desktop/src-tauri/target/release/ai-workbench-desktop.exe` | 3,556,352 B |
+| Windows installer | `desktop/src-tauri/target/release/bundle/nsis/AI Workbench_2.0.0_x64-setup.exe` | 1,123,285 B |
+| Source archive | `AI-Workbench-2.0.0-final.zip` | 5.5 MB, 373 entries |
+| SHA256 | `969cee258a694a6757aacc22e0e8791267e1997ee03ee06d0486219265950986` | |
 
-- Windows 10/11 x64
-- Python 3.11+（推荐 3.13）
-- Node.js 18+（推荐 22）与 npm
-- 约 2 GB 可用磁盘（含自动下载的运行时）
+The archive contains the backend, the frontend, the Tauri shell, the scripts, the
+documentation and the tests. It contains no build output, no virtual environment, no
+runtime data, no user data and no credentials.
 
-### 2. 解压并准备
+---
 
-```bat
-:: 解压后进入目录
-cd ai-workbench
+## 2. Running it
 
-:: Python 虚拟环境
-python -m venv .venv
-.venv\Scripts\python.exe -m pip install -r backend\requirements-dev.txt
+### The desktop application
 
-:: 前端依赖
-cd frontend && npm install && cd ..
-```
+Double-click `AI Workbench.lnk` on the desktop. The application starts PostgreSQL, Redis,
+Qdrant and the API itself, then opens its own window.
 
-> 如果 `pip` 官方源不可用，追加 `-i https://mirrors.aliyun.com/pypi/simple`。
-> 如果 `npm` 官方源不可用，追加 `--registry=https://registry.npmmirror.com`。
+There is no browser, no address bar, no console window and no port 5173.
 
-### 3. 配置密钥
+If the shortcut is missing, recreate it:
 
-```bat
-copy .env.example .env
-```
-
-编辑 `.env`，至少填写：
-
-```ini
-SECRET_KEY=<随便一串长随机字符串>
-DEEPSEEK_API_KEY=sk-你的密钥
-```
-
-完整说明见 `docs/deepseek-setup.md`。
-
-### 4. 一键启动
-
-双击桌面快捷方式 `AI Workbench.lnk`，或运行：
-
-```bat
-scripts\start.bat
-```
-
-**快捷方式的完整链路**（全程无黑窗口）：
-
-```
-AI Workbench.lnk
-  → wscript.exe  scripts\start-hidden.vbs
-      → scripts\start.bat --hidden
-          → PostgreSQL / Redis / Qdrant / API / 前端
-              → 前端真正返回 HTTP 200 后自动打开浏览器
-```
-
-脚本会：检查依赖 → 首次自动下载 PostgreSQL / Redis / Qdrant 到 `vendor/`
-→ 以项目级进程启动它们 → 启动 API 与前端 → **确认前端真的可访问后打开浏览器**。
-
-首次启动还会在桌面自动创建该快捷方式。若缺失，手动创建：
-
-```bat
+```powershell
 powershell -ExecutionPolicy Bypass -File scripts\create-shortcut.ps1
 ```
 
-**就绪判定是真实探测，不是端口监听**：
-
-| 服务 | 探测方式 |
-|---|---|
-| PostgreSQL | `pg_isready` + `psql "SELECT 1"` |
-| Redis | `redis-cli ping` → `PONG` |
-| Qdrant | HTTP `/healthz` → 200 |
-| API | HTTP `/api/v1/health` → 200 |
-| 前端 | HTTP `/` → 200 |
-
-严格串行（启动 → 就绪 → 初始化 → 复核）；超时即 `FAILED` 并非零退出，
-浏览器不会打开；重复点击由启动锁串行化，不会启动第二份实例。
-全过程记录在 `.runtime\logs\startup.log`，失败原因记录在 `.runtime\logs\startup-error.log`。
-
-首次启动会下载约 350 MB 运行时，需要几分钟。**不需要** Docker，也**不会**修改系统设置。
-
-### 5. 访问
-
-| 服务 | 地址 |
-|---|---|
-| Web UI | <http://127.0.0.1:5173> |
-| API 文档 | <http://127.0.0.1:8000/docs> |
-| Qdrant 控制台 | <http://127.0.0.1:6333/dashboard> |
-
-默认账号：**`demo` / `demo1234`**
-
-### 6. 停止 / 重启
-
-```bat
-scripts\stop.bat              :: 停止全部（数据保留）
-scripts\stop.bat --app-only   :: 只停应用，保留数据库
-scripts\restart.bat           :: 只重启应用
-scripts\restart.bat --full    :: 连同基础设施一起重启
-```
-
-数据库、向量库与上传文件在停止和重启过程中**不会被删除或清空**。
-
----
-
-## 三、Docker 部署（可选，未在本机验证）
+The script fails loudly if the executable has not been built, and refuses to fall back to
+a browser launcher. Build it with:
 
 ```bash
-cp .env.example .env      # 设置 SECRET_KEY
-docker compose up -d
+cd desktop
+npm install
+npm run tauri build
 ```
 
-`docker-compose.yml` 与三个 Dockerfile 均已提供并经过审阅，但开发机没有 Docker
-且镜像仓库不可达，因此**未构建、未启动**。请在有 Docker 的机器上自行验证。
-详见文件顶部的警告与 `docs/deployment.md`。
+### Closing it
 
----
+Closing the window stops the backend. This is guaranteed at the operating-system level by
+a Windows job object (`KILL_ON_JOB_CLOSE`), so a crash or a force-kill cannot leave
+services running. Shutdown never deletes data.
 
-## 四、验证部署是否成功
+### From source
 
-```bat
-:: 1. 依赖连通性
-backend 目录下： ..\.venv\Scripts\python.exe -m app.cli check
+```bash
+scripts\start.bat              # infrastructure, or: scripts\start.bat --hidden
 
-:: 2. 端到端验收（75 项断言）
-python scripts\smoke_test.py
+cd backend
+..\.venv\Scripts\python.exe -m app.cli serve
 
-:: 3. DeepSeek 真实链路验证（60 项检查，需要 Key）
-.venv\Scripts\python.exe scripts\verify_deepseek.py
-
-:: 4. 后端测试（331 项，含覆盖率）
-cd backend && ..\.venv\Scripts\python.exe -m pytest tests --cov=app
-
-:: 5. 纯单元测试（无需任何服务）
-cd backend && ..\.venv\Scripts\python.exe -m pytest tests/unit
-
-:: 6. 前端
-cd frontend && npm run typecheck && npm run test && npm run build
+cd frontend
+npm run dev                    # development only
 ```
 
 ---
 
-## 五、关于 API Provider
+## 3. What was verified, and how
 
-默认使用 **DeepSeek V4.1 Flash**（`deepseek-flash`）。可在 **设置 → AI Provider**
-中随时切换为 OpenAI 兼容端点、Ollama 本地模型或内置 Offline 引擎，切换后下一次
-AI 调用即生效，无需重启。
+Every claim below has a command behind it. The scripts live in `scripts/`, run against a
+live server, and print PASS or FAIL with the evidence that decided it.
 
-未配置任何 Key 时系统不会崩溃：会自动降级到 Offline 引擎，并在界面、健康检查与
-每条 AI 执行记录中如实标注，不会让人误以为是真实大模型在回答。
-
-详见 `docs/deepseek-setup.md`。
+| Claim | Script | Result |
+|---|---|---|
+| Shortcut opens a native window, not a browser | `verify-desktop-entry.ps1` | 12/12, three exit scenarios |
+| The `.lnk` points at the executable | `verify_shortcut.py` | 7/7 |
+| The agent workbench is wired to the API | `verify-agent-ui.mjs` | 26/26 |
+| The context screens are wired to the API | `verify-context-ui.mjs` | 22/22 |
+| The window behaves like an application | `verify-shell-behaviour.mjs` | 21/21 |
+| Keyboard navigation works | `verify-focus-grid.mjs` | 17/17 |
+| The splash reports per-service readiness | `verify-splash.mjs` | 10/10 |
+| Every old route survives the sidebar change | `verify-sidebar.mjs` | 10/10 |
+| Every context endpoint behaves | `test_context_api.py` | 31/31 |
+| The memory loop is pure | `test_memory_loop.py` | 18/18 |
+| Personalisation changes the output | `test_personalisation.py` | 8/8 |
+| Backend unit tests | `pytest tests/unit` | all pass |
+| Frontend tests | `npm run test` | 114 pass |
+| Types, lint, production build | `tsc`, `eslint`, `vite build` | clean |
 
 ---
 
-## 六、已知限制
+## 4. Installing on another machine
 
-1. **Docker 路径未验证**（开发机无 Docker）
-2. **Embedding 默认走离线向量化**（免费、确定性、384 维）；如需云端 embedding 需自行配置并重建向量集合
-3. **无 OCR**：扫描版 PDF（无文本层）会以明确错误失败，不会产出空文档
-4. **重排为词面重排**，未内置交叉编码器模型
-5. **无流式输出**：AI 回答整体返回
-6. **无速率限制 / 审计日志 / 上传病毒扫描**
-7. **`start.sh` / `stop.sh` 未在 Linux 上实测**（验证路径是 Windows）
+**The installer is not self-contained.** It installs the application, but the application
+expects the project directory to exist, because the backend, the vendored PostgreSQL /
+Redis / Qdrant runtimes and the startup scripts all live there. This is a real limitation,
+stated here rather than discovered later.
+
+To move the project to another Windows machine:
+
+1. Copy the whole project directory (or unzip the source archive).
+2. Install Node.js and Python 3.13 if they are not present.
+3. `cd backend && python -m venv ..\.venv && ..\.venv\Scripts\pip install -r requirements.txt`
+4. `cd frontend && npm install && npm run build`
+5. `cd desktop && npm install && npm run tauri build`
+6. `powershell -ExecutionPolicy Bypass -File scripts\create-shortcut.ps1`
+
+The vendored runtimes under `vendor/runtime/` are portable — no separate PostgreSQL, Redis
+or Qdrant installation is needed.
 
 ---
 
-## 七、目录速查
+## 5. Configuration
+
+### AI provider
+
+Settings → AI Provider, or `.runtime/ai-config.json` (git-ignored). The API key is
+write-only: reads return `api_key_set` and a mask. `.env` is the fallback baseline and is
+never committed.
+
+The default is DeepSeek. If a cloud provider is selected but no key is available, the
+factory degrades to the offline engine and records `degraded: true` with the reason — the
+product keeps working and never pretends a hosted model answered.
+
+### Permissions
+
+Settings → Agent Permissions, or `.runtime/agent-policy.json`. Four levels, three modes.
+Protected locations are merged in from the built-in policy on every load, so a settings
+file can add protections but never remove them.
+
+### Workspace
+
+`.runtime/agent-policy.json`. Relative paths in tool calls resolve here.
+
+---
+
+## 6. Data and where it lives
+
+| What | Where |
+|---|---|
+| Database | `vendor/runtime/pgsql/data` |
+| Vectors | `vendor/runtime/qdrant` |
+| Agent workspace | `%USERPROFILE%\Desktop\AI Workbench Workspace` |
+| Snapshots | `.runtime/snapshots` |
+| Logs | `.runtime/logs`, including `desktop-lifecycle.log` |
+| Configuration | `.runtime/ai-config.json`, `.runtime/agent-policy.json` |
+
+None of it is committed. `scripts/stop.bat` stops the services and preserves everything.
+
+The agent workspace holds three demo outputs worth inspecting — `demo1/` (the agent
+creates a project and commits it), `textstats/` (it finds and fixes a bug in an existing
+project) and `doc-demo/` (six document formats). Everything else the tests produced is
+under `_test-artifacts/`.
+
+---
+
+## 7. Known limits
+
+Stated plainly. A project that hides its edges is a project you cannot trust.
+
+- **No browser control.** `screenshot` and `screen_read` observe the screen. There is no
+  click, no typing, no page automation.
+- **No mouse or keyboard control.**
+- **No OCR.** A scanned PDF with no text layer is reported as such.
+- **Embeddings are offline hashes**, not a semantic model — DeepSeek exposes no embedding
+  endpoint. Retrieval quality is correspondingly limited.
+- **Ollama and OpenAI-compatible endpoints are untested against a live server.** The code
+  paths exist and degrade correctly when unreachable; no real endpoint was used.
+- **The Docker path is unverified.** It is written and documented; it has not been run.
+- **The installer is not self-contained** (section 4).
+
+---
+
+## 8. Repository layout
 
 ```
-ai-workbench/
-├── backend/            FastAPI 后端 + 迁移 + 测试
-├── frontend/           React 前端
-├── worker/             独立 Worker
-├── scripts/            运维与验证脚本
-│   ├── start.bat       一键启动（缺失时自动创建桌面快捷方式）
-│   ├── create-shortcut.ps1  创建桌面快捷方式（指向隐藏启动器）
-│   ├── start-hidden.vbs     无窗口启动入口
-│   ├── startup-lock.ps1     启动锁（并发点击串行化）
-│   ├── wait-ready.ps1       等待 URL 返回 HTTP 200
-│   ├── stop.bat        一键停止
-│   ├── restart.bat     一键重启
-│   ├── fetch-runtime.ps1   下载原生运行时
-│   ├── infra-start.ps1     启动 PostgreSQL / Redis / Qdrant
-│   ├── dev.ps1             应用进程管理
-│   ├── smoke_test.py       端到端验收（75 项）
-│   ├── verify_deepseek.py  DeepSeek 真实链路验证（60 项）
-│   ├── build_delivery_zip.py    构建交付包并校验无密钥泄露
-│   ├── make_icon.py             生成应用图标
-│   └── capture-screenshots.mjs  截图采集
-├── docs/               全部文档
-├── samples/            示例文档
-├── screenshots/        运行截图
-├── assets/ai-workbench.ico  应用图标
-├── .runtime/logs/startup.log        启动审计日志（运行时生成）
-├── .runtime/logs/startup-error.log  启动失败原因（运行时生成）
-├── docker-compose.yml
-├── start.bat / stop.bat / start.sh / stop.sh
-├── .env.example        配置模板（无真实密钥）
-└── README.md
+backend/          FastAPI, SQLAlchemy, the agent, the tools, the RAG pipeline
+frontend/         React + TypeScript + Vite
+desktop/          Tauri shell (Rust) and the splash screen
+scripts/          Start, stop, verify, build
+docs/             Architecture and reference documentation
+docs/archive/     Superseded documents, kept as history
+vendor/runtime/   Portable PostgreSQL, Redis and Qdrant
+.runtime/         Configuration, logs, snapshots (git-ignored)
 ```

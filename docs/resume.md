@@ -1,5 +1,13 @@
 # 简历项目描述
 
+<!-- scope -->
+> **Scope: the agent.** What was added on top of the platform, and — at the end — what
+> was deliberately not built.
+>
+> For the knowledge pipeline, RAG and the backend engineering, see
+> [`resume-project.md`](resume-project.md). Neither supersedes the other.
+
+
 > 只写真实实现并且验证过的能力。每一条都能在代码里找到对应实现，在运行记录里找到对应证据。
 
 ---

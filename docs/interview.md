@@ -1,5 +1,15 @@
 # 面试问答 20 题
 
+<!-- scope -->
+> **Scope: the agent.** 20 questions on the autonomous loop, the personal context layer,
+> the permission system, document generation, the desktop shell, and the three-layer
+> window-close bug.
+>
+> For the platform underneath — FastAPI, RAG, PostgreSQL, the layering — see
+> [`interview-questions.md`](interview-questions.md). The two sets cover different halves
+> of the project and neither is a newer version of the other.
+
+
 每题四段：**面试官想考什么** / **项目里的真实实现** / **标准回答** / **可能的追问**。
 
 所有回答都对应真实代码与真实运行结果，没有一条是设想。

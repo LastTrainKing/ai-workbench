@@ -1,5 +1,14 @@
 # Project interview questions
 
+<!-- scope -->
+> **Scope: the platform.** 30 questions on the backend architecture, the RAG pipeline,
+> the database design, the layering rules and the frontend choices.
+>
+> For the agent, the memory model, the permission system and the desktop shell, see
+> [`interview.md`](interview.md). The two sets cover different halves of the project and
+> neither is a newer version of the other.
+
+
 40 questions an interviewer can plausibly ask about AI Workbench, each with:
 
 - **面试官想考什么** — what is actually being probed
