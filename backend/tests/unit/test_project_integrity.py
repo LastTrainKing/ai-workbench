@@ -111,6 +111,7 @@ def test_all_models_are_registered_in_metadata() -> None:
         "tool_audit_log",
         "user_profile", "user_preferences", "memory_entries",
         "memory_candidates", "context_snapshots",
+        "build_runs", "deliverables",
         "jobs", "activity_events",
     }
     assert set(Base.metadata.tables) == expected_tables

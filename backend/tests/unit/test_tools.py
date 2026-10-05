@@ -118,7 +118,7 @@ def test_default_registry_exposes_the_documented_tools() -> None:
     registry = build_default_registry()
     expected = {
         "knowledge_search",
-        "document_read",
+        "knowledge_document_read",
         "task_list",
         "project_list",
         "calculator",
