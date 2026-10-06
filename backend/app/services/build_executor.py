@@ -116,6 +116,9 @@ async def execute_build_run(
         goal=run.goal,
         context=context,
         project_id=run.project_id,
+        # The format the user asked for travels into the planner, so "make me a PPT"
+        # cannot be satisfied with a markdown outline.
+        deliverable_kind=run.deliverable_kind,
     )
 
     # The foreign key wants the row's UUID; the controller wants the short id.
@@ -192,7 +195,17 @@ async def _watch(
                 )
                 return
 
-            collected = await _collect(session, service, run=run, ai_run_id=db_run_id)
+            # Retried, because the agent's own session commits its audit rows
+            # asynchronously and the watcher can reach here first. Reading an
+            # empty result once and concluding "it produced nothing" is how a run
+            # that wrote a 70 KB deck reported "no output detected".
+            collected = 0
+            for attempt in range(4):
+                collected = await _collect(session, service, run=run, ai_run_id=db_run_id)
+                if collected:
+                    break
+                await asyncio.sleep(2 + attempt * 2)
+                await session.rollback()
 
             mapping = {
                 "COMPLETED": BuildStatus.COMPLETED,

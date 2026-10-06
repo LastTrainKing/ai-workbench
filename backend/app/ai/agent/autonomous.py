@@ -224,7 +224,15 @@ class AutonomousAgent:
         owner_id: Any,
         limits: ResourceLimits | None = None,
         working_directory: str = "",
+        deliverable_kind: str = "",
     ) -> None:
+        # What the user asked to be produced, when they said so. Empty means "any".
+        #
+        # The agent's default is to satisfy the goal with the smallest artifact that
+        # passes, which is usually a .md. For a request that named a format, that is
+        # not the same thing as complying — so the kind is carried into the planner
+        # and checked against what actually came out.
+        self.deliverable_kind = deliverable_kind.strip().lower()
         self.llm = llm
         self.registry = registry
         self.policy = policy
@@ -290,8 +298,25 @@ class AutonomousAgent:
         personal = await self._personal_context(purpose="planner")
         combined = "\n\n".join(part for part in (personal, context) if part.strip()) or "（无）"
 
+        system = prompt.render(tools=catalogue, goal=goal, context=combined)
+        if self.deliverable_kind and self.deliverable_kind != "mixed":
+            # Stated as a hard requirement, not a preference.
+            #
+            # Without it the planner reaches for the smallest thing that satisfies
+            # the goal — which for "做一份 PPT" is a markdown outline. The file
+            # exists, the step verifies, and the user gets something they cannot
+            # present. Naming the tool removes the choice.
+            system += (
+                "\n\n【硬性要求】用户明确要求产出格式为 "
+                f"{self.deliverable_kind}。"
+                "因此计划中必须包含一步，调用 document_write 生成该格式的文件，"
+                f"format={self.deliverable_kind}。"
+                "不允许用 .md / .txt 或纯文本代替；用 file_write 写一个同名文本文件不算完成。"
+                "最后一步必须回读该文件并核对页数、大小或行列数。"
+            )
+
         messages = [
-            ChatMessage(role="system", content=prompt.render(tools=catalogue, goal=goal, context=combined)),
+            ChatMessage(role="system", content=system),
             ChatMessage(role="user", content=f"目标：{goal}"),
         ]
 

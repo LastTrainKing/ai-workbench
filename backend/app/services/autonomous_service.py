@@ -42,7 +42,12 @@ logger = get_logger(__name__)
 _tasks: dict[str, asyncio.Task[Any]] = {}
 
 
-def _build_agent(session: AsyncSession, owner_id: uuid.UUID, controller: RunController) -> AutonomousAgent:
+def _build_agent(
+    session: AsyncSession,
+    owner_id: uuid.UUID,
+    controller: RunController,
+    deliverable_kind: str = "",
+) -> AutonomousAgent:
     """Assemble an autonomous agent for one run."""
     policy = build_policy()
     policy.workspace.mkdir(parents=True, exist_ok=True)
@@ -68,6 +73,7 @@ def _build_agent(session: AsyncSession, owner_id: uuid.UUID, controller: RunCont
         owner_id=owner_id,
         limits=limits,
         working_directory=str(policy.workspace),
+        deliverable_kind=deliverable_kind,
     )
 
 
@@ -79,11 +85,12 @@ async def _execute_run(
     owner_id: uuid.UUID,
     project_id: uuid.UUID | None,
     controller: RunController,
+    deliverable_kind: str = "",
 ) -> None:
     """The background half: run the agent and persist the outcome."""
     try:
         async with session_scope() as session:
-            agent = _build_agent(session, owner_id, controller)
+            agent = _build_agent(session, owner_id, controller, deliverable_kind)
             result = await agent.run(goal, context=context)
 
             # Persist the plan, the event stream and the outcome onto the AI run,
@@ -204,6 +211,7 @@ async def start_run(
     goal: str,
     context: str = "",
     project_id: uuid.UUID | None = None,
+    deliverable_kind: str = "",
 ) -> dict[str, Any]:
     """Register the run, create the recorder, and launch the background task."""
     policy = build_policy()
@@ -235,6 +243,7 @@ async def start_run(
             owner_id,
             project_id,
             controller,
+            deliverable_kind,
         )
     )
     _tasks[recorder.run_id] = task
