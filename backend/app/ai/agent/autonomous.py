@@ -322,10 +322,16 @@ class AutonomousAgent:
 
         last_error = ""
         for attempt in range(1, 3):
+            # Budgeted generously on purpose.
+            #
+            # The default model is a reasoning model: it spends tokens thinking
+            # before it emits the JSON. At 3,000 the plan came back truncated and
+            # parsed as zero steps — which surfaced as "无法生成可执行的计划"
+            # rather than as anything resembling a token limit.
             chat = await self.llm.chat(
                 messages,
                 temperature=0.1,
-                max_tokens=min(settings.ai_max_tokens, 3000),
+                max_tokens=min(settings.ai_max_tokens, 8000),
                 json_mode=True,
             )
             try:
