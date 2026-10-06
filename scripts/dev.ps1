@@ -40,7 +40,12 @@ $WebPort = 5173
 $ApiReadyTimeout = 90
 $WebReadyTimeout = 90
 
-$Python = Join-Path $RepoRoot '.venv\Scripts\python.exe'
+$Python = Resolve-PythonExe
+if (-not $Python) {
+    Write-Err "No Python interpreter found. An installed copy ships one at vendor\runtime\python; a development checkout needs .venv."
+    exit 1
+}
+Write-Step "python: $Python ($PythonSource)"
 $BackendDir = Join-Path $RepoRoot 'backend'
 $FrontendDir = Join-Path $RepoRoot 'frontend'
 $ViteEntry = Join-Path $FrontendDir 'node_modules\vite\bin\vite.js'
@@ -84,7 +89,7 @@ function Start-Tracked {
     $stderr = Join-Path $LogDir "$Name.err.log"
     Write-StartupLog -Service $Name -State 'STARTING' -Detail "port $Port"
 
-    $proc = Start-Process -FilePath $FilePath -ArgumentList $Arguments `
+    $proc = Start-Process -FilePath $FilePath -ArgumentList (ConvertTo-ProcessArgumentList $Arguments) `
         -WorkingDirectory $WorkingDirectory -WindowStyle Hidden -PassThru `
         -RedirectStandardOutput $stdout -RedirectStandardError $stderr
     Set-TrackedPid -Name $Name -ProcessId $proc.Id

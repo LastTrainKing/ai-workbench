@@ -87,7 +87,7 @@ function Start-Postgres {
             # Windows pg_ctl keeps a handle on the inherited stdout pipe, which
             # makes a non-interactive shell block until the server exits.
             Start-Process -FilePath (Join-Path $PgHome 'bin\postgres.exe') `
-                -ArgumentList @('-D', $PgData, '-p', "$PgPort", '-c', 'listen_addresses=127.0.0.1') `
+                -ArgumentList (ConvertTo-ProcessArgumentList @('-D', $PgData, '-p', "$PgPort", '-c', 'listen_addresses=127.0.0.1')) `
                 -WorkingDirectory $PgHome -WindowStyle Hidden `
                 -RedirectStandardOutput (Join-Path $LogDir 'postgres.out.log') `
                 -RedirectStandardError (Join-Path $LogDir 'postgres.err.log')
@@ -208,7 +208,7 @@ maxmemory-policy allkeys-lru
 
     Write-StartupLog -Service 'Redis' -State 'STARTING' -Detail "port $RedisPort"
     $proc = Start-Process -FilePath (Join-Path $RedisHome 'redis-server.exe') `
-        -ArgumentList @($RedisConf) -WorkingDirectory $RedisDir `
+        -ArgumentList (ConvertTo-ProcessArgumentList @($RedisConf)) -WorkingDirectory $RedisDir `
         -WindowStyle Hidden -PassThru `
         -RedirectStandardOutput (Join-Path $LogDir 'redis.out.log') `
         -RedirectStandardError (Join-Path $LogDir 'redis.err.log')

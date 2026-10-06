@@ -32,6 +32,54 @@ $Script:QdrantDir  = Join-Path $RuntimeDir 'qdrant'
 $Script:QdrantLog  = Join-Path $RuntimeDir 'logs\qdrant.log'
 $Script:QdrantPort = 6333
 
+# ---------------------------------------------------------------- python --
+# Two layouts, both legitimate, and the choice between them is not a preference:
+#
+#   vendor\runtime\python\python.exe   an **installed product**. The interpreter
+#                                      is a CPython embeddable distribution that
+#                                      ships inside the install directory, so the
+#                                      install depends on nothing outside itself.
+#                                      This is what makes "delete the original
+#                                      project directory" possible at all.
+#
+#   .venv\Scripts\python.exe           a **development checkout**. A venv is not
+#                                      relocatable: `pyvenv.cfg` records the
+#                                      absolute path of the interpreter that
+#                                      created it, and copying the venv only works
+#                                      while that interpreter is still installed.
+#
+# The bundled one wins. If a bundled interpreter is present, this directory is a
+# product, and a stray `.venv` left over from development must not silently take
+# over — that would make the installed copy depend on the machine it was built on.
+$Script:PythonExe = $null
+$Script:PythonSource = ''
+
+function Resolve-PythonExe {
+    <#
+      The interpreter to run the backend with, or $null if there is none.
+
+      Returning $null rather than throwing lets callers produce their own message
+      ("run the installer" vs "create a venv") instead of a generic failure.
+    #>
+    if ($Script:PythonExe) { return $Script:PythonExe }
+
+    $bundled = Join-Path $VendorDir 'python\python.exe'
+    if (Test-Path $bundled) {
+        $Script:PythonExe = $bundled
+        $Script:PythonSource = 'bundled'
+        return $bundled
+    }
+
+    $venv = Join-Path $RepoRoot '.venv\Scripts\python.exe'
+    if (Test-Path $venv) {
+        $Script:PythonExe = $venv
+        $Script:PythonSource = 'venv'
+        return $venv
+    }
+
+    return $null
+}
+
 $Script:LogDir = Join-Path $RuntimeDir 'logs'
 $Script:PidDir = Join-Path $RuntimeDir 'pids'
 
@@ -73,6 +121,44 @@ function Write-Step($msg)  { Write-Host "[*] $msg" -ForegroundColor Cyan }
 function Write-Ok($msg)    { Write-Host "[+] $msg" -ForegroundColor Green }
 function Write-Warn2($msg) { Write-Host "[!] $msg" -ForegroundColor Yellow }
 function Write-Err($msg)   { Write-Host "[x] $msg" -ForegroundColor Red }
+
+# ------------------------------------------------------- process arguments --- #
+function ConvertTo-ProcessArgument {
+    <#
+      One argument, quoted if it needs to be.
+
+      `Start-Process -ArgumentList @('a', 'b c')` joins the array with spaces and
+      does **not** quote the elements, so a value containing a space reaches the
+      child as two arguments. That is not hypothetical: with the install directory
+      at `C:\Temp\AIW Relocated Test\`, PostgreSQL was launched as
+
+          -D C:\Temp\AIW Relocated Test\.runtime\pgdata
+
+      and exited with `postgres: invalid argument: "Relocated"`.
+
+      This matters far more than the odd test path suggests: the conventional
+      install location is `C:\Program Files\...`, which contains a space, so
+      without this every default install would fail to start its own database.
+    #>
+    param([Parameter(Mandatory)][AllowEmptyString()][string]$Value)
+
+    if ($Value -eq '') { return '""' }
+    if ($Value -notmatch '[\s"]') { return $Value }
+    # Double any backslash that precedes a quote, then escape the quote itself,
+    # which is what the C runtime's argv parser expects.
+    $escaped = $Value -replace '(\\*)"', '$1$1\"'
+    return '"' + $escaped + '"'
+}
+
+function ConvertTo-ProcessArgumentList {
+    <#
+      A whole argument list as one properly-quoted string, for Start-Process.
+    #>
+    param([string[]]$Arguments)
+
+    if (-not $Arguments -or $Arguments.Count -eq 0) { return '' }
+    return (($Arguments | ForEach-Object { ConvertTo-ProcessArgument $_ }) -join ' ')
+}
 
 # --------------------------------------------------------------- start log --- #
 function Write-StartupLog {

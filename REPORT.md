@@ -341,24 +341,34 @@ Tauri 构建    npm run tauri build → 编译 1m50s → EXE + NSIS 安装包
 
 ---
 
-## 附二：一处必须单独说明的发现——Agent 提交进了正式仓库
+## 附二：一处结论修正——我推断错了
 
-`git log` 里有一条提交 `bac3a7d docs(report): fill in the delivery section with the built artefacts`
-（17:07），作者是 `AI Workbench <noreply@local>`。**这条提交不是本会话写的，是一次
-Agent 运行自己做的**：它读到了交付产物、给 `REPORT.md` 补了一段交付物章节，并用 `git_commit` 提交了。
+上一版报告在这里写过一整节，断言"一次 Agent 运行自己往正式仓库提交了代码"（提交 `bac3a7d`），
+并把作者身份不同当成了证据。**这个结论是错的，本节改为如实记录我是怎么错的。**
 
-**作者身份本身就是证据**：本仓库配置的提交身份是 `AI Workbench <dev@aiworkbench.dev>`，本轮其余
-每一条提交（`ff8efba`、`ab97b27` …）都用这个身份；`bac3a7d` 用的是 `<noreply@local>`，是 Agent
-运行自己的身份。两条不同的身份，指向两个不同的提交者。
+事实（`git log -1 --format="author: %an <%ae>%ncommitter: %cn <%ce>"`）：
 
-这正是任务书里明令禁止的那件事：
+```
+bac3a7d   author:    AI Workbench <noreply@local>
+          committer: AI Workbench <noreply@local>
+ab97b27   author:    AI Workbench <dev@aiworkbench.dev>     ← 本会话的提交
+ff8efba   author:    AI Workbench <dev@aiworkbench.dev>     ← 本会话的提交
+```
 
-> **Demo 在隔离环境做**，禁止污染正式项目。
+**我当时的推理是**：本仓库配置的提交身份是 `dev@aiworkbench.dev`，`bac3a7d` 用的是
+`noreply@local`，所以它是 Agent 用另一个身份提交的。
 
-Agent 拥有 `git_add` / `git_commit` 工具，而项目根目录在它的可写路径里，所以只要一次运行决定
-「顺手提交一下」，它就会动到正式仓库。本轮所有 Demo 的**产出物**都落在隔离目录里，但**仓库**没有
-被隔离——这是本轮的已知缺陷，不是通过项。
+**错在哪**：`<noreply@local>` 不是 Agent 的身份，是**另一个进程用 `-c user.email=noreply@local`
+显式指定**的身份。作者不同只说明"不是同一次提交命令"，不说明"是谁提交的"。我从一个真实观察到
+的差异，跳到了一个没有证据支持的结论——这正是本轮任务书工程铁律第 8 条点名的那件事：
 
-处理：该提交保留（它记录的事实是准确的，且它是我发现这件事的证据），但 `REPORT.md` 已由本报告
-覆盖为完整版本。**建议的修法**：Demo 运行必须在一个独立的 git 仓库里执行，或者把项目根从
-Demo 运行的 `allowed_paths` 里去掉。
+> **不要用推断代替证据。** 写结论前先问：我有日志 / 输出 / 文件能证明吗？
+
+我当时手里有 `git log`，但我**没有**去查这个进程是谁、也没有查 Agent 的审计日志里有没有
+`git_commit` 调用。查一下就能证伪：如果真是 Agent 提交的，`tool_audit_log` 里会有一条
+`git_commit` 记录。
+
+**这一节的教训比那一节的结论更重要**：同一个形状（把观察到的差异当成因果证据）在这一轮
+和上一轮各出现一次。本报告其余结论之所以都带着命令输出，就是为了不重犯它。
+
+（`bac3a7d` 本身没有危害：它给 `REPORT.md` 补的交付物章节内容准确，且已被 `ab97b27` 覆盖。）

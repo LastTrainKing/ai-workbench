@@ -36,8 +36,14 @@ if not exist "%LOGSDIR%" mkdir "%LOGSDIR%" >nul 2>&1
 
 call :log "----- desktop start requested -----"
 
-if not exist "%ROOT%\.venv\Scripts\python.exe" (
-    call :fail "Python virtual environment not found at .venv"
+REM Python: a bundled interpreter for an installed copy, a venv for a checkout.
+REM The bundled one is checked first, so an installed directory never falls back
+REM to a .venv that happens to be lying around.
+set "PYTHON="
+if exist "%ROOT%\vendor\runtime\python\python.exe" set "PYTHON=%ROOT%\vendor\runtime\python\python.exe"
+if not defined PYTHON if exist "%ROOT%\.venv\Scripts\python.exe" set "PYTHON=%ROOT%\.venv\Scripts\python.exe"
+if not defined PYTHON (
+    call :fail "No Python interpreter found. An installed copy ships one at vendor\runtime\python; a development checkout needs .venv."
     goto :theend
 )
 

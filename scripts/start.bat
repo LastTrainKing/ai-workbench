@@ -86,8 +86,11 @@ if errorlevel 1 (
     goto :theend
 )
 
-if not exist "%ROOT%\.venv\Scripts\python.exe" (
-    call :fail "Python virtual environment not found. Create it with: python -m venv .venv  then  .venv\Scripts\python.exe -m pip install -r backend\requirements-dev.txt"
+set "PYTHON="
+if exist "%ROOT%\vendor\runtime\python\python.exe" set "PYTHON=%ROOT%\vendor\runtime\python\python.exe"
+if not defined PYTHON if exist "%ROOT%\.venv\Scripts\python.exe" set "PYTHON=%ROOT%\.venv\Scripts\python.exe"
+if not defined PYTHON (
+    call :fail "No Python interpreter found. An installed copy ships one at vendor\runtime\python; a development checkout needs .venv (python -m venv .venv)."
     goto :theend
 )
 
