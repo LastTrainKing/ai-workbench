@@ -114,35 +114,50 @@ cd C:\Users\user\Desktop\ai-workbench
 
 ## 阻塞
 
-**硬阻塞：Windows 应用程序控制策略已阻止本项目的原生模块，不只是 exe。**
+**Smart App Control（智能应用控制）拦住了开发环境这条路径。**
 
-```
-.venv\Scripts\python.exe                                  -> 应用程序控制策略已阻止此文件
-AI Workbench InstallTest\Uninstall.exe                     -> WinError 4551 已阻止
-vendor\runtime\python\Lib\site-packages\pydantic_core\_pydantic_core.pyd
-                                                          -> ImportError: DLL load failed
-                                                             while importing _pydantic_core:
-                                                             应用程序控制策略已阻止此文件
-```
+它按**文件信誉**判定能不能运行，不看路径也不看程序名。实测对照：
 
-发生时间：一次系统资源耗尽之后（`bash: fork: Resource temporarily unavailable`）。
-**不是代码问题**，是 Windows 侧的策略。
+| 解释器 | 能不能跑 |
+|---|---|
+| `vendor\runtime\python\python.exe`（随包，新下载的） | ✅ 能跑 |
+| `.venv\Scripts\python.exe` | ❌ 被阻止 |
+| venv 的原件（`.workbuddy-ai\binaries\python\...`） | ❌ 被阻止 |
 
-**后果（全部已实测，不是推测）**：
+**同一个 Python：原件被拦、新下载的能跑、复制出来的被拦。**
+事件日志 `Microsoft-Windows-CodeIntegrity/Operational` 里有 36 条阻止记录。
 
-| 想做的事 | 能不能做 | 实测 |
+即使随包解释器放行，它的**第三方编译模块**也被拦：
+`ImportError: DLL load failed while importing _pydantic_core: 应用程序控制策略已阻止此文件。`
+
+**准确的说法是：开发环境这条路径断了，不是整个项目都不行。**
+
+### ⚠️ 不要关掉 Smart App Control
+
+**从"开启"切到"关闭"不可逆，关掉之后只能重装 Windows 才能再打开。**
+本轮没有尝试任何绕过（改注册表、改策略、签名）——不装作能修。
+
+### 因 SAC 无法进行的验收（一律 `NOT VERIFIED`，不标 PASS）
+
+| # | 验收项 | 原因 |
 |---|---|---|
-| 跑后端 | ❌ | `import pydantic` → `_pydantic_core.pyd` 被阻止 |
-| 跑后端测试 | ❌ | 同上，连导入都过不去 |
-| 跑安装验收第 8 步（卸载） | ❌ | `Uninstall.exe` 被阻止 |
-| 用随包 Python 绕过 | ❌ | 随包解释器能启动，但它的依赖 DLL 也被阻止 |
-| 读写文件 / git | ✅ | git 2.55（PortableGit），工作区干净 |
+| 1 | 后端全量测试（438 个） | 需 `import pydantic` → 编译模块被拦 |
+| 2 | 安装：启动应用 / 原生窗口 / 无浏览器 / 无 5173 | 需启动进程 |
+| 3 | 安装：首次启动完成数据库初始化 | 同上 |
+| 4 | 安装：注册并登录 | 同上 |
+| 5 | 安装：强杀窗口后四服务退出 | 同上 |
+| 6 | 安装：卸载干净 | `Uninstall.exe` 被拦（WinError 4551） |
+| 7 | 首次启动的进度可见性 | 同上 |
+| 8 | 第 2 步及以后全部（开局对话 / 空账号隔离 / 分级检索 / Skill / 知识补充 / 记忆生命周期 / 界面重组） | 全部需要跑起来 |
 
-**需要人处理**：解除对本项目目录（以及 `%LOCALAPPDATA%\AI Workbench*`）的应用程序控制策略，
-或换一台机器。在此之前，第 1 步的最后一步（卸载验收）与第 2 步之后的所有验证都无法进行。
+**在这台机器上仍能做且已做的**：读改代码、git、NSIS 静态检查、安装包结构自检、
+打源码包。见「已完成」一节。
 
-**已尝试并确认无效的绕过**：改用随包解释器（`vendor/runtime/python`）——它自己被放行，
-但它的 `.pyd` 被阻止，所以同样跑不起来。
+### 换一台机器怎么补
+
+**给用户的清单在 [`docs/how-to-finish-verification.md`](docs/how-to-finish-verification.md)**，
+里面有：需要什么机器、拷哪两个文件、校验哈希、逐步安装、补验收要跑的命令、
+以及在新机器上怎么建开发环境。**那份是写给用户的，不是给对话看的。**
 
 ---
 
