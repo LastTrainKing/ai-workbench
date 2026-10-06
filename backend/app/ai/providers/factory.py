@@ -17,6 +17,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from app.ai.providers.base import EmbeddingProvider, LLMProvider
+from app.ai.providers.budget import reasoning_budget
 from app.ai.providers.deepseek import DeepSeekProvider
 from app.ai.providers.heuristic import (
     HeuristicEmbeddingProvider,
@@ -293,7 +294,11 @@ async def test_connection(*, provider: str | None = None, model: str | None = No
         result = await llm.chat(
             [ChatMessage(role="user", content="ping")],
             temperature=0.0,
-            max_tokens=256,
+            # A reasoning model spends thinking tokens before it emits anything, so a
+            # 256-token cap can fail a provider that is perfectly healthy — reporting a
+            # working model as degraded. `max_tokens` is a cap, not a target: a ping that
+            # thinks for 300 tokens costs the same either way.
+            max_tokens=reasoning_budget(),
         )
     except AIError as exc:
         return {

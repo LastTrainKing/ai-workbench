@@ -18,6 +18,7 @@ from typing import Any
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai.prompts.registry import get_prompt
+from app.ai.providers.budget import reasoning_budget
 from app.ai.providers.factory import build_llm_provider
 from app.ai.rag.retriever import Retriever
 from app.ai.tracing import RunRecorder, truncate_for_prompt
@@ -70,7 +71,10 @@ class RAGPipeline:
                     ChatMessage(role="user", content=question),
                 ],
                 temperature=0.0,
-                max_tokens=256,
+                # Same cap, same reason: a 256-token budget is eaten by the thinking
+                # phase, and the failure surfaces as "no queries rewritten" rather than
+                # as an error.
+                max_tokens=reasoning_budget(),
                 json_mode=True,
             )
             payload = _loads(result.content)

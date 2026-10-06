@@ -329,6 +329,7 @@ async def extract_profile(payload: ProfileExtractRequest, user: CurrentUser) -> 
     """
     import json as _json
 
+    from app.ai.providers.budget import reasoning_budget
     from app.ai.providers.factory import build_llm_provider
 
     llm, _ = build_llm_provider()
@@ -350,7 +351,13 @@ async def extract_profile(payload: ProfileExtractRequest, user: CurrentUser) -> 
                 ChatMessage(role="user", content=payload.description),
             ],
             temperature=0.0,
-            max_tokens=500,
+            # `reasoning_budget()`, not a literal. This call asked for 500 tokens, which
+            # the thinking phase consumed before the model emitted a character, so
+            # extraction raised `ai_reasoning_budget_exhausted` every single time and the
+            # wizard's main path never worked. `budget.py` exists to stop exactly this
+            # and already documents the same failure twice — the agent's recovery call
+            # and the memory evaluator.
+            max_tokens=reasoning_budget(),
             json_mode=True,
         )
         parsed = _json.loads(chat.content)
