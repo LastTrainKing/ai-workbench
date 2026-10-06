@@ -113,6 +113,9 @@ def test_all_models_are_registered_in_metadata() -> None:
         "memory_candidates", "context_snapshots",
         "build_runs", "deliverables",
         "jobs", "activity_events",
+        # Step 4. The set is asserted exactly rather than as a subset, so a table added
+        # without being registered here is a failing test rather than a silent extra.
+        "installed_skills",
     }
     assert set(Base.metadata.tables) == expected_tables
 

@@ -111,6 +111,7 @@ class TieredResult:
     memory_text: str = ""
     memory_ids: list[str] = field(default_factory=list)
     knowledge_chunks: list[dict[str, Any]] = field(default_factory=list)
+    skills: list[dict[str, Any]] = field(default_factory=list)
 
     @property
     def hit_tier(self) -> str:
@@ -209,13 +210,10 @@ async def _try_memory(session: AsyncSession, user_id: uuid.UUID, question: str) 
     )
 
 
-async def _try_skill(question: str) -> TierAttempt:
-    """Tier 2: is there a known way of doing this kind of work?
-
-    The skill layer is step 4. Until it exists this tier reports a miss *with a reason*,
-    rather than being left out of the list — a tier that is absent and a tier that was
-    never consulted look identical in a report, and only one of them is true.
-    """
+async def _try_skill(
+    session: AsyncSession, user_id: uuid.UUID, question: str
+) -> tuple[TierAttempt, list[dict[str, Any]]]:
+    """Tier 2: is there a known way of doing this kind of work?"""
     started = time.perf_counter()
     # Imported here rather than at module scope: the skill layer imports the retrieval
     # ladder back, and a top-level import would be a cycle.
@@ -225,14 +223,21 @@ async def _try_skill(question: str) -> TierAttempt:
         # Say which of the two it is. An empty list here means "the layer is not built",
         # not "nothing matched", and reporting the second would be a lie told by a list
         # that is empty for a different reason.
-        return TierAttempt("skill", False, (time.perf_counter() - started) * 1000, "skill 层尚未建立（第 4 步）")
+        return (
+            TierAttempt("skill", False, (time.perf_counter() - started) * 1000, "skill 层尚未建立"),
+            [],
+        )
 
-    matches = await find_matching_skills(question)
+    matches = await find_matching_skills(session, user_id=user_id, question=question)
     elapsed = (time.perf_counter() - started) * 1000
     if not matches:
-        return TierAttempt("skill", False, elapsed, "没有匹配的 skill")
+        return TierAttempt("skill", False, elapsed, "没有匹配的 skill"), []
+
     names = "、".join(m.name for m in matches[:3])
-    return TierAttempt("skill", True, elapsed, f"匹配 {len(matches)} 个：{names}")
+    return (
+        TierAttempt("skill", True, elapsed, f"匹配 {len(matches)} 个：{names}"),
+        [{"id": m.id, "name": m.name, "score": m.score} for m in matches],
+    )
 
 
 async def _try_knowledge(
@@ -323,10 +328,11 @@ async def resolve(
         result.total_ms = (time.perf_counter() - started) * 1000
         return result
 
-    skill_attempt = await _try_skill(question)
+    skill_attempt, matched = await _try_skill(session, user_id, question)
     result.attempts.append(skill_attempt)
     if skill_attempt.hit:
         result.tier = "skill"
+        result.skills = matched
         result.total_ms = (time.perf_counter() - started) * 1000
         return result
 

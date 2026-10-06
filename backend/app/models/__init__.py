@@ -34,6 +34,7 @@ from app.models.knowledge import (
 )
 from app.models.note import Note
 from app.models.project import Project
+from app.models.skill import InstalledSkill
 from app.models.task import Task, TaskDependency, TaskDocument, TaskTag
 from app.models.user import User
 
@@ -44,6 +45,7 @@ __all__ = [  # noqa: RUF022 - grouped by domain layer, which is more readable he
     "utcnow",
     # domain
     "User",
+    "InstalledSkill",
     "Project",
     "KnowledgeBase",
     "Document",
