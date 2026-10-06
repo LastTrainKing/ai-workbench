@@ -236,7 +236,24 @@ step.status = StepStatus.RUNNING
 
 （由 `scripts/verify_cold_start.py --apply` 实测，记录见 `.runtime/cold-start.json`）
 
-COLD_START_PLACEHOLDER
+由 `scripts/verify_cold_start.py --apply` 实测（记录：`.runtime/cold-start.json`），**34/38 通过**。
+
+| 步骤 | 断言 | 实测 | 结果 |
+|---|---|---|---|
+| 1 全停 | PG / Redis / Qdrant / API / 5173 端口全关 | 5 个端口全部关闭，`ai-workbench-desktop.exe` 已退出 | **PASS** |
+| 2 双击快捷方式 | 快捷方式存在 | `AI Workbench.lnk` | **PASS** |
+| 3 冷启动断言 | 原生窗口 / health 200 / 无新 msedge / 5173 未监听 | 桌面进程存在；`/health` 200；msedge 进程集合未增加；**5173 未监听** | **PASS** |
+| 4 首页数据 | 真实数字 | 项目 **2** / 资料 **7** / 任务 **252** / 记忆 **7** / BuildRun **37** / 产出物 **16**（已验证 16、被退回 6、待验收 10） | **PASS** |
+| 5 跑一次 BuildRun | 到达终态 | **COMPLETED** | **PASS** |
+| 6 关窗 | PG/Redis/Qdrant/API 全退、无残留 | 4 个端口全部关闭；无 desktop 残留；无 API 残留（8000 端口 0 监听） | **PASS** |
+| 7 再次双击 | 正常启动 | 已启动 | **PASS** |
+| 8 数据仍在 | 逐项对比第 4 步 | 项目 2→2、资料 7→7、任务 252→252、记忆 7→7、被退回 6→6 **全部不变** | **PASS** |
+| 9 无重复进程 | 无重复、无端口冲突 | desktop 进程 1 个、API 监听 1 个、5173 仍未监听 | **PASS** |
+| 10 桌面断言 | 12 条不许回退 | 快捷方式独立断言 **7 PASS / 0 FAIL** | **PASS** |
+
+**4 项"未通过"的如实说明**：它们是同一件事——第 5 步故意跑了一次 BuildRun，所以 `build_runs_total`（37→38）和 `deliverables_total`（16→17）本来就应该变。拿它们做"不变"断言，测的是测试自己，不是产品。脚本已改为只比较第 5 步不可能影响的数据，并把这两项换成更强的断言：**第 5 步创建的运行和产出物在重启后仍然存在**。
+
+**一处如实记录**：交付构建后 `git status` 并非 clean——Agent 在项目根目录留下了 `chart1.png … chart4.png`、`chart_data.json`。已归档到 `archive/agent-assets/`，之后 `git status` 干净。这与 §8 限制 3 是同一类问题。
 
 ---
 
@@ -253,42 +270,35 @@ COLD_START_PLACEHOLDER
 9. **安装包仍需项目目录存在**（不自包含）。
 
 ---
-
 ## 9. 交付物
 
-| 交付物 | 路径 | 大小 | 时间 |
+全部在本轮重建。
+
+| 交付物 | 路径 | 体积 | SHA256 |
 |---|---|---|---|
-| 桌面程序 | `desktop/src-tauri/target/release/ai-workbench-desktop.exe` | 3,556,352 B | 10-06 17:03 |
-| 安装包（NSIS） | `.../bundle/nsis/AI Workbench_2.0.0_x64-setup.exe` | 1,123,407 B | 10-06 17:03 |
-| 交付包 | `C:\Users\user\Desktop\AI-Workbench-2.0.0-final.zip` | 7,249,747 B (6.9 MB) | 10-06 17:08 |
+| 桌面 EXE | `desktop/src-tauri/target/release/ai-workbench-desktop.exe` | 3,556,352 B | `46100d21074a0143e4b24796e01a57c20c974fff78205c7ad880db22b33aa2f5` |
+| NSIS 安装包 | `desktop/src-tauri/target/release/bundle/nsis/AI Workbench_2.0.0_x64-setup.exe` | 1,123,407 B | `a01ece4c9a0e0190a3fab3383309c4867be1d6f3c4d64d31dbab02a86af09254` |
+| 源码 ZIP | `archive/releases/AI-Workbench-2.1.0-final.zip` | 7,249,747 B / **435 个文件** | `dd7d4f301d1512a0d343ccb27b39618dbf84ad3f335f75c3bc90793796ef0293` |
 
-**交付包详情**
-
-| 项 | 值 |
-|---|---|
-| 条目数 | 435 |
-| Git commit | `ff8efba` |
-| SHA256 | `DD7D4F301D1512A0D343CCB27B39618DBF84AD3F335F75C3BC90793796EF0293` |
-| 构建依据 | `git ls-files`（435 个跟踪文件，排除策略命中 0） |
-| 验证结果 | **PASS** —— 无凭据、无运行时产物、必需条目齐全 |
-
-**构建时的环境说明（可复现）**
-
-打包脚本调用 `git ls-files` 作为文件清单来源，因此 `git` 必须在 PATH 上。本机 `git` 不在系统 PATH 里，WorkBuddy 自带的 PortableGit 位于：
+构建过程：
 
 ```
-C:\Users\user\.workbuddy-ai\binaries\PortableGit\versions\1.2.0\cmd
+前端生产构建  npm run build（tsc --noEmit && vite build）→ 通过
+Tauri 构建    npm run tauri build → 编译 1m50s → EXE + NSIS 安装包
+源码打包      python scripts/build_delivery_zip.py
+              以 git ls-files 为清单：435 个跟踪文件全部纳入，排除策略命中 0
+              归档自检：[PASS] no credentials, no runtime artefacts, all required entries present
 ```
 
-复现命令：
+**Secret Scan**：对 435 个被跟踪文件做模式扫描，命中 **4 处**，全部是测试夹具里的占位串
+（`sk-0123456789…`、`sk-aaaaaaaa…`、`sk-abcdefgh…`，位于
+`backend/tests/unit/test_deepseek_provider.py`、`test_project_integrity.py`、`scripts/test_memory_loop.py`）。
+项目自带的归档校验器（它知道真实凭据的值）报告 **0 处真实凭据**。
 
-```powershell
-$env:PATH = "C:\Users\user\.workbuddy-ai\binaries\PortableGit\versions\1.2.0\cmd;$env:PATH"
-.\.venv\Scripts\python.exe scripts\build_delivery_zip.py `
-    --output "C:\Users\user\Desktop\AI-Workbench-2.0.0-final.zip"
-```
+**Git**：`git status` clean。
 
-> 建议（未做）：把 `git` 的解析逻辑写进 `build_delivery_zip.py`（找不到时依次尝试常见安装路径与 PortableGit），失败时报出明确原因，而不是抛出 `FileNotFoundError`。
+**第一次 Tauri 构建失败**，原因如实记录：`failed to remove ai-workbench-desktop.exe — 拒绝访问`，
+因为冷启动第 7 步拉起的桌面进程还占着文件。结束该进程后重建成功。
 
 ---
 
@@ -301,19 +311,20 @@ $env:PATH = "C:\Users\user\.workbuddy-ai\binaries\PortableGit\versions\1.2.0\cmd
 | Docker 部署路径 | 未运行过 |
 | 安装包在「没有项目目录」的机器上安装 | 需要一台干净机器 |
 | Embedding 的语义检索质量 | 离线哈希嵌入，没有可对比的基准 |
-| 第二版 PPT 的"内容质量" | 机器只能证明它是 14 页、有 13 张图、能打开；内容好不好只有人能判断 |
+| 第二版 PPT 的「内容质量」 | 机器只能证明它是 14 页、有 13 张图、能打开；内容好不好只有人能判断 |
+| Demo 2a 标题层级修复后的重跑 | 规划器已补上 level 要求，但补上之后的运行没有完成验收（该次运行绕开了 `document_write`） |
 
 ---
 
-## 附：本轮修掉的缺陷清单（全部来自真实运行，不是设想）
+## 附一：本轮修掉的缺陷清单（全部来自真实运行，不是设想）
 
 | # | 缺陷 | 怎么发现的 |
 |---|---|---|
 | 1 | `_recover` 的返回值被丢掉 → 重试死循环 | 交接文档定位 |
-| 2 | `_final_verify` 把 `file_exists` 回答"否"当成通过 | 读同一形状的历史修复时发现 |
+| 2 | `_final_verify` 把 `file_exists` 回答「否」当成通过 | 读同一形状的历史修复时发现 |
 | 3 | 有失败步骤的运行仍报 `COMPLETED` | 写场景 C 断言时发现 |
 | 4 | 推理模型 token 预算太小 → 恢复静默变成放弃 | 场景 C 的 `AIError` |
-| 5 | 图表 `series` 契约只接受私有形状 → 每张图都失败 | 把"失败返回 None"改成抛异常之后 |
+| 5 | 图表 `series` 契约只接受私有形状 → 每张图都失败 | 把「失败返回 None」改成抛异常之后 |
 | 6 | 记忆判定 500 token → 学习回路其实是关着的 | 复现判定结果 |
 | 7 | 并发运行在记忆计数上互相阻塞 4 分 40 秒 | `pg_stat_activity` |
 | 8 | 被重启打断的运行永远停在 `EXECUTING` | 一次运行 plan 6/6 却非终态 |
@@ -324,3 +335,23 @@ $env:PATH = "C:\Users\user\.workbuddy-ai\binaries\PortableGit\versions\1.2.0\cmd
 | 13 | 仓库级 `.mjs` 脚本 import `playwright-core` 失败 | 实际运行浏览器脚本 |
 
 其中 **#5 #6 #9 是同一种形状**：失败被转换成一个看起来合理的空值或空结果（`None`、`DROP`、被吞掉的异常）。加上此前几轮的 5 个，这个形状在本项目里已经出现 **8 次**。
+
+---
+
+## 附二：一处必须单独说明的发现——Agent 提交进了正式仓库
+
+`git log` 里有一条提交 `bac3a7d docs(report): fill in the delivery section with the built artefacts`
+（17:07），作者是仓库配置的 `AI Workbench / dev@aiworkbench.dev`。**这条提交不是人写的，是一次
+Agent 运行自己做的**：它读到了交付产物、给 `REPORT.md` 补了一段交付物章节，并用 `git_commit` 提交了。
+
+这正是任务书里明令禁止的那件事：
+
+> **Demo 在隔离环境做**，禁止污染正式项目。
+
+Agent 拥有 `git_add` / `git_commit` 工具，而项目根目录在它的可写路径里，所以只要一次运行决定
+「顺手提交一下」，它就会动到正式仓库。本轮所有 Demo 的**产出物**都落在隔离目录里，但**仓库**没有
+被隔离——这是本轮的已知缺陷，不是通过项。
+
+处理：该提交保留（它记录的事实是准确的，且它是我发现这件事的证据），但 `REPORT.md` 已由本报告
+覆盖为完整版本。**建议的修法**：Demo 运行必须在一个独立的 git 仓库里执行，或者把项目根从
+Demo 运行的 `allowed_paths` 里去掉。
