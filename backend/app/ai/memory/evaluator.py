@@ -31,6 +31,7 @@ from typing import Any
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.ai.providers.budget import reasoning_budget
 from app.ai.types import ChatMessage
 from app.core.logging import get_logger
 from app.models.context import MemoryCandidate, MemoryEntry, UserPreference
@@ -203,11 +204,23 @@ class MemoryEvaluator:
             ChatMessage(role="system", content=system),
             ChatMessage(role="user", content=f"上下文：{context[:800]}\n\n候选内容：{statement[:1200]}"),
         ]
-        chat = await self.llm.chat(messages, temperature=0.0, max_tokens=500, json_mode=True)
+        # `max_tokens` covers the reasoning model's thinking as well as its answer, and
+        # a budget too small for the thinking produces *no* answer — the provider
+        # raises rather than truncating. At 500 this call failed every time, and the
+        # failure was caught below and returned as `DROP`, i.e. "not worth
+        # remembering". The learning loop was not degraded, it was off, and it looked
+        # exactly like the filter working.
+        chat = await self.llm.chat(
+            messages, temperature=0.0, max_tokens=reasoning_budget(), json_mode=True
+        )
         try:
             return json.loads(chat.content)
-        except json.JSONDecodeError:
-            return {"worth_remembering": False, "reason": "模型返回不可解析", "confidence": 0.0}
+        except json.JSONDecodeError as exc:
+            # A parse failure is a real failure too, and is raised rather than
+            # converted into a verdict — see `evaluate`.
+            raise ValueError(
+                f"判定器返回的不是合法 JSON：{(chat.content or '')[:200]!r}"
+            ) from exc
 
     # ---------------------------------------------------------------- evaluate --
     async def evaluate(
@@ -241,11 +254,15 @@ class MemoryEvaluator:
 
         existing = await self._existing()
 
-        try:
-            judged = await self._judge(text, context, existing)
-        except Exception as exc:
-            logger.warning("memory_judge_failed", extra={"error": f"{type(exc).__name__}: {exc}"})
-            return Verdict(Routing.DROP, f"判定失败：{type(exc).__name__}", content=text)
+        # Deliberately *not* wrapped in a try/except that returns DROP.
+        #
+        # It was, and the consequence was that a judge that could not run at all was
+        # indistinguishable from a judge that ran and said "not worth remembering".
+        # Every delivery rejection for a whole round was silently discarded this way,
+        # and the only trace was a log line nobody reads. A failure must not be
+        # representable as a verdict — the callers already handle exceptions
+        # (`_learn_from_decision` logs `delivery_memory_pass_failed`).
+        judged = await self._judge(text, context, existing)
 
         if not judged.get("worth_remembering"):
             return Verdict(

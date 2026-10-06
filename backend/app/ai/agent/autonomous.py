@@ -37,6 +37,7 @@ from app.ai.agent.control import RunCancelledError, RunController
 from app.ai.agent.plan import ExecutionPlan, PlanStep, RunState, StepStatus
 from app.ai.agent.tools import ToolContext
 from app.ai.prompts.registry import get_prompt
+from app.ai.providers.budget import REASONING_TOKENS, reasoning_budget
 from app.ai.tools.executor import ResourceLimits
 from app.ai.tools.permissions import AgentPolicy
 from app.ai.types import ChatMessage
@@ -70,23 +71,14 @@ STEP_BUDGET_DIVISOR = 3
 #: Signature used when an attempt produced no tool call at all.
 EMPTY_ATTEMPT_SIGNATURE = "no-tools"
 
-#: Completion budget for a call to the model.
-#:
-#: The default provider is a *reasoning* model: it spends tokens thinking before it
-#: emits a single character, and a budget too small for the thinking produces no
-#: answer at all — the provider raises `ai_reasoning_budget_exhausted` rather than
-#: returning something truncated. At 600 tokens the recovery call failed on every
-#: long prompt, so "recover" quietly degraded into "give up and stop the step".
-#:
-#: This is a **cap, not a target**: a model that thinks for 300 tokens costs the
-#: same whether the cap is 4,000 or 8,000. Setting it low buys nothing and costs a
-#: wasted round trip every time the thinking is long — which, on the longest prompt
-#: in the loop, was every time.
-MIN_REASONING_TOKENS = 6000
+#: Completion cap for a call to the model. See `app.ai.providers.budget` for why this
+#: is generous, why a small value is dangerous rather than merely tight, and the two
+#: silent failures a small value has already caused in this codebase.
+MIN_REASONING_TOKENS = REASONING_TOKENS
 
 
 def _completion_budget() -> int:
-    return min(settings.ai_max_tokens, MIN_REASONING_TOKENS)
+    return reasoning_budget()
 
 
 #: The provider's code for "the thinking used the whole completion budget".
