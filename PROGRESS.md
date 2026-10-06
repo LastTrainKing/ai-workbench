@@ -33,54 +33,89 @@
 
 ## 已完成并验证
 
-### 上一轮（第七轮）：搬家实验 + payload 实验
+### 第 1 步 · payload 优化（完成）
 
-| 项 | 证据 |
+| 项 | 优化前 | 优化后 | 证据 |
+|---|---|---|---|
+| payload 原始 | 1,204.9 MB / 25,620 文件 | **439.7 MB / 8,671 文件** | `build/payload-report.json` |
+| 压缩后 | 411.5 MB | **151.3 MB**（ZIP）/ **92.6 MB**（安装包） | `build/installer-report.json` |
+
+砍掉的东西：
+- `vendor/runtime/pgsql` 里 **800.1 MB** 与运行无关的目录（`pgAdmin 4` 615.9 MB / `symbols` 155.6 MB /
+  `doc` 15.5 MB / `include` 12.4 MB / `StackBuilder` 0.8 MB）→ 919.8 MB 降到 119.7 MB
+- `vendor/runtime/*.zip`（下载缓存，13.68 MB，同一份东西出现两次）
+
+**裁剪已验证**：`scripts/verify_pgsql_trim.py` **13/13 PASS** —— 在临时集群上（端口 55432，
+不碰开发库）跑 initdb → 启动 → pg_isready → `SELECT 1` → create/insert/count → 干净停止。
+裁剪后 payload 也做过完整冷启动：PG → Redis → Qdrant → API 全 READY、health 200、UI 200、登录成功。
+
+### 第 1 步 · 安装程序（已构建；验收 29/30，剩一个卸载缺陷）
+
+| 项 | 值 |
 |---|---|
-| 搬家实验 18/18 PASS | `scripts/verify_relocation.py --apply`；原目录的 `scripts/` 与 `.runtime/` 藏起来后副本仍能冷启动、登录、挂 UI |
-| 三项搬迁缺陷已修 | 提交 `351f0bc`：PowerShell 参数不加引号 / `requirements.txt` 缺整套文档库 / venv 不可重定位 |
-| payload 体积实测 | `build/payload-report.json`：**1,204.9 MB / 25,620 文件**，ZIP **411.5 MB** |
-| payload 实测能跑 | 装到 `%LOCALAPPDATA%\AI Workbench Test` 后冷启动：60s API UP、login 成功、UI 挂载、`HasWindow: True`、自建 `.runtime` 并 initdb 成功 |
-| 随包 Python 物化 | `fetch-runtime.ps1` 新增 Python 目标；`vendor/runtime/python` = 322 MB，四种文档格式实测通过 |
+| 安装包 | `build/installer/AI-Workbench-Setup.exe` |
+| 体积 | **92.6 MB** |
+| SHA256 | `346a6153d8536586f039eb1364a5a64b39ff364cff0dd4d859044139b508cdd0` |
+| 压缩比 | 443.1 MB → 92.6 MB（20.9%） |
+| 构建 | `python scripts/build_installer.py --build` |
+| 验收 | `python scripts/verify_installer.py --apply` |
+
+**已 PASS 的（29 条里的大部分）**：干净路径安装 8,673 文件 · 桌面+开始菜单快捷方式指向 exe ·
+原生窗口 · API healthy · 无 5173 · 无新增浏览器进程 · 自建 `.runtime` 并 initdb ·
+挂载 UI · 注册全新账号 · **强杀窗口后 4 个端口全部释放** · 卸载器存在 ·
+安装目录被清除 · 快捷方式被清除
+
+**唯一 FAILED：卸载时的「保留用户数据」路径。**
+
+现象：卸载器把 `.runtime` 移到 `%LOCALAPPDATA%\AI Workbench Data` 这一步失败，
+于是安装目录也删不掉（新加的 `Abort` 守卫生效了，这是**安全的**——宁可不卸载也不丢数据）。
+
+已经排除的原因：
+- 不是 MessageBox 卡住（三处 MessageBox 都加了 `IfSilent` 分支）
+- 不是静默模式没生效（第一次跑时删数据分支执行了，说明 `IfSilent` 判断是对的）
+
+**当前代码状态是安全的**：`Rename` 失败时 `Abort`，安装目录和 `.runtime` 都原样保留，
+并弹出提示告诉用户数据在哪。**没有丢数据的可能。**
+
+**下一步要查的具体问题**：`Rename "$INSTDIR\.runtime" "$LOCALAPPDATA\...\.runtime"` 为什么失败。
+怀疑点（按可能性排序）：
+1. `StopEverything` 之后 PostgreSQL 还没释放文件句柄（`taskkill` 后只 Sleep 2000）
+2. NSIS `Rename` 对**目录**跨父目录移动的限制
+3. `$LOCALAPPDATA` 在卸载器上下文里的取值
+
+**验证方法**：在 `Rename` 前后各加一次 `IfFileExists` + `DetailPrint`，用
+`Uninstall.exe /S` 后读 `%TEMP%` 下的 NSIS 详细日志（`/S` 时 `DetailPrint` 不显示，
+需要改用 `nsExec::ExecToLog 'cmd /c echo ... >> log'` 落盘）。
 
 ---
 
 ## 未完成
 
-### 第 1 步（安装程序）—— 具体还差这几件事
+### 第 1 步还差
 
-1. **payload 优化**：确认 `python-nuget.zip` 等 `vendor/*.zip` 未进 payload（已按设计排除，需复验并记录）；
-   裁剪 `vendor/runtime/pgsql` 里运行不需要的部分（`pgAdmin 4/`、`StackBuilder/`、`symbols/`、`include/`、
-   `lib/` 中的开发库等）并**验证裁剪后 PG 仍能 initdb + 启动**。
-2. **最小可行安装包**：Tauri NSIS `bundle.resources` 带 payload + exe 放树根；先做到"能装、能跑"。
-3. **首次启动初始化**：`.runtime` 建立、PG 数据目录初始化、建库建表、seed——进度可见、失败给真实原因与日志路径。
-4. **卸载**：先停进程再删目录；用户数据默认保留并询问。
-5. **验收九条**：干净路径安装 / 删原目录仍能跑 / 桌面+开始菜单快捷方式指向 exe / 双击 → 原生窗口无浏览器无 CMD 无 5173 /
-   首次启动完成初始化 / 能注册登录 / 关窗后四个服务全退 / 卸载干净 / 安装包路径+体积+SHA256。
+1. **修上面那个卸载缺陷**（唯一未通过项）。
+2. 首次启动的**进度可见性**尚未单独验证（Tauri splash 是否真的显示初始化进度与失败原因）。
 
 ### 第 2 步及以后
 
-未开始。第 2 步的详细要求见下「已知缺口」。
+未开始（开局对话 + 空账号数据隔离）。规格见 `docs/prompts/08-第八轮.md`
+的「能力 A」与第五部分。
 
 ---
 
 ## 下一步
 
-下一个人打开就该做的第一件事，具体到命令：
-
 ```powershell
 cd C:\Users\user\Desktop\ai-workbench
 
-# 1. 看 payload 里到底装了什么、pgsql 里哪些是可裁的
-.\.venv\Scripts\python.exe scripts\build_installer_payload.py
-Get-ChildItem build\installer-payload\vendor\runtime\pgsql | Select-Object Name
-Get-ChildItem build\installer-payload\vendor\runtime\pgsql\pgsql | Select-Object Name
+# 1. 定位卸载时 Rename 为什么失败（见上面「要查的具体问题」）
+#    改完重建：约 6 分钟
+.\.venv\Scripts\python.exe scripts\build_installer.py --build --skip-payload
 
-# 2. 裁 pgsql（保留 bin/ lib/ share/，去掉 pgAdmin 4/ StackBuilder/ symbols/ include/ doc/）
-#    裁完必须验证：initdb 成功 + 端口 5432 起来 + psql "SELECT 1" 通过
+# 2. 重跑验收，目标 30/30
+.\.venv\Scripts\python.exe scripts\verify_installer.py --apply
 
-# 3. 再跑一次 payload 组装，记录新的体积
-.\.venv\Scripts\python.exe scripts\build_installer_payload.py --zip
+# 3. 然后进第 2 步：开局对话 + 第二个空账号
 ```
 
 ---

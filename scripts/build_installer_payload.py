@@ -154,7 +154,13 @@ def main() -> int:
             print(f"  [SKIP] {source_name:24} not present")
             continue
         target = PAYLOAD / target_name
-        target.mkdir(parents=True, exist_ok=True)
+        # Only directories get pre-created. Calling mkdir on a single-file target
+        # creates a *directory* with the file's name, and the copy then lands inside
+        # it — which is how the launcher ended up as
+        # `AI Workbench.exe/ai-workbench-desktop.exe` and the installer refused to
+        # build because the payload "had no launcher".
+        if source.is_dir():
+            target.mkdir(parents=True, exist_ok=True)
         files, size = copy_tree(source, target)
         report[target_name] = {"files": files, "bytes": size}
         print(f"  {target_name:28} {files:>7,} files  {human(size):>12}")

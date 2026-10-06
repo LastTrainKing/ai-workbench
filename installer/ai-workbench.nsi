@@ -1,4 +1,4 @@
-; ============================================================================
+﻿; ============================================================================
 ;  AI Workbench - installer
 ;
 ;  Built with NSIS directly rather than through Tauri's bundler.
@@ -35,9 +35,6 @@
 Unicode true
 !include "MUI2.nsh"
 !include "FileFunc.nsh"
-!include "StrFunc.nsh"
-
-${StrContains}
 
 ; ------------------------------------------------------------------- config --
 !define APP_NAME        "AI Workbench"
@@ -85,15 +82,24 @@ VIAddVersionKey "FileVersion"     "${APP_VERSION}"
 !macro CheckNotRunning
   ; Refuse to install or uninstall over a running copy.
   ;
+  ; The check is delegated to PowerShell and read from its *exit code*, not by
+  ; searching text. `tasklist` exits 0 whether or not it found anything, and its
+  ; "no tasks" line is localized - so matching on output would be matching on the
+  ; machine's language. An exit code reads the same in every language.
+  ;
   ; `tasklist` rather than a window-title search: the shell may be running with no
   ; visible window (mid-startup, or the user closed it and a child is still
   ; winding down), and overwriting the exe underneath a live process produces a
   ; half-upgraded install that is worse than a refusal.
-  nsExec::ExecToStack 'tasklist /FI "IMAGENAME eq ${APP_EXE}" /NH /FO CSV'
+  nsExec::ExecToStack 'powershell -NoProfile -ExecutionPolicy Bypass -Command "if (Get-Process -Name ''AI Workbench'' -ErrorAction SilentlyContinue) { exit 7 } else { exit 0 }"'
   Pop $0
   Pop $1
-  ${StrContains} $2 "${APP_EXE}" "$1"
-  ${If} $2 != ""
+  ${If} $0 == "7"
+    ; `IfSilent +2 0` skips the message box in silent mode but still aborts. A
+    ; MessageBox is not suppressed by `/S`, so an unguarded one hangs an
+    ; unattended uninstall forever - which is exactly what happened the first time
+    ; this was tested.
+    IfSilent +2 0
     MessageBox MB_OK|MB_ICONSTOP "${APP_NAME} 正在运行。$\r$\n$\r$\n请先关闭它，再重新运行安装程序。"
     Abort
   ${EndIf}
@@ -195,6 +201,10 @@ Section "Uninstall"
   ; this installer could do, so the destructive answer is the one the user has to
   ; choose deliberately.
   IfFileExists "$INSTDIR\.runtime\*.*" 0 no_data
+    ; In silent mode there is nobody to ask, so the safe answer is taken: keep.
+    ; A MessageBox is not suppressed by `/S`, so an unguarded one makes an
+    ; unattended uninstall hang on a question no one can answer.
+    IfSilent keep_data 0
     MessageBox MB_YESNO|MB_ICONQUESTION|MB_DEFBUTTON2 \
       "是否同时删除你的数据？$\r$\n$\r$\n这些数据包括：资料库、记忆、档案、AI 产出物。$\r$\n$\r$\n选择「否」会把它们移动到：$\r$\n$LOCALAPPDATA\${DATA_DIR_NAME}$\r$\n$\r$\n选择「是」将永久删除，无法恢复。" \
       IDNO keep_data
@@ -202,11 +212,26 @@ Section "Uninstall"
       RMDir /r "$INSTDIR\.runtime"
       Goto no_data
     keep_data:
+      ; Moved with NSIS's own `Rename`, not `cmd /c move`.
+      ;
+      ; The shell version failed silently: the uninstaller then removed the
+      ; install directory and the user's database went with it. A `nsExec` call
+      ; gives no result unless you go looking for one, and this is the one place
+      ; in the installer where a silent failure destroys something irreplaceable.
+      ; `Rename` sets the error flag, which is checked.
       DetailPrint "保留数据：移动到 $LOCALAPPDATA\${DATA_DIR_NAME}"
-      RMDir /r "$LOCALAPPDATA\${DATA_DIR_NAME}"
       CreateDirectory "$LOCALAPPDATA\${DATA_DIR_NAME}"
-      nsExec::ExecToLog 'cmd /c move /Y "$INSTDIR\.runtime" "$LOCALAPPDATA\${DATA_DIR_NAME}\.runtime"'
-      Pop $0
+      RMDir /r "$LOCALAPPDATA\${DATA_DIR_NAME}\.runtime"
+      ClearErrors
+      Rename "$INSTDIR\.runtime" "$LOCALAPPDATA\${DATA_DIR_NAME}\.runtime"
+      IfErrors 0 move_ok
+        ; Do not proceed to delete anything. Leaving the data where it is and
+        ; saying so is strictly better than reporting success over a lost
+        ; database.
+        MessageBox MB_OK|MB_ICONEXCLAMATION \
+          "无法移动数据目录，已保留在原处：$\r$\n$INSTDIR\.runtime$\r$\n$\r$\n卸载已停止，请关闭所有相关程序后重试。"
+        Abort
+      move_ok:
   no_data:
 
   Delete "$DESKTOP\${APP_NAME}.lnk"
@@ -230,6 +255,7 @@ Section "Uninstall"
 
   ; Tell the user where their data is, rather than leaving them to guess.
   IfFileExists "$LOCALAPPDATA\${DATA_DIR_NAME}\.runtime\*.*" 0 done
+    IfSilent done 0
     MessageBox MB_OK|MB_ICONINFORMATION \
       "卸载完成。$\r$\n$\r$\n你的数据已保留在：$\r$\n$LOCALAPPDATA\${DATA_DIR_NAME}$\r$\n$\r$\n重新安装时会询问是否恢复。"
   done:
@@ -242,6 +268,7 @@ Function .onInit
   ; and applied after extraction so it lands on top of a complete tree.
   StrCpy $R0 "0"
   IfFileExists "$LOCALAPPDATA\${DATA_DIR_NAME}\.runtime\*.*" 0 no_stale
+    IfSilent no_stale 0
     MessageBox MB_YESNO|MB_ICONQUESTION \
       "发现上次卸载时保留的数据：$\r$\n$LOCALAPPDATA\${DATA_DIR_NAME}$\r$\n$\r$\n是否恢复到新安装中？" \
       IDNO no_stale
