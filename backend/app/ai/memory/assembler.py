@@ -20,6 +20,7 @@ context block, and everything still works.
 
 from __future__ import annotations
 
+import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -45,6 +46,60 @@ TRIM_ORDER = ("knowledge", "memory", "project", "profile")
 
 #: Ceiling on how many memories may ever be injected, whatever the budget allows.
 MAX_MEMORIES = 6
+
+#: How long the usage-counter write may wait for a row lock, in milliseconds.
+#:
+#: These counters are diagnostics — they are how a memory that never fires becomes
+#: visible — so they are worth writing, and not worth waiting for. If another run
+#: holds the row, waiting is pointless and blocking is harmful.
+USAGE_LOCK_TIMEOUT_MS = 1500
+
+
+async def record_memory_usage(memory_ids: list[Any]) -> None:
+    """Bump `use_count` / `last_used_at` without holding a lock for a whole run.
+
+    This used to be done on the caller's session, which for an agent run stays open
+    for minutes. Two concurrent runs therefore serialised on the same rows: observed
+    in `pg_stat_activity` as a **4m40s** wait on
+    `UPDATE memory_entries SET last_used_at = ...` while the holder sat
+    `idle in transaction` in the middle of an LLM call. Nothing was wrong with either
+    run; they simply could not both record that they had used the same memory.
+
+    Two changes, and both are needed:
+
+    * the write happens in its **own short transaction**, so the lock is released in
+      milliseconds instead of at the end of the run;
+    * it is bounded by a **lock timeout**, so a busy row can never stall a run.
+
+    A failure here is logged and swallowed on purpose: the counters are telemetry,
+    and telemetry that can break the thing it measures is a liability. What it must
+    not do is stay silent about *why* — hence the log line.
+    """
+    if not memory_ids:
+        return
+    from sqlalchemy import text, update
+
+    from app.infrastructure.database import session_scope
+    from app.models.context import MemoryEntry
+
+    try:
+        async with session_scope() as session:
+            await session.execute(
+                text(f"SET LOCAL lock_timeout = '{USAGE_LOCK_TIMEOUT_MS}ms'")
+            )
+            await session.execute(
+                update(MemoryEntry)
+                .where(MemoryEntry.id.in_(memory_ids))
+                .values(
+                    use_count=MemoryEntry.use_count + 1,
+                    last_used_at=datetime.now(UTC),
+                )
+            )
+    except Exception as exc:
+        logger.warning(
+            "memory_usage_write_failed",
+            extra={"count": len(memory_ids), "error": f"{type(exc).__name__}: {exc}"},
+        )
 
 
 @dataclass
@@ -193,12 +248,6 @@ class ContextAssembler:
         ranked = sorted(rows, key=lambda entry: _memory_score(entry, now=now), reverse=True)
         chosen = ranked[:limit]
 
-        # Using a memory is what makes it useful next time; record that it was.
-        for entry in chosen:
-            entry.use_count += 1
-            entry.last_used_at = now
-        await self.session.flush()
-
         lines = [f"- {entry.content}" for entry in chosen]
         return ContextBlock(
             kind="memory",
@@ -255,14 +304,20 @@ class ContextAssembler:
         include_knowledge: bool = True,
     ) -> AssembledContext:
         """Build the package, trimming by priority if it exceeds the budget."""
+        memory_block = await self._memory_block()
         blocks = [
             await self._profile_block(),
             ContextBlock(kind="project", text=project_digest) if project_digest else ContextBlock(kind="project", text=""),
             await self._preference_block(),
-            await self._memory_block(),
+            memory_block,
         ]
         if include_knowledge:
             blocks.append(self._knowledge_block(knowledge_chunks))
+
+        # Using a memory is what makes it useful next time; record that it was.
+        # Done in its own short transaction — see `record_memory_usage` for why
+        # writing this on the caller's session stalled concurrent runs for minutes.
+        await record_memory_usage([uuid.UUID(mid) for mid in memory_block.memory_ids])
 
         # Merge the two project-ish blocks so the render order stays meaningful.
         merged: dict[str, ContextBlock] = {}
