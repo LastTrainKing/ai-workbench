@@ -191,6 +191,30 @@ def test_an_unrecognised_preference_is_labelled_as_guidance():
     assert "无法确认" in resolution.outcomes[0].detail
 
 
+def test_the_report_names_one_page_count_when_preferences_pull_both_ways():
+    """A run where "内容更完整" pushes the target up while "页数更少" pushes it down.
+
+    The earlier report printed "本次目标页数定为 14 页" and, three lines later,
+    "因此取 10 页（区间下限）" — two numbers, both presented as the answer, in the
+    same generated paragraph. The resolution decides the number; a preference only
+    describes a constraint on it.
+    """
+    from pathlib import Path
+
+    constraints = derive_constraints("做一份 15 分钟的答辩 PPT")
+    resolution = resolve_preferences(
+        [Preference("页数更少"), Preference("内容要尽量完整详尽")],
+        constraints,
+        workspace=Path("."),
+    )
+    report = resolution.report()
+    assert "本次目标页数定为 15 页" not in report  # sanity: not a stray number
+    assert "本次目标页数定为 14 页" in report
+    # The "fewer" constraint is still reported — as a floor, not as the answer.
+    assert "因此页数不会低于 10 页" in report
+    assert "因此取 10 页" not in report
+
+
 def test_no_preferences_produces_no_outcomes_and_no_report():
     constraints = derive_constraints("做一份 PPT")
     resolution = resolve_preferences([], constraints, workspace=__import__("pathlib").Path("."))

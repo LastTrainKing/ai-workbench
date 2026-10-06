@@ -264,6 +264,13 @@ class PreferenceResolution:
         Written here rather than left to the model's summary because the question
         "did it explain the page count?" has to be answerable from the output, and
         a model that happens not to mention it would make the answer "no".
+
+        The page count is stated **once**, with the reason it landed where it did.
+        An earlier version also had each bounded preference name its own number, so
+        a run where "内容更完整" pushed the target to the top of the range printed
+        "目标页数定为 14 页" and, three lines later, "因此取 10 页（区间下限）" — two
+        numbers, both presented as the answer. The resolution decides the number; the
+        individual preferences describe constraints on it.
         """
         if not self.outcomes and not self.constraints.has_slide_range:
             return ""
@@ -271,16 +278,24 @@ class PreferenceResolution:
         if self.constraints.has_slide_range:
             lines.append(f"- 硬约束：{self.constraints.rationale()}。")
         if self.target_slides:
-            lines.append(
-                f"- 本次目标页数定为 {self.target_slides} 页"
-                + (
-                    f"——这是 {self.constraints.duration_minutes:g} 分钟约束下的最小值，"
+            if (
+                self.target_slides == self.constraints.slide_min
+                and any(o.verdict == "bounded" for o in self.bounded)
+            ):
+                reason = (
+                    f"这是 {self.constraints.duration_minutes:g} 分钟约束下的最小值，"
                     "长期偏好希望更少，但再少就讲不满这个时长。"
-                    if self.target_slides == self.constraints.slide_min
-                    and any(o.verdict == "bounded" for o in self.bounded)
-                    else "。"
                 )
-            )
+            elif self.target_slides == self.constraints.slide_max and any(
+                "详尽" in o.text or "完整" in o.text for o in self.bounded
+            ):
+                reason = (
+                    f"这是 {self.constraints.duration_minutes:g} 分钟约束下的最大值，"
+                    "因为有一条偏好要求内容更完整；再长就讲不完了。"
+                )
+            else:
+                reason = "落在硬约束区间内。"
+            lines.append(f"- 本次目标页数定为 {self.target_slides} 页——{reason}")
         if self.charts_per_slide:
             lines.append(f"- 图表偏好生效：每个内容页附 {self.charts_per_slide} 张图。")
         for outcome in self.outcomes:
@@ -385,7 +400,7 @@ def resolve_preferences(
                     "bounded",
                     f"只能部分满足：本次是 {constraints.duration_minutes:g} 分钟的汇报，"
                     f"硬约束要求至少 {constraints.slide_min} 页，"
-                    f"因此取 {constraints.slide_min} 页（区间下限），不能再少",
+                    f"因此页数不会低于 {constraints.slide_min} 页，不能再少",
                 )
             else:
                 add(text, "applied", "没有时长约束，按偏好的偏少页数执行")
