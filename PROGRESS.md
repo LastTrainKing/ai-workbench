@@ -60,6 +60,30 @@ skill 级毫秒 **待第 4 步完成后测**。
 **未完成**：发现（GitHub 搜索）· 评估 · 沙箱试运行 · 采纳入库 · 个性化注入 ·
 复盘 · API 端点 · 前端 Skill 页 · 用第 3 步的测量证明 skill 级更快。
 
+## 第 4 步 Skill 层 —— 后端完成一半（commit `17716f0`）
+
+**已完成并测试（21 + 20 = 41 个测试全绿，后端全量 477 个 0 失败）**：
+
+| 文件 | 内容 |
+|---|---|
+| `skills/schema.py` | skill 格式 + 手写 front matter 解析；无 `source` 直接拒绝 |
+| `skills/scanner.py` | 安全扫描，7 类规则全部阻止入库 |
+| `skills/registry.py` | 匹配 / 采纳门 / 个性化绑定 / 使用计数 / 复盘 |
+| `models/skill.py` | `installed_skills` 表 |
+
+**两个门都在 `adopt()` 里，故意不拆开**：用户确认 + 安全扫描。
+拆到不同调用点，就是其中一个迟早被跳过的原因。
+**确认了也不够** —— 恶意 skill 即使用户说"是"也会被拒，因为用户是对自己没读过的东西说"是"。
+
+**个性化 = `{{param}}` 绑定**。没填的槽**保留占位符而不是留空** ——
+留空会把"我们还不知道你这个"变成读起来像知道的话。
+哪些槽还空着记在 `verification.unfilled_params` 里，**用来问，不是用来猜**。
+
+`SKILL_LAYER_BUILT` 已翻成 True，tier 2 接上了（传 session + user）。
+
+**未完成**：FIND/ASSESS（`discovery.py`，GitHub 搜索）· 沙箱试运行 · API 端点 ·
+前端 Skill 页 · 用第 3 步的测量证明 skill 级命中更快。
+
 ## 第 5–8 步：未开始
 
 ---
