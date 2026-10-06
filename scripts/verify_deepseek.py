@@ -457,10 +457,37 @@ def check_ai_run_history(client: Client, report: Report) -> None:
     report.check("runs exist", len(runs) > 0, f"{len(runs)} runs")
     report.check("deepseek runs are recorded", "deepseek" in providers, str(sorted(providers)))
     report.check("offline runs are recorded too (and labelled)", "offline" in providers, "")
+    # "No run claims a model it did not use" is the invariant. Three ways to violate it,
+    # and they are not the same thing:
+    #
+    #   * an empty provider or model — a silent hole, which is what the first version of
+    #     this check caught and could not describe (it reported a blank detail);
+    #   * a provider name that is not a provider. The autonomous service recorded
+    #     `provider="autonomous"`, which is a *permission level*, so half the history
+    #     claimed a provider that does not exist;
+    #   * an explicit `unknown`, which claims nothing and is the honest value for a run
+    #     whose provider was never recorded.
+    #
+    # The first two fail. The third passes, because refusing it would push a caller back
+    # towards inventing a value — which is how the false claim got there in the first place.
+    NOT_PROVIDERS = {"autonomous", "manual", "system", "agent"}
+    silent = [r for r in runs if not r.get("provider") or not r.get("model")]
+    false_claims = [r for r in runs if (r.get("provider") or "").lower() in NOT_PROVIDERS]
+
     report.check(
-        "no run claims a model it did not use",
-        all(r.get("provider") and r.get("model") for r in runs),
-        "",
+        "no run has a silent hole where its provider should be",
+        not silent,
+        f"{len(silent)} 条缺 provider/model" if silent else "",
+    )
+    report.check(
+        "no run claims a provider that is not one",
+        not false_claims,
+        str(sorted({r.get("provider") for r in false_claims})) if false_claims else "",
+    )
+    report.check(
+        "unknown is allowed and used honestly",
+        all(r.get("provider") for r in runs),
+        f"{len([r for r in runs if r.get('provider') == 'unknown'])} 条标为 unknown",
     )
     metrics = data(client.get("/ai-runs/metrics")).get("metrics") or {}
     report.check("metrics aggregate", (metrics.get("total_runs") or 0) > 0, f"total={metrics.get('total_runs')}")

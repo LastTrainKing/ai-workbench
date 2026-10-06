@@ -220,14 +220,23 @@ async def start_run(
     """Register the run, create the recorder, and launch the background task."""
     policy = build_policy()
 
+    # The real provider and model, not the permission mode.
+    #
+    # This said `provider="autonomous"` with an empty model, and a self-check caught it:
+    # half of the run history claimed a provider that does not exist. `autonomous` is a
+    # *permission level* — "complete the task within the granted scope" — and using it as
+    # a provider name means the history cannot answer "which model produced this", which
+    # is the one question a run record exists to answer.
+    llm, llm_info = build_llm_provider()
+
     # The run record is created here, on the request's session, so the caller can
     # query it immediately; the work itself uses its own session.
     recorder = await RunRecorder.start(
         session,
         run_type=RunType.AGENT,
         owner_id=owner_id,
-        provider="autonomous",
-        model="",
+        provider=llm_info.kind,
+        model=getattr(llm, "model", "") or llm_info.model,
         prompt_name="agent_planner",
         prompt_version=1,
         request_payload={"goal": goal, "mode": "autonomous", "level": int(policy.level)},
