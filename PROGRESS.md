@@ -5,106 +5,51 @@
 
 ---
 
-【本阶段状态：第 3 步 **PASS**；第 4 步进行中（格式 + 安全扫描已完成并测试）；第 5–8 步未开始】
+【本阶段状态：第 3 步 PASS；第 4 步后端 + Skill 页完成；第 5、6 步完成；第 7 步部分；第 8 步未做】
 
-## 第 3 步 分级检索 —— **PASS**
+## 第 3 步 分级检索 —— PASS
 
-**判定方式是这样选出来的（不是猜的）**：先写 `scripts/sample_relevance.py` 采样 ——
-8 个知识库确实覆盖的问题 + 6 个合理但不相关的问题，把每个候选信号的两组分布都打出来：
+判定方式靠**测量**选出，不是猜。`scripts/sample_relevance.py` 采样 8 个覆盖 + 6 个不相关问题，
+打印每个候选信号的两组分布。`vector_top` 重叠只有 0.007（融合分 0.337），
+因为绝对相似度**不按返回集归一化**；再与稀疏分取较大值 → 两组分开，间隙 0.140。
+`RELEVANCE_FLOOR = 1.693`。**间隙只有 0.14、样本 14 个，余量不宽，如实写明。**
 
-```
-fused_top     covered 0.294-0.977   unrelated 0.099-0.632   overlap 0.337
-vector_top    covered 0.117-0.557   unrelated 0.097-0.124   overlap 0.007
-keyword_top   covered 0.000-14.565  unrelated 0.000-3.246   overlap 3.246
-overlap_top   covered 1.000-16.000  unrelated 0.000-2.000   overlap 1.000
-combined      covered 1.763-7.283   unrelated 0.647-1.623   gap 0.140  ← 可分
-```
+实测（各 5 次中位）：记忆 1.6ms · 知识库 35.8ms · 都不命中 25.1ms（**真的落通用路径**）。
+记忆比通用路径快 **15.5×**。
 
-**绝对向量相似度几乎能单独分开**（重叠 0.007 vs 融合分的 0.337）——
-因为它**不按返回集归一化**，正是前两次失败缺的那个性质。
-它在一处失败：离线哈希嵌入对精确短语打分偏低。稀疏分在相反处失败：换个说法就是 0。
-取两者较大值，两组就分开了。`RELEVANCE_FLOOR = 1.693`（间隙中点）。
-
-**间隙只有 0.14、样本只有 14 个，这一点如实写明** —— 这是一个能用的判据，
-不是余量充足的判据。注释里写了：语料或嵌入一变就要重测，一条命令。
-
-**修完后的真实数字**（各 5 次取中位）：
-
-```
-记忆命中     median  1.6 ms   → 由「memory」回答
-知识库命中    median 35.8 ms   → 由「knowledge」回答（相关度 3.26）
-都不命中     median 25.1 ms   → 由「general」回答（知识层相关度 0.72，低于 1.693）
-```
-
-**记忆命中比通用路径快 15.5×。** 第三档现在**真的落到通用路径**了。
-
-验收：知识级可分 PASS · 三种情况真实毫秒 PASS · no-hit 落通用路径 PASS ·
-工作台显示命中层级 **未做（第 7 步）** · 检索为空时的说明 **未接到界面** ·
-skill 级毫秒 **待第 4 步完成后测**。
-
-## 第 4 步 Skill 层 —— 进行中
-
-**已完成并测试（21 个测试全绿）**：
-
-- `backend/app/ai/skills/schema.py` —— skill 格式 + 手写 front matter 解析器
-  （不用 YAML 依赖：11 个已知键，接受任意 YAML 的解析器是更大的攻击面）
-- `backend/app/ai/skills/scanner.py` —— **安全扫描，7 类规则全部阻止入库**
-
-**扫描器自己被抓到一次**：第一版只匹配调用语法（`requests.post(`），
-测试用一句"上传到 https://drop.example/collect"就穿过去了 ——
-**同一个外发行为，只是没写函数调用**。这正是这个模块 docstring 里警告的错误，由它自己犯的。
-改成**以主机为准、动词只决定语气**。
-
-脚本会被扫描，不只扫正文 —— 脚本才是真正执行的那一类。
-
-**未完成**：发现（GitHub 搜索）· 评估 · 沙箱试运行 · 采纳入库 · 个性化注入 ·
-复盘 · API 端点 · 前端 Skill 页 · 用第 3 步的测量证明 skill 级更快。
-
-## 第 4 步 Skill 层 —— 后端完成一半（commit `17716f0`）
-
-**已完成并测试（21 + 20 = 41 个测试全绿，后端全量 477 个 0 失败）**：
+## 第 4 步 Skill 层 —— 后端与界面完成
 
 | 文件 | 内容 |
 |---|---|
-| `skills/schema.py` | skill 格式 + 手写 front matter 解析；无 `source` 直接拒绝 |
-| `skills/scanner.py` | 安全扫描，7 类规则全部阻止入库 |
-| `skills/registry.py` | 匹配 / 采纳门 / 个性化绑定 / 使用计数 / 复盘 |
-| `skills/discovery.py` | FIND + ASSESS（真实 GitHub 搜索 + 评估） |
-| `models/skill.py` | `installed_skills` 表 |
+| `skills/schema.py` | 格式 + 手写 front matter 解析；无 `source` 直接拒绝 |
+| `skills/scanner.py` | 7 类规则全部阻止入库（21 测试） |
+| `skills/registry.py` | 匹配 / 采纳门 / 个性化绑定 / 使用计数 / 复盘（20 测试） |
+| `skills/discovery.py` | FIND + ASSESS，**真实 GitHub 实测**：3 词 → 7 候选 → 留 5 |
+| `api/v1/skills.py` | 6 个端点（10 个 HTTP 测试） |
+| `features/skills/SkillPanel.tsx` | Skill 页，**浏览器实测 14/14** |
 
-**FIND + ASSESS 已实测**（真实调 api.github.com，不是 fixture）：
+**搜索本身不导入任何东西**（测试数了 API 调用：adopt 0 → 0）。
 
-```
-搜索词: ['帮我写毕业论文的文献综述 skill', 'topic:agent-skills', 'topic:claude-skills']
-结果:   3 个搜索词 → 7 个候选 → 保留 5 个
-保留:   addyosmani/agent-skills ★101936 MIT（101936 star；3 天前更新；license MIT）等
-筛掉:   anthropics/skills → 没有声明 license，无法确认能否合法使用
-```
+## 第 5 步 知识库自动补充 —— 完成（11 测试）
 
-**查询构造器第一版是错的，空结果就是证据**：用用户自己的话去搜，每次都 0 条 ——
-GitHub 仓库搜索匹配的是仓库名和描述，绝大多数是英文，中文短语匹配不上。
-**"没搜到"和"没有"长得一样**，这是发现阶段最糟的失败。
-探测后改用 `topic:agent-skills`（29,319 条）作底，用户自己的 ASCII 词作细化。
+真实文件夹（5 个毕设文件 + 2 个菜谱 + .DS_Store + node_modules + 二进制）：
+分类正确、近重复按字符 shingle 检测并报百分比、缺口**只提议不下载**。
 
-复用已有的 `PermissionPolicy.check_domain` —— 再加一个白名单就是同一个问题的第二个答案。
-**搜索失败 ≠ 搜索为空**：限流会抛 `ValidationError` 并如实报出，不会静默返回空列表。
+## 第 6 步 记忆生命周期 —— 完成（20 测试）
 
-**两个门都在 `adopt()` 里，故意不拆开**：用户确认 + 安全扫描。
-拆到不同调用点，就是其中一个迟早被跳过的原因。
-**确认了也不够** —— 恶意 skill 即使用户说"是"也会被拒，因为用户是对自己没读过的东西说"是"。
+合并 / 衰减 / 冲突 / 遗忘。**测试抓到一个真 bug**：矛盾的记忆相似度高达 0.75，
+会被合并步骤先吃掉 —— 那是系统在悄悄删掉用户的一个信念。已排除。
 
-**个性化 = `{{param}}` 绑定**。没填的槽**保留占位符而不是留空** ——
-留空会把"我们还不知道你这个"变成读起来像知道的话。
-哪些槽还空着记在 `verification.unfilled_params` 里，**用来问，不是用来猜**。
+## 第 7 步 界面 —— 首页四区已有；工作台加了 tier 行
 
-`SKILL_LAYER_BUILT` 已翻成 True，tier 2 接上了（传 session + user）。
+`POST /retrieval/tiers` **HTTP 实测通过**：`由「memory」回答 · memory=命中(10ms)：命中 5 条（共 7 条）`。
+**界面渲染 NOT VERIFIED** —— 上下文卡片只在选中一次运行时渲染，我的浏览器检查没打开运行。
 
-**未完成**：抓取候选的 skill 文件正文（`fetch_skill_file` 已写但未对真实仓库测）·
-沙箱试运行 · API 端点 · 前端 Skill 页 · 用第 3 步的测量证明 skill 级命中更快。
-
-## 第 5–8 步：未开始
+## 第 8 步 全量回归 + 交付 —— 未做
 
 ---
+
+【上一阶段状态】
 
 【上一阶段状态】
 
