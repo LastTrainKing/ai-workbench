@@ -271,6 +271,13 @@ class MemoryEvaluator:
                 entry.use_count += 1
                 entry.last_used_at = datetime.now(UTC)
                 entry.confidence = max(entry.confidence, confidence)
+                if origin and not entry.structured:
+                    # The memory already existed and had no recorded origin; this
+                    # restatement is the evidence of where it came from. Attaching
+                    # it is accurate — it is the same belief — and it is the only
+                    # way an older memory becomes reviewable instead of staying an
+                    # assertion from nowhere forever.
+                    entry.structured = origin
                 await self.session.flush()
                 return Verdict(
                     Routing.DUPLICATE,

@@ -47,7 +47,7 @@ REJECTION = "图表太少，文字堆得太满，页数也偏多，控制在 12 
 
 #: The first version, as the previous round produced and verified it. Kept because
 #: the whole point of the comparison is that it predates what was learned.
-V1_PATH = ROOT / "samples" / "demo-output" / "答辩PPT.pptx"
+V1_PATH = ROOT / "samples" / "demo-output" / "答辩PPT-第一版-11页.pptx"
 V1_EXPECTED = {"slides": 11, "images": 0, "size_bytes": 70538, "state": "COMPLETED"}
 
 

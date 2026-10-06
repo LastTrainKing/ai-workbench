@@ -131,7 +131,22 @@ file can add protections but never remove them.
 
 ### Workspace
 
-`.runtime/agent-policy.json`. Relative paths in tool calls resolve here.
+`<project>/.runtime/workspace` — the agent's own area, with a fixed layout:
+
+```
+deliverables/   files produced for the user
+notes/          drafts and working notes
+sources/        material imported or staged
+.tmp/           scratch; safe to empty
+```
+
+Overridable with `AGENT_WORKSPACE` in `.env` or the `AI_WORKBENCH_AGENT_WORKSPACE`
+environment variable. Relative paths in tool calls resolve here, and a bare filename
+given to `document_write` is routed into `deliverables/`.
+
+It used to be `%USERPROFILE%\Desktop\AI Workbench Workspace`, which is how a deck the
+agent produced ended up sitting on the desktop next to a game launcher. See
+[WORKSPACE.md](WORKSPACE.md).
 
 ---
 
@@ -141,17 +156,27 @@ file can add protections but never remove them.
 |---|---|
 | Database | `vendor/runtime/pgsql/data` |
 | Vectors | `vendor/runtime/qdrant` |
-| Agent workspace | `%USERPROFILE%\Desktop\AI Workbench Workspace` |
+| Agent workspace | `.runtime/workspace` (`deliverables/`, `notes/`, `sources/`, `.tmp/`) |
 | Snapshots | `.runtime/snapshots` |
 | Logs | `.runtime/logs`, including `desktop-lifecycle.log` |
 | Configuration | `.runtime/ai-config.json`, `.runtime/agent-policy.json` |
 
 None of it is committed. `scripts/stop.bat` stops the services and preserves everything.
 
-The agent workspace holds three demo outputs worth inspecting — `demo1/` (the agent
-creates a project and commits it), `textstats/` (it finds and fixes a bug in an existing
-project) and `doc-demo/` (six document formats). Everything else the tests produced is
-under `_test-artifacts/`.
+### Sample outputs
+
+`samples/demo-output/` holds the real artifacts the acceptance runs produced, kept as
+evidence rather than described:
+
+| File | What it is |
+|---|---|
+| `答辩PPT-第一版-11页.pptx` | 70,538 B / 11 slides, produced from three imported documents (Demo 1, version 1) |
+| `答辩PPT-第一版-11页.png` | its cover, rendered by LibreOffice |
+| `答辩PPT-第二版-2页-FAILED.pptx` | the 34,355 B / 2-slide deck from a run that ended `FAILED` — the case that produced the `PARTIAL` state |
+
+`archive/` holds what was filed off the desktop rather than deleted: old release ZIPs, a
+runtime backup, and the pre-convention agent workspace. It is gitignored — hundreds of
+megabytes of binaries that nothing in the build reads.
 
 ---
 

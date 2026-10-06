@@ -429,3 +429,40 @@ Agent → Tool → Permission Manager → Tool Executor
                           Computer tools (44, was 42)
                           new: document_write, document_read
 ```
+
+---
+
+## Update (round 5) — the three layers, named
+
+The layer diagram above is a technical stack. The product-level reading of the same
+system is three layers, and it is the reading that explains why the boundaries are where
+they are:
+
+```
+交付层  delivery    what it produced      BuildRun · Deliverable · verification · acceptance
+行动层  action      what it can do        planner · loop · tools · permissions · executor
+认知层  cognition   what it knows         documents · concepts · RAG · memory · preferences
+```
+
+The rule that separates them is not "which module is allowed to import which". It is:
+
+- the **agent never touches the database** — it calls a named tool, and the tool is
+  checked, executed, audited and bounded before any business code runs;
+- the **machine decides whether work succeeded** — verification is a tool call whose exit
+  code is read, never the model's opinion;
+- the **user decides whether the result is wanted** — `accepted` is a separate field from
+  `verified`, and a file can pass every check and still be rejected.
+
+That last pair is the load-bearing one. Collapsing them would lose the single most
+informative event in the system.
+
+Two other documents belong to this reading: [`../ARCHITECTURE.md`](../ARCHITECTURE.md)
+is the ten-minute version, and [`../DELIVERABLE.md`](../DELIVERABLE.md) covers the
+delivery model in detail.
+
+### Workspace layout (round 5)
+
+The agent's workspace moved from `%USERPROFILE%\Desktop\AI Workbench Workspace` to
+`<project>/.runtime/workspace`, and gained a fixed layout
+(`deliverables/ notes/ sources/ .tmp/`). See [`../WORKSPACE.md`](../WORKSPACE.md) for why
+the old default was a product defect rather than a configuration choice.

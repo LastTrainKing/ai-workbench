@@ -188,11 +188,14 @@ class AgentExecutor:
         registry = self.registry
 
         if self.policy is not None:
-            from app.ai.tools.permissions import PermissionManager
+            from app.ai.tools.permissions import PermissionManager, ensure_workspace_layout
 
             permission_manager = PermissionManager(self.policy)
             workspace = self.policy.workspace
-            workspace.mkdir(parents=True, exist_ok=True)
+            # The layout, not just the directory: whichever entry point builds an
+            # agent, the workspace comes out with the same shape, so "where does a
+            # deliverable go?" never depends on which code path ran first.
+            ensure_workspace_layout(workspace)
 
             # Resource ceilings for this run. The executor checks them before
             # every call, so a runaway agent hits a wall rather than the user's

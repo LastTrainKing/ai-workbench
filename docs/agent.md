@@ -244,3 +244,45 @@ permission system in front of it.
 The two share the executor's tool plumbing but not their prompts, their limits or their
 purpose. Reading one and assuming it describes the other will be misleading, which is why
 this note is here rather than a merge.
+
+---
+
+## Update (round 5) — recovery, and the retry that did not exist
+
+The autonomous loop's `FIX → RETRY` step was documented above as if it worked. It did
+not, and the way it failed is worth recording because it is a shape that hides well.
+
+`_recover` asked the model for a root-cause analysis and returned it; the caller
+discarded the return value:
+
+```python
+await self._recover(step, observations)   # ← the analysis went nowhere
+step.status = StepStatus.RUNNING
+```
+
+The next attempt was therefore built from an identical prompt and reached an identical
+decision. One run burned **105 tool calls in two steps** and ended in `LIMIT_REACHED`
+with recovery never having taken effect. Raising `max_tool_calls` would have moved the
+wall, not removed it.
+
+Four things now, and each is needed for the others to mean anything:
+
+| Mechanism | Where |
+|---|---|
+| `PlanStep.attempts` records tools, arguments, a signature, the error and the analysis | `plan.py` |
+| The history is injected into the retry's prompt | `autonomous.py` · `render_attempt_history` |
+| Two consecutive identical `(tools, arguments)` attempts are refused as an ineffective retry | `autonomous.py` · `attempt_signature` |
+| A step cannot exceed `max(MAX_TOOLS_PER_STEP, max_tool_calls / 3)` calls | `autonomous.py` · `STEP_BUDGET_DIVISOR` |
+
+`_recover` also no longer substitutes a placeholder when it fails. It reports, and the
+step stops — because no new strategy means the next attempt would be the same attempt.
+
+Two further fixes came out of the same work: `_final_verify` was still treating
+`file_exists` answering "no" as a pass (the bug already fixed in `_verify_step`), and the
+600-token completion budget made the provider raise `ai_reasoning_budget_exhausted` on
+long prompts — a reasoning model that spends its budget thinking returns *nothing*, so
+"recover" silently became "give up". All agent-loop calls now use a 6,000-token cap with
+one automatic escalation; `max_tokens` is a cap, not a target, so a generous one costs
+nothing when the thinking is short.
+
+Full narrative: [`../AGENT.md`](../AGENT.md). Acceptance: `scripts/verify_recovery.py`.

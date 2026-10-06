@@ -214,3 +214,29 @@ Stated plainly so nobody has to discover it the hard way:
 - **No OCR.** Scanned PDFs without a text layer fail with a clear error.
 - **Not unattended.** A high-risk operation always waits for a human. Autonomy is
   not a licence to skip the permission system.
+
+---
+
+## Update (round 5) — recovery, rewritten
+
+The `FIX → RETRY` transition described above assumed `_recover` did something. It did
+not: it returned an analysis that the caller discarded, so every retry re-ran an
+identical prompt and reached an identical decision. See [`../AGENT.md`](../AGENT.md) for
+the full account, and [`agent.md`](agent.md) for the code-level summary.
+
+What changed, in one table:
+
+| Before | After |
+|---|---|
+| the analysis went to the event stream only | it is injected into the next attempt's prompt |
+| attempts were counted | attempts are recorded (tools, arguments, signature, error, analysis) |
+| an identical retry ran again | it is refused as an ineffective retry and the step stops |
+| one step could spend the whole run | a step is capped at a third of the run's budget |
+| a failed recovery retried anyway | a failed recovery reports and stops the step |
+
+Two related fixes: a run with a failed step can no longer end `COMPLETED`, and a run that
+did not finish but left files behind is `PARTIAL` rather than `FAILED`-with-a-verified-
+deliverable.
+
+Acceptance: `scripts/verify_recovery.py` — three scenarios, run against the real model,
+each asserting on the event stream and the tool-call counts rather than on the code.

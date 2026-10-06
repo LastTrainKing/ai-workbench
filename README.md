@@ -9,8 +9,17 @@ Every action is permission-gated, auditable, and reversible.
 It is not a chat wrapper, and it is not a dashboard. It closes one loop:
 
 ```
-你说目标 → 它规划 → 调用工具 → 验证结果 → 失败就修 → 你确认 → 它更懂你
+资料 → 知识 → 规划 → 产出 → 机器验证 → 用户验收 → 偏好沉淀 →（下一次产出）
 ```
+
+Read it as a loop. The last arrow is the point: the product is not finished when it
+produces a file, it is finished when you look at the file and say yes or no — and a
+"no" with a reason becomes something it holds.
+
+<p align="center">
+  <img src="samples/demo-output/答辩PPT-第一版-11页.png" alt="A real deliverable: 11 slides, produced from three imported documents" width="72%">
+</p>
+<p align="center"><sub>Not a mockup: 70,538 B / 11 slides, produced by the agent from three imported documents and opened with <code>python-pptx</code> to count them.</sub></p>
 
 ## What makes it different
 
@@ -20,25 +29,54 @@ Verification is a tool call whose exit code is read, not the model's opinion of 
 output. If `pytest` exits 1, the step failed, whatever the model says about it. Without
 that rule, an agent framework is just a model complimenting itself.
 
+**A retry is a retry, not a loop.**
+
+Recovery used to ask the model for a root-cause analysis and then throw the answer away,
+so every retry ran with an identical prompt and failed identically — one run burned 105
+tool calls in two steps and never recovered. Now each attempt records what it tried, the
+analysis is injected into the next attempt, two consecutive attempts with the same tools
+*and* the same arguments are refused as an ineffective retry, and no single step can
+spend more than a third of the run's budget. See [AGENT.md](AGENT.md).
+
+**A preference is a constraint, not an instruction.**
+
+```
+任务目标（硬约束）  >  长期偏好（软约束）  >  默认行为
+```
+
+"页数更少" once produced a 2-slide deck for a 15-minute talk, because the preference was
+executed as *the task* rather than as *a standard to apply while doing it*. The duration
+is now read out of the goal in code and turned into a page range that no preference can
+argue with; a preference that cannot be honoured is reported rather than silently
+dropped. See [MEMORY.md](MEMORY.md).
+
 **It remembers, and it asks first.**
 
+The trigger is *delivery acceptance*, not conversation. A conversation turn is a guess
+about what you prefer; rejecting a real artifact with a reason is a statement about it.
 Facts worth keeping are separated from noise by a filter that rejects far more than it
-keeps: nine evaluations wrote zero memories in the last measured run. Anything the system
-is not sure about becomes a question, and a fact that contradicts an existing one becomes
-a question too — never a silent overwrite. Recording something wrong is worse than
-recording nothing.
+keeps — nine evaluations wrote zero memories in one measured run. Anything uncertain
+becomes a question, a contradiction becomes a question, and every memory shows the
+delivery it came from with a link back to it.
 
 **It shows you what it knows.**
 
-Every fact the system holds about you is listed, editable and deletable. Every proposed
-fact waits for your decision. The context preview shows the exact text that would be sent
-to the model, block by block, with the token cost of each.
+Every fact the system holds about you is listed, editable, archivable and deletable.
+Every proposed fact waits for your decision. The context preview shows the exact text
+that would be sent to the model, block by block, with the token cost of each.
 
 **It runs as a desktop application.**
 
 A native window — no browser, no address bar, no console. Closing it stops the backend,
 guaranteed by a Windows job object, so a crash or a force-kill cannot leave PostgreSQL,
 Redis and Qdrant running behind a closed window.
+
+**Its workspace is inside the project, not on your desktop.**
+
+The agent's working directory used to default to `%USERPROFILE%\Desktop\AI Workbench
+Workspace` — the product emptying its pockets onto the one screen you look at all day.
+It now lives at `<project>/.runtime/workspace` with a fixed layout
+(`deliverables/ notes/ sources/ .tmp/`). See [WORKSPACE.md](WORKSPACE.md).
 
 <p align="center">
   <img src="screenshots/ui-verification/51-home-grid.png" alt="Home: keyboard-navigable launch grid" width="49%">
@@ -53,8 +91,19 @@ Redis and Qdrant running behind a closed window.
 
 ## Table of contents
 
+Design, in ten minutes:
+
+- [ARCHITECTURE.md](ARCHITECTURE.md) — three layers (cognition / action / delivery), and why the boundaries are where they are
+- [AGENT.md](AGENT.md) — the loop, recovery, and how a retry actually changes strategy
+- [DELIVERABLE.md](DELIVERABLE.md) — the delivery model, verification vs acceptance, what the machine cannot check
+- [MEMORY.md](MEMORY.md) — what is remembered, when, and why so little of it
+- [WORKSPACE.md](WORKSPACE.md) — where the agent works, and the layout that area has
+
+Deeper engineering detail:
+
 - [Autonomous agent](docs/autonomous-agent.md) — the loop, the states, the limits
 - [Permissions](docs/permissions.md) — what the agent may do, and why the defaults are what they are
+- [Architecture](docs/architecture.md) — the long version, including the bugs that produced each decision
 - [Interview questions](docs/interview.md) — 20 questions with the real implementation behind each
 - [Resume description](docs/resume.md) — what was built, and what was not
 

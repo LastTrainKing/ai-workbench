@@ -70,21 +70,23 @@ STEP_BUDGET_DIVISOR = 3
 #: Signature used when an attempt produced no tool call at all.
 EMPTY_ATTEMPT_SIGNATURE = "no-tools"
 
-#: Minimum completion budget for a call to the model.
+#: Completion budget for a call to the model.
 #:
 #: The default provider is a *reasoning* model: it spends tokens thinking before it
 #: emits a single character, and a budget too small for the thinking produces no
 #: answer at all — the provider raises `ai_reasoning_budget_exhausted` rather than
 #: returning something truncated. At 600 tokens the recovery call failed on every
 #: long prompt, so "recover" quietly degraded into "give up and stop the step".
-#: That is the same class of bug as the discarded return value: a failure that
-#: looks like a decision. 2,000 is the floor that makes thinking plus a short
-#: answer fit.
-MIN_REASONING_TOKENS = 2000
+#:
+#: This is a **cap, not a target**: a model that thinks for 300 tokens costs the
+#: same whether the cap is 4,000 or 8,000. Setting it low buys nothing and costs a
+#: wasted round trip every time the thinking is long — which, on the longest prompt
+#: in the loop, was every time.
+MIN_REASONING_TOKENS = 6000
 
 
-def _completion_budget(ceiling: int = MIN_REASONING_TOKENS) -> int:
-    return max(MIN_REASONING_TOKENS, min(settings.ai_max_tokens, ceiling))
+def _completion_budget() -> int:
+    return min(settings.ai_max_tokens, MIN_REASONING_TOKENS)
 
 
 #: The provider's code for "the thinking used the whole completion budget".
@@ -102,7 +104,6 @@ async def _chat(
     temperature: float,
     tools: list[Any] | None = None,
     timeout: float = 180,
-    ceiling: int = MIN_REASONING_TOKENS,
 ) -> Any:
     """Call the model, giving the reasoning budget one honest second chance.
 
@@ -112,7 +113,7 @@ async def _chat(
     out first. Retrying once with double the room is what the provider's own message
     asks for; retrying with the same budget would be the same failure again.
     """
-    budget = _completion_budget(ceiling)
+    budget = _completion_budget()
 
     def call(size: int) -> Any:
         kwargs: dict[str, Any] = {"temperature": temperature, "max_tokens": size}
@@ -651,7 +652,6 @@ class AutonomousAgent:
                 repair_tool_pairing(messages),
                 temperature=0.0,
                 tools=self.registry.specs(),
-                ceiling=2500,
             )
 
             if not chat.tool_calls:
