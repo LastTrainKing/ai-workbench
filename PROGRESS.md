@@ -59,6 +59,48 @@ tier 调用 1 次
 
 **又是"用推断代替证据"**：我看到"没选中"就断定是选择逻辑坏了，没先问"有没有可选的"。
 
+## 第 8 步 全量自检 —— 已跑，结果如下
+
+| 检查 | 结果 |
+|---|---|
+| `verify_installer_static.py` | **41/41** |
+| `verify_pgsql_trim.py` | **13/13** |
+| `verify_deepseek.py` | **62/62**（修掉 provider 假声明后，原 59/60） |
+| `verify-onboarding.mjs` | **25/25** |
+| `verify-skill-ui.mjs` | **14/14** |
+| `verify-context-ui.mjs` | **22/22** |
+| `verify-delivery-ui.mjs` | **35/35**（原 17/27） |
+| `verify-knowledge-and-memory-ui.mjs` | **13 通过 / 0 失败 / 0 未验证** |
+| `verify-agent-ui.mjs` | **26/26** |
+| `verify-shell-behaviour.mjs` | **21/21** |
+| `verify-ai-ui.mjs` | 截图脚本，missing labels 0，console errors none |
+| 后端测试 | **522 收集，0 失败** |
+| 旧路由 | **18/18**（含在 delivery-ui 里） |
+
+**本轮修掉的三个真缺陷：**
+
+1. **一半的运行记录在撒谎** —— `autonomous_service.py` 把权限等级 `autonomous` 当成
+   provider 写进运行记录，model 为空。100 条里 50 条如此。历史行改成 `unknown` 不是猜成
+   deepseek。断言拆成三条（静默空洞 / 假 provider / 显式 unknown）。
+2. **delivery 测试的夹具是假的** —— 用一个 .pptx 后缀的文本文件，readback 检查正确地
+   拒绝了它（`PackageNotFoundError`）。**验证是对的，夹具是假的。** 换成 python-pptx
+   生成的真文件（28,239 B）。
+3. **那条检查自己的说明在撒谎** —— 它的 detail 无条件写"N 项检查，全部通过"，
+   于是失败的那次**在自己的失败信息里报告全部通过**。正是它挡住了继续查下去的路。
+   改成列出失败项和详情，`PackageNotFoundError` 才浮出来。
+
+**本轮我自己的一个错误结论：** 我把「工作台 tier 行」标成 FAILED，理由是我试了三种地址都
+没选中运行。**错了** —— 我传的是 AI 运行 id，工作台的 `:runId` 要的是 BuildRun 的 id，
+而且系统里一个 BuildRun 都没有。建了一条之后立刻正确渲染：
+`这次由「知识库」回答 · 记忆 未命中 3ms · Skill 未命中 5ms · 知识库 命中 51ms`。
+**又是"看到没选中就断定选择逻辑坏了"，没先问"有没有可选的"。**
+
+## 第 8 步 剩余（未做）
+
+前端生产构建已过 · Tauri build / EXE / NSIS 安装包 / 最终 ZIP **未重建** ·
+文档同步（README / ARCHITECTURE / SKILL / RETRIEVAL / MEMORY / AGENT 等）**未做** ·
+冷启动 + 二次启动 **未跑**。
+
 ## 第 8 步 全量回归 + 交付 —— 未做
 
 ---
