@@ -69,7 +69,25 @@ skill 级毫秒 **待第 4 步完成后测**。
 | `skills/schema.py` | skill 格式 + 手写 front matter 解析；无 `source` 直接拒绝 |
 | `skills/scanner.py` | 安全扫描，7 类规则全部阻止入库 |
 | `skills/registry.py` | 匹配 / 采纳门 / 个性化绑定 / 使用计数 / 复盘 |
+| `skills/discovery.py` | FIND + ASSESS（真实 GitHub 搜索 + 评估） |
 | `models/skill.py` | `installed_skills` 表 |
+
+**FIND + ASSESS 已实测**（真实调 api.github.com，不是 fixture）：
+
+```
+搜索词: ['帮我写毕业论文的文献综述 skill', 'topic:agent-skills', 'topic:claude-skills']
+结果:   3 个搜索词 → 7 个候选 → 保留 5 个
+保留:   addyosmani/agent-skills ★101936 MIT（101936 star；3 天前更新；license MIT）等
+筛掉:   anthropics/skills → 没有声明 license，无法确认能否合法使用
+```
+
+**查询构造器第一版是错的，空结果就是证据**：用用户自己的话去搜，每次都 0 条 ——
+GitHub 仓库搜索匹配的是仓库名和描述，绝大多数是英文，中文短语匹配不上。
+**"没搜到"和"没有"长得一样**，这是发现阶段最糟的失败。
+探测后改用 `topic:agent-skills`（29,319 条）作底，用户自己的 ASCII 词作细化。
+
+复用已有的 `PermissionPolicy.check_domain` —— 再加一个白名单就是同一个问题的第二个答案。
+**搜索失败 ≠ 搜索为空**：限流会抛 `ValidationError` 并如实报出，不会静默返回空列表。
 
 **两个门都在 `adopt()` 里，故意不拆开**：用户确认 + 安全扫描。
 拆到不同调用点，就是其中一个迟早被跳过的原因。
@@ -81,8 +99,8 @@ skill 级毫秒 **待第 4 步完成后测**。
 
 `SKILL_LAYER_BUILT` 已翻成 True，tier 2 接上了（传 session + user）。
 
-**未完成**：FIND/ASSESS（`discovery.py`，GitHub 搜索）· 沙箱试运行 · API 端点 ·
-前端 Skill 页 · 用第 3 步的测量证明 skill 级命中更快。
+**未完成**：抓取候选的 skill 文件正文（`fetch_skill_file` 已写但未对真实仓库测）·
+沙箱试运行 · API 端点 · 前端 Skill 页 · 用第 3 步的测量证明 skill 级命中更快。
 
 ## 第 5–8 步：未开始
 
