@@ -220,6 +220,11 @@ def main() -> int:
         for path in files:
             if path.suffix.lower() in {".pyc", ".pyo", ".pdb", ".dll", ".exe", ".pyd", ".png", ".jpg", ".woff2"}:
                 continue
+            # This file is in the payload (scripts/ ships whole), and it contains the
+            # patterns themselves as source text - so it matches itself. Skipping it is
+            # a self-reference, not a whitelist: the other 8,600 files are still scanned.
+            if path.name == "verify_installer_static.py":
+                continue
             try:
                 text = path.read_text(encoding="utf-8", errors="ignore")
             except OSError:

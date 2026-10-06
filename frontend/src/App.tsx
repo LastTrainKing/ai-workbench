@@ -1,7 +1,7 @@
 import { lazy, Suspense } from 'react'
 import { Navigate, Route, Routes } from 'react-router-dom'
 import { AppShell } from '@/components/layout/AppShell'
-import { ProtectedRoute, PublicOnlyRoute } from '@/routes/ProtectedRoute'
+import { ProtectedRoute, PublicOnlyRoute, RequireOnboarding } from '@/routes/ProtectedRoute'
 import { LoadingBlock } from '@/components/ui/feedback'
 
 /* Pages are code-split so the shell paints immediately on a cold load. */
@@ -38,31 +38,36 @@ export default function App() {
         </Route>
 
         <Route element={<ProtectedRoute />}>
-          <Route element={<AppShell />}>
-            <Route index element={<HomePage />} />
-            <Route path="dashboard" element={<DashboardPage />} />
-            <Route path="workbench" element={<WorkbenchPage />} />
-            <Route path="workbench/:runId" element={<WorkbenchPage />} />
-            <Route path="projects" element={<ProjectsPage />} />
-            <Route path="projects/:projectId" element={<ProjectDetailPage />} />
-            <Route path="knowledge" element={<KnowledgePage />} />
-            <Route path="knowledge/:kbId/documents" element={<KnowledgeDocumentsPage />} />
-            <Route path="documents" element={<DocumentsPage />} />
-            <Route path="search" element={<SearchPage />} />
-            <Route path="chat" element={<ChatPage />} />
-            <Route path="planner" element={<PlannerPage />} />
-            <Route path="tasks" element={<TasksPage />} />
-            <Route path="notes" element={<NotesPage />} />
-            <Route path="agent" element={<AgentWorkbenchPage />} />
-            <Route path="ai-runs" element={<AIRunsPage />} />
-            <Route path="ai-runs/:runId" element={<AIRunDetailPage />} />
-            <Route path="graph" element={<GraphPage />} />
-            <Route path="settings" element={<SettingsPage />} />
-            <Route path="settings/agent" element={<AgentPermissionsPage />} />
-            <Route path="me" element={<MyAIPage />} />
-            <Route path="me/:tab" element={<MyAIPage />} />
-            <Route path="welcome" element={<OnboardingPage />} />
-            <Route path="*" element={<NotFoundPage />} />
+          {/* `/welcome` is deliberately outside the onboarding guard: it is where the
+              guard sends people, so putting it inside would loop. */}
+          <Route path="welcome" element={<OnboardingPage />} />
+
+          <Route element={<RequireOnboarding />}>
+            <Route element={<AppShell />}>
+              <Route index element={<HomePage />} />
+              <Route path="dashboard" element={<DashboardPage />} />
+              <Route path="workbench" element={<WorkbenchPage />} />
+              <Route path="workbench/:runId" element={<WorkbenchPage />} />
+              <Route path="projects" element={<ProjectsPage />} />
+              <Route path="projects/:projectId" element={<ProjectDetailPage />} />
+              <Route path="knowledge" element={<KnowledgePage />} />
+              <Route path="knowledge/:kbId/documents" element={<KnowledgeDocumentsPage />} />
+              <Route path="documents" element={<DocumentsPage />} />
+              <Route path="search" element={<SearchPage />} />
+              <Route path="chat" element={<ChatPage />} />
+              <Route path="planner" element={<PlannerPage />} />
+              <Route path="tasks" element={<TasksPage />} />
+              <Route path="notes" element={<NotesPage />} />
+              <Route path="agent" element={<AgentWorkbenchPage />} />
+              <Route path="ai-runs" element={<AIRunsPage />} />
+              <Route path="ai-runs/:runId" element={<AIRunDetailPage />} />
+              <Route path="graph" element={<GraphPage />} />
+              <Route path="settings" element={<SettingsPage />} />
+              <Route path="settings/agent" element={<AgentPermissionsPage />} />
+              <Route path="me" element={<MyAIPage />} />
+              <Route path="me/:tab" element={<MyAIPage />} />
+              <Route path="*" element={<NotFoundPage />} />
+            </Route>
           </Route>
         </Route>
 

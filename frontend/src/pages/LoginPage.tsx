@@ -92,6 +92,10 @@ export default function LoginPage() {
       if (mode === 'login') {
         await login({ identifier: form.identifier.trim(), password: form.password })
         success('登录成功', '欢迎回到 AI Workbench')
+        // A returning account goes where it was headed. Whether it still needs the
+        // wizard is not decided here — `RequireOnboarding` answers that from the
+        // profile, which is the one place the answer lives.
+        navigate(redirectTo, { replace: true })
       } else {
         await register({
           email: form.email.trim(),
@@ -100,8 +104,10 @@ export default function LoginPage() {
           display_name: form.display_name.trim() || form.username.trim(),
         })
         success('账号创建成功', '已自动登录')
+        // A brand-new account has never been through the wizard — true by definition,
+        // so it goes straight there instead of taking a status round-trip first.
+        navigate('/welcome', { replace: true })
       }
-      navigate(redirectTo, { replace: true })
     } catch (error) {
       const apiError = toApiError(error)
       setServerError(apiError.displayMessage)

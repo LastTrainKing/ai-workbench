@@ -1,10 +1,13 @@
 import { useEffect, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   Activity,
   Zap,
   CheckCircle2,
   Database,
+  GraduationCap,
+  Loader2,
   Moon,
   RefreshCw,
   RotateCcw,
@@ -14,6 +17,7 @@ import {
   User as UserIcon,
 } from 'lucide-react'
 import { api } from '@/lib/api'
+import { contextApi } from '@/lib/contextApi'
 import { cn, formatNumber, relativeTime } from '@/lib/utils'
 import { Button, IconButton } from '@/components/ui/Button'
 import { ColorPicker, Field, Input, Select, Switch, Textarea } from '@/components/ui/form'
@@ -45,10 +49,31 @@ function ProfileSection() {
   const user = useAuthStore((state) => state.user)
   const updateProfile = useAuthStore((state) => state.updateProfile)
   const success = useToastStore((state) => state.success)
+  const navigate = useNavigate()
+  const queryClient = useQueryClient()
 
   const [displayName, setDisplayName] = useState('')
   const [avatarColor, setAvatarColor] = useState('#6366f1')
   const [saving, setSaving] = useState(false)
+
+  /**
+   * Send the user back through the first-run wizard.
+   *
+   * Clears the `onboarded` flag and navigates. Only that flag is touched — the profile
+   * fields, memories, documents and deliverables are left alone, because someone
+   * re-reading the tutorial is not asking to be forgotten.
+   *
+   * The reason this exists at all: the wizard used to be reachable exactly once, at
+   * registration. That made the flow impossible to re-check without creating a throwaway
+   * account every time.
+   */
+  const restartTutorial = useMutation({
+    mutationFn: () => contextApi.updateProfile({ onboarded: false }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['onboarding'] })
+      navigate('/welcome')
+    },
+  })
 
   useEffect(() => {
     if (!user) return
@@ -130,6 +155,40 @@ function ProfileSection() {
               { key: '注册时间', value: user?.created_at ? relativeTime(user.created_at) : '—' },
             ]}
           />
+        </CardBody>
+      </Card>
+
+      <Card className="lg:col-span-2">
+        <CardHeader
+          title="新手教程"
+          description="重新走一遍开局对话，可以修改它对你的理解"
+        />
+        <CardBody className="space-y-2.5">
+          <p className="text-[12.5px] leading-relaxed text-muted">
+            会清掉「已经走过向导」的标记，然后把你送回开局对话。
+            <span className="text-text">档案、记忆、资料、产出物都不会动</span>
+            ——重新看教程不等于让它忘掉你。
+          </p>
+          <Button
+            variant="secondary"
+            size="sm"
+            disabled={restartTutorial.isPending}
+            onClick={() => restartTutorial.mutate()}
+          >
+            {restartTutorial.isPending ? (
+              <Loader2 className="size-3.5 animate-spin" />
+            ) : (
+              <GraduationCap className="size-3.5" />
+            )}
+            重新看一遍新手教程
+          </Button>
+          {restartTutorial.isError && (
+            <InlineAlert tone="danger" title="没能重置">
+              {restartTutorial.error instanceof Error
+                ? restartTutorial.error.message
+                : String(restartTutorial.error)}
+            </InlineAlert>
+          )}
         </CardBody>
       </Card>
     </div>
