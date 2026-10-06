@@ -256,7 +256,39 @@ COLD_START_PLACEHOLDER
 
 ## 9. 交付物
 
-DELIVERY_PLACEHOLDER
+| 交付物 | 路径 | 大小 | 时间 |
+|---|---|---|---|
+| 桌面程序 | `desktop/src-tauri/target/release/ai-workbench-desktop.exe` | 3,556,352 B | 10-06 17:03 |
+| 安装包（NSIS） | `.../bundle/nsis/AI Workbench_2.0.0_x64-setup.exe` | 1,123,407 B | 10-06 17:03 |
+| 交付包 | `C:\Users\user\Desktop\AI-Workbench-2.0.0-final.zip` | 7,249,747 B (6.9 MB) | 10-06 17:08 |
+
+**交付包详情**
+
+| 项 | 值 |
+|---|---|
+| 条目数 | 435 |
+| Git commit | `ff8efba` |
+| SHA256 | `DD7D4F301D1512A0D343CCB27B39618DBF84AD3F335F75C3BC90793796EF0293` |
+| 构建依据 | `git ls-files`（435 个跟踪文件，排除策略命中 0） |
+| 验证结果 | **PASS** —— 无凭据、无运行时产物、必需条目齐全 |
+
+**构建时的环境说明（可复现）**
+
+打包脚本调用 `git ls-files` 作为文件清单来源，因此 `git` 必须在 PATH 上。本机 `git` 不在系统 PATH 里，WorkBuddy 自带的 PortableGit 位于：
+
+```
+C:\Users\user\.workbuddy-ai\binaries\PortableGit\versions\1.2.0\cmd
+```
+
+复现命令：
+
+```powershell
+$env:PATH = "C:\Users\user\.workbuddy-ai\binaries\PortableGit\versions\1.2.0\cmd;$env:PATH"
+.\.venv\Scripts\python.exe scripts\build_delivery_zip.py `
+    --output "C:\Users\user\Desktop\AI-Workbench-2.0.0-final.zip"
+```
+
+> 建议（未做）：把 `git` 的解析逻辑写进 `build_delivery_zip.py`（找不到时依次尝试常见安装路径与 PortableGit），失败时报出明确原因，而不是抛出 `FileNotFoundError`。
 
 ---
 
