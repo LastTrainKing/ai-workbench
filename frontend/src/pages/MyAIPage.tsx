@@ -19,6 +19,7 @@ import {
   Brain,
   Check,
   FileText,
+  Wrench,
   Layers,
   Pencil,
   Plus,
@@ -42,6 +43,7 @@ import {
 import type { Memory, MemoryKind, Profile } from '@/lib/contextApi'
 import { toApiError } from '@/lib/api'
 import { cn } from '@/lib/utils'
+import SkillPanel from '@/features/skills/SkillPanel'
 
 const KINDS: MemoryKind[] = ['identity', 'goal', 'preference', 'skill', 'constraint', 'fact', 'decision']
 
@@ -323,7 +325,7 @@ function ContextPanel() {
 
 /* ------------------------------------------------------------------ page -- */
 
-type Tab = 'memory' | 'profile' | 'context'
+type Tab = 'memory' | 'profile' | 'skills' | 'context'
 
 export default function MyAIPage() {
   const queryClient = useQueryClient()
@@ -463,6 +465,7 @@ export default function MyAIPage() {
           [
             ['memory', '记忆', Brain],
             ['profile', '档案', User],
+            ['skills', 'Skill', Wrench],
             ['context', '上下文预览', FileText],
           ] as const
         ).map(([key, label, Icon]) => (
@@ -571,6 +574,7 @@ export default function MyAIPage() {
           <ProfileForm profile={profile.data} />
         ) : null)}
 
+      {tab === 'skills' && <SkillPanel />}
       {tab === 'context' && <ContextPanel />}
     </PageContainer>
   )
