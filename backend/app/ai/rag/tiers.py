@@ -49,6 +49,20 @@ TIERS = ("memory", "skill", "knowledge", "general")
 #: questions it exists to answer.
 MIN_TERM_OVERLAP = 1
 
+#: A retrieved chunk counts as an answer only if the question's own terms appear in it.
+#:
+#: Measured, not assumed. The first version of this tier used the retriever's fused score
+#: with a 0.35 threshold, and "explain quantum entanglement and relativity" — a question
+#: the library has nothing about — scored **0.70**, comfortably above it. The hybrid score
+#: is normalised across the returned set, so its top value is high whether or not anything
+#: matched; a threshold on it cannot separate "covered" from "five loosely related
+#: passages".
+#:
+#: Term overlap can. It is the same signal tier 1 uses, for the same reason: it answers
+#: the question actually being asked — *does this material contain what was asked about* —
+#: rather than *which of these chunks is least unlike the question*.
+MIN_KNOWLEDGE_OVERLAP = 2
+
 
 @dataclass
 class TierAttempt:
@@ -76,11 +90,18 @@ class TieredResult:
         return self.tier
 
     def explain(self) -> str:
-        """One line a person can read: which tier answered, and what the others said."""
+        """One line a person can read: which tier answered, and what the others said.
+
+        The detail is included, not just hit-or-miss. "knowledge=未命中(24ms)" says a tier
+        was consulted and declined; *why* it declined — no material, or material that
+        scored below the threshold — is the part that tells a reader whether the
+        threshold is set correctly.
+        """
         parts = []
         for attempt in self.attempts:
             mark = "命中" if attempt.hit else "未命中"
-            parts.append(f"{attempt.tier}={mark}({attempt.elapsed_ms:.0f}ms)")
+            reason = f"：{attempt.detail}" if attempt.detail else ""
+            parts.append(f"{attempt.tier}={mark}({attempt.elapsed_ms:.0f}ms){reason}")
         return f"由「{self.tier}」回答 · " + " · ".join(parts)
 
     def as_dict(self) -> dict[str, Any]:
@@ -211,9 +232,37 @@ async def _try_knowledge(
     elapsed = (time.perf_counter() - started) * 1000
     if not chunks:
         return TierAttempt("knowledge", False, elapsed, "知识库里没有相关资料"), []
-    return TierAttempt("knowledge", True, elapsed, f"命中 {len(chunks)} 段"), [
-        {"id": str(c.id), "document_id": str(c.document_id), "text": c.text, "score": c.score}
-        for c in chunks
+
+    # Keep only the chunks that actually contain what was asked about.
+    wanted = _terms(question)
+    relevant = [c for c in chunks if len(wanted & _terms(c.content)) >= MIN_KNOWLEDGE_OVERLAP]
+
+    if not relevant:
+        best = max(len(wanted & _terms(c.content)) for c in chunks)
+        # The retriever found *something*, because it always does. Below the overlap gate
+        # that is not an answer, and saying so is the difference between "your library
+        # covers this" and "here are five loosely related passages" — the second of which
+        # the user would read as sourced when it is not.
+        return (
+            TierAttempt(
+                "knowledge",
+                False,
+                elapsed,
+                f"检索到 {len(chunks)} 段但都不含问题里的词（最高重合 {best}，需要 {MIN_KNOWLEDGE_OVERLAP}）——视为没有相关资料",
+            ),
+            [],
+        )
+
+    top = max(c.score for c in relevant)
+    return TierAttempt("knowledge", True, elapsed, f"命中 {len(relevant)} 段（最高分 {top:.2f}）"), [
+        {
+            "chunk_id": c.chunk_id,
+            "document_id": c.document_id,
+            "document_title": c.document_title,
+            "text": c.content,
+            "score": c.score,
+        }
+        for c in relevant
     ]
 
 
