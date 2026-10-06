@@ -199,12 +199,19 @@ async def _watch(
             # asynchronously and the watcher can reach here first. Reading an
             # empty result once and concluding "it produced nothing" is how a run
             # that wrote a 70 KB deck reported "no output detected".
+            #
+            # Each attempt re-loads the run rather than reusing the object from
+            # before the rollback: `rollback()` expires every instance in the
+            # session, and touching an expired attribute performs lazy IO — which in
+            # async SQLAlchemy raises `MissingGreenlet` instead of loading. That is
+            # exactly how this loop killed the watcher on its second attempt and left
+            # the run `EXECUTING` forever.
             collected = 0
             for attempt in range(4):
                 collected = await _collect(
                     session,
                     service,
-                    run=run,
+                    build_run_id=build_run_id,
                     ai_run_id=db_run_id,
                     run_state=state,
                 )
@@ -212,6 +219,10 @@ async def _watch(
                     break
                 await asyncio.sleep(2 + attempt * 2)
                 await session.rollback()
+
+            run = await session.get(BuildRun, build_run_id)
+            if run is None:
+                return
 
             mapping = {
                 "COMPLETED": BuildStatus.COMPLETED,
@@ -257,10 +268,38 @@ async def _watch(
                 extra={"build_run_id": str(build_run_id), "state": state, "deliverables": collected},
             )
     except Exception as exc:
+        # The watcher dying must not strand the run.
+        #
+        # This used to be a log line and nothing else, and the consequence was a run
+        # that stayed `EXECUTING` forever while its agent had already finished — the
+        # one state that is indistinguishable from "still working". Whatever went
+        # wrong here, the run has to end up in a terminal state that says so.
+        reason = f"{type(exc).__name__}: {exc}"
+        import traceback
+
         logger.warning(
             "build_run_watch_failed",
-            extra={"build_run_id": str(build_run_id), "error": f"{type(exc).__name__}: {exc}"},
+            extra={"build_run_id": str(build_run_id), "error": reason, "traceback": traceback.format_exc()[:2500]},
         )
+        try:
+            from app.infrastructure.database import session_scope
+
+            async with session_scope() as session:
+                run = await session.get(BuildRun, build_run_id)
+                if run is not None and run.status not in {
+                    status.value for status in BuildStatus if status.is_terminal
+                }:
+                    run.status = BuildStatus.FAILED.value
+                    run.error = f"运行监视失败，结果无法确认：{reason}"[:500]
+                    run.result_summary = (
+                        "监视这次运行的过程出错了。产出物可能已经在工作区里，但这次运行不能算完成。"
+                    )
+                    await session.commit()
+        except Exception as nested:
+            logger.error(
+                "build_run_watch_failure_not_recorded",
+                extra={"build_run_id": str(build_run_id), "error": f"{type(nested).__name__}: {nested}"},
+            )
 
 
 async def _sync_progress(build_run_id: uuid.UUID, controller: Any) -> None:
@@ -321,7 +360,7 @@ async def _collect(
     session: AsyncSession,
     service: DeliveryService,
     *,
-    run: BuildRun,
+    build_run_id: uuid.UUID,
     ai_run_id: str,
     run_state: str = "",
 ) -> int:
@@ -334,7 +373,18 @@ async def _collect(
 
     `run_state` is carried in so the registration can be honest about it: a file
     produced by a run that did not succeed is registered, but never as *verified*.
+
+    The run is loaded **here**, from its id, rather than being passed in. The caller
+    retries this after a `rollback()`, and a `rollback()` expires every instance in
+    the session — so a `run` object captured before it is a trap: reading any of its
+    attributes afterwards performs lazy IO, and lazy IO in async SQLAlchemy raises
+    `MissingGreenlet`. Taking the id instead makes that impossible.
     """
+    run = await session.get(BuildRun, build_run_id)
+    if run is None:
+        logger.warning("build_run_missing_at_collect", extra={"build_run_id": str(build_run_id)})
+        return 0
+
     # Read the audit log, not `tool_calls`.
     #
     # Both tables exist and only one of them is written for agent tool executions:
