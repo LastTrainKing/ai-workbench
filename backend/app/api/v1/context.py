@@ -463,3 +463,26 @@ async def context_stats(user: CurrentUser, session: DbSession) -> dict[str, Any]
             "onboarded": bool(profile and profile.onboarded),
         }
     )
+
+class TierQuery(BaseModel):
+    """A question to run down the retrieval ladder."""
+
+    question: str = Field(min_length=1, max_length=500)
+
+
+@router.post("/retrieval/tiers", summary="这次是从哪一级拿到的答案")
+async def retrieval_tiers(
+    payload: TierQuery, user: CurrentUser, session: DbSession
+) -> dict[str, Any]:
+    """Run the tier ladder and report which one answered, and how long each took.
+
+    This exists because the product's claim is that it is faster than starting from
+    scratch, and a claim like that has to be visible where the work happens. The workbench
+    shows the answer to "which tier did this come from" next to the context it injected,
+    so a person can see that a question was answered from their own memory rather than
+    from the model's general knowledge.
+    """
+    from app.ai.rag.tiers import resolve
+
+    result = await resolve(session, user_id=user.id, question=payload.question)
+    return ok(result.as_dict())

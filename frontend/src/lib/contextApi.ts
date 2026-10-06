@@ -147,6 +147,21 @@ export interface ContextSnapshot {
 
 /* ------------------------------------------------------------------ calls -- */
 
+
+export interface TierAttempt {
+  tier: 'memory' | 'skill' | 'knowledge' | 'general'
+  hit: boolean
+  elapsed_ms: number
+  detail: string
+}
+
+export interface TierResult {
+  tier: TierAttempt['tier']
+  total_ms: number
+  explanation: string
+  attempts: TierAttempt[]
+}
+
 export const contextApi = {
   /* ------------------------------------------------------------- profile -- */
   profile: () => request<Profile>('/profile'),
@@ -208,6 +223,10 @@ export const contextApi = {
     }),
 
   contextStats: () => request<ContextStats>('/context/stats'),
+
+  /** Which tier answered this question, and how long each took. */
+  tiers: (question: string) =>
+    request<TierResult>('/retrieval/tiers', { method: 'POST', body: { question } }),
 }
 
 /* ---------------------------------------------------------------- labels -- */

@@ -40,6 +40,7 @@ import { deliveryApi, KIND_LABELS, STATUS_LABELS, STATUS_TONES, formatSize, form
 import type { Deliverable } from '@/lib/deliveryApi'
 import { toApiError } from '@/lib/api'
 import { cn } from '@/lib/utils'
+import { contextApi } from '@/lib/contextApi'
 
 /* ------------------------------------------------------- verification view -- */
 
@@ -207,6 +208,71 @@ function DeliverableCard({ item }: { item: Deliverable }) {
           </div>
         </div>
       )}
+    </div>
+  )
+}
+
+/**
+ * Which tier answered this question, and how long each took.
+ *
+ * Rendered from the real ladder, not from a summary the UI computed. If the call fails
+ * the failure is shown — an absent line would read as "answered from memory" to anyone
+ * skimming, which is the one thing this must not be mistaken for.
+ */
+const TIER_LABELS: Record<string, string> = {
+  memory: '记忆',
+  skill: 'Skill',
+  knowledge: '知识库',
+  general: '通用路径',
+}
+
+function TierLine({ question }: { question: string }) {
+  const tiers = useQuery({
+    queryKey: ['retrieval', 'tiers', question],
+    queryFn: () => contextApi.tiers(question),
+    enabled: question.trim().length > 0,
+    staleTime: 60_000,
+  })
+
+  if (!question.trim()) return null
+
+  if (tiers.isPending) {
+    return <p className="mb-2 text-[11.5px] text-faint">正在判断这次由哪一层回答…</p>
+  }
+
+  if (tiers.isError) {
+    return (
+      <p className="mb-2 text-[11.5px] text-danger">
+        没能判断这次由哪一层回答：{tiers.error instanceof Error ? tiers.error.message : String(tiers.error)}
+      </p>
+    )
+  }
+
+  const result = tiers.data
+  const label = TIER_LABELS[result.tier] ?? result.tier
+
+  return (
+    <div className="mb-2.5 space-y-1.5">
+      <p className="text-[12px] text-muted">
+        这次由 <span className="font-medium text-text">「{label}」</span> 回答
+        {result.tier !== 'general' && (
+          <span className="text-faint"> —— 没有走通用推理，用的是你自己的东西</span>
+        )}
+      </p>
+      <div className="flex flex-wrap gap-1.5">
+        {result.attempts.map((attempt) => (
+          <span
+            key={attempt.tier}
+            className={cn(
+              'rounded border px-1.5 py-px text-2xs',
+              attempt.hit ? 'border-accent/40 text-text' : 'border-border text-faint',
+            )}
+            title={attempt.detail}
+          >
+            {TIER_LABELS[attempt.tier] ?? attempt.tier} {attempt.hit ? '命中' : '未命中'} {attempt.elapsed_ms.toFixed(0)}ms
+          </span>
+        ))}
+      </div>
     </div>
   )
 }
@@ -394,6 +460,12 @@ export default function WorkbenchPage() {
         <Card>
           <CardHeader title="本次上下文" description="它这次被告诉了什么" />
           <CardBody>
+            {/* Which tier answered. The product's claim is that it is faster than
+                starting from scratch, and that claim is only meaningful where the work
+                happens: a question answered from the user's own memory never reached the
+                model at all, and this is where that becomes visible rather than asserted. */}
+            <TierLine question={data.goal} />
+
             {context.isLoading ? (
               <LoadingBlock label="读取上下文…" />
             ) : context.data?.available ? (
