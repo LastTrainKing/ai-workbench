@@ -13,7 +13,7 @@
  */
 
 import { chromium } from './_playwright.mjs'
-import { mkdirSync, existsSync } from 'node:fs'
+import { copyFileSync, existsSync, mkdirSync, statSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -104,13 +104,20 @@ async function main() {
     check('测试取到 API token', Boolean(token))
 
     // The workspace lives inside the project now, not on the desktop.
-    const demoPath = [
-      process.cwd(),
-      '.runtime',
-      'workspace',
-      'deliverables',
-      'ui-check.pptx',
-    ].join('/')
+    // The file has to exist: `record_deliverable` verifies the path before it registers
+    // anything, because a deliverable row that was never read back is a claim rather than
+    // a file. The first version of this test assumed a fixture that is not in the repo, so
+    // every check after it failed with a 422 that said nothing about the real cause.
+    const demoDir = [process.cwd(), '.runtime', 'workspace', 'deliverables'].join('/')
+    const demoPath = `${demoDir}/ui-check.pptx`
+    mkdirSync(demoDir, { recursive: true })
+    // A **real** pptx, not a text file with a .pptx name. The first version wrote a
+    // placeholder string, and the readback check correctly rejected it with
+    // `PackageNotFoundError` — the verification was right and the fixture was fake.
+    // Copying a genuine file is what makes "the deliverable was read back" mean anything.
+    const fixture = join(HERE, 'fixtures', 'ui-check.pptx')
+    copyFileSync(fixture, demoPath)
+    check('演示文件是真实的 pptx', existsSync(demoPath), `${demoPath} (${statSync(demoPath).size} B)`)
 
     const attachResponse = await page.request.post(
       `${BASE}/api/v1/build-runs/${runId}/deliverables`,
@@ -126,10 +133,17 @@ async function main() {
 
     check('登记产出物成功', attach.status === 201, `HTTP ${attach.status}`)
     const verification = attach.body?.data?.verification
+    // The detail has to describe what was actually found. The first version said
+    // "N 项检查，全部通过" unconditionally, so a failing run reported a pass in its own
+    // failure message — the check was right and its explanation was a lie.
+    const failedChecks = (verification?.checks || []).filter((c) => !c.ok)
     check(
       '产出物经过机器校验',
       Boolean(verification?.passed),
-      verification ? `${verification.check_count} 项检查，全部通过` : 'no verification',
+      verification
+        ? `${verification.check_count} 项检查，失败 ${verification.failed_count}` +
+          (failedChecks.length ? `：${failedChecks.map((c) => `${c.name}(${c.detail})`).join('; ')}` : '')
+        : 'no verification',
     )
 
     await page.reload({ waitUntil: 'networkidle' })
