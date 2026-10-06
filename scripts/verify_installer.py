@@ -228,8 +228,18 @@ def main() -> int:
             f"{browsers_before} before, {browser_count()} after",
         )
 
-        check("5", "created its own .runtime", (INSTALL_DIR / ".runtime").is_dir())
-        check("5", "initialised its own PostgreSQL cluster", (INSTALL_DIR / ".runtime" / "pgdata" / "PG_VERSION").is_file())
+        check("5", "wrote data-dir.txt pointing outside the program directory", (INSTALL_DIR / "data-dir.txt").is_file())
+        # The data lives outside the install directory on purpose, so that uninstalling
+        # the program cannot touch it. Checking for `.runtime` *inside* the install dir
+        # would be checking for the bug this design removed.
+        check("5", "keeps its database outside the program directory", (DATA_ASIDE / ".runtime").is_dir(), str(DATA_ASIDE))
+        check("5", "initialised its own PostgreSQL cluster", (DATA_ASIDE / ".runtime" / "pgdata" / "PG_VERSION").is_file())
+        check(
+            "5",
+            "did NOT write .runtime inside the install directory",
+            not (INSTALL_DIR / ".runtime").exists(),
+            "the layout that made uninstall able to lose data",
+        )
 
         serves_ui = False
         if info:
@@ -274,7 +284,13 @@ def main() -> int:
                     break
                 time.sleep(2)
             check("8", "install directory removed", not INSTALL_DIR.exists(), str(INSTALL_DIR))
-            check("8", "user data preserved aside", (DATA_ASIDE / ".runtime").is_dir(), str(DATA_ASIDE))
+            check("8", "user data preserved outside the install directory", (DATA_ASIDE / ".runtime").is_dir(), str(DATA_ASIDE))
+            check(
+                "8",
+                "user data actually survived the uninstall",
+                (DATA_ASIDE / ".runtime" / "pgdata" / "PG_VERSION").is_file(),
+                "the database the uninstall must not touch",
+            )
             for shortcut in SHORTCUTS:
                 check("8", f"{shortcut.name} removed", not shortcut.is_file())
 

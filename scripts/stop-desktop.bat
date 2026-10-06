@@ -23,6 +23,13 @@ REM ===========================================================================
 setlocal EnableExtensions
 cd /d "%~dp0\.."
 set "ROOT=%CD%"
+
+REM Where this copy keeps its data - outside the program directory for an installed
+REM copy. Same three-step order as scripts\lib.ps1 and backend\app\core\config.py.
+set "RUNTIME=%ROOT%\.runtime"
+if exist "%ROOT%\data-dir.txt" set /p RUNTIME=<"%ROOT%\data-dir.txt"
+if defined AI_WORKBENCH_DATA_DIR set "RUNTIME=%AI_WORKBENCH_DATA_DIR%"
+if not defined RUNTIME set "RUNTIME=%ROOT%\.runtime"
 set "PS=powershell -ExecutionPolicy Bypass -NoProfile -File"
 set "EXITCODE=0"
 
@@ -49,5 +56,5 @@ if "%EXITCODE%"=="0" (
 endlocal & exit /b %EXITCODE%
 
 :log
->>"%ROOT%\.runtime\logs\startup.log" echo %DATE% %TIME% %~1
+>>"%RUNTIME%\logs\startup.log" echo %DATE% %TIME% %~1
 goto :eof

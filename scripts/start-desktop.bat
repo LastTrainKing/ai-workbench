@@ -26,7 +26,20 @@ REM ===========================================================================
 setlocal EnableExtensions
 cd /d "%~dp0\.."
 set "ROOT=%CD%"
-set "LOGSDIR=%ROOT%\.runtime\logs"
+REM Where this copy keeps its database, vectors, uploads and logs.
+REM
+REM An installed copy points this OUTSIDE the program directory via data-dir.txt, so
+REM that uninstalling the program cannot touch the user's data. The same three-step
+REM order is implemented in scripts\lib.ps1 and backend\app\core\config.py; it is
+REM repeated here because this script runs before either of them and must not create a
+REM stray .runtime inside the install directory.
+set "RUNTIME=%ROOT%\.runtime"
+if exist "%ROOT%\data-dir.txt" set /p RUNTIME=<"%ROOT%\data-dir.txt"
+REM Guard the empty-file case: a zero-byte marker would leave RUNTIME undefined
+REM and "%RUNTIME%\logs" would resolve to the drive root.
+if defined AI_WORKBENCH_DATA_DIR set "RUNTIME=%AI_WORKBENCH_DATA_DIR%"
+if not defined RUNTIME set "RUNTIME=%ROOT%\.runtime"
+set "LOGSDIR=%RUNTIME%\logs"
 set "STARTUPLOG=%LOGSDIR%\startup.log"
 set "ERRORLOG=%LOGSDIR%\startup-error.log"
 set "EXITCODE=0"

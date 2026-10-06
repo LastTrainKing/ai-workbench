@@ -27,13 +27,55 @@ use std::time::{SystemTime, UNIX_EPOCH};
 /// directory, which differs between an Explorer launch and a terminal launch.
 static LOG_PATH: Mutex<Option<PathBuf>> = Mutex::new(None);
 
-/// Point the lifecycle log at the project's runtime directory.
+/// Where this copy keeps its data: the database, the vectors, the uploads, the logs.
+///
+/// The same three steps, in the same order, as `scripts/start-desktop.bat`,
+/// `scripts/lib.ps1` and `backend/app/core/config.py`:
+///
+///   1. `AI_WORKBENCH_DATA_DIR`
+///   2. `<root>/data-dir.txt` - one line, written by the installer
+///   3. `<root>/.runtime` - a development checkout
+///
+/// It is written down in four places because each runs before the next one exists: the
+/// shell starts before Python, Python starts before the backend. Four copies of one
+/// decision is four chances to disagree, and this function is the one that did.
+///
+/// It hardcoded `<root>\.runtime\logs` and created it unconditionally, so an installed
+/// copy grew a `.runtime` inside its program directory even though the marker file
+/// pointed somewhere else. That stray directory then stopped the uninstaller from
+/// removing the install directory at all - a two-line assumption taking out a
+/// seven-step uninstall.
+fn resolve_runtime_root(root: &Path) -> PathBuf {
+    if let Ok(explicit) = std::env::var("AI_WORKBENCH_DATA_DIR") {
+        let trimmed = explicit.trim();
+        if !trimmed.is_empty() {
+            return PathBuf::from(trimmed);
+        }
+    }
+
+    let marker = root.join("data-dir.txt");
+    if let Ok(text) = fs::read_to_string(&marker) {
+        let trimmed = text.trim();
+        if !trimmed.is_empty() {
+            return PathBuf::from(trimmed);
+        }
+    }
+
+    root.join(".runtime")
+}
+
+/// Point the lifecycle log at this copy's runtime directory.
 ///
 /// Called as soon as the root is known. Before that, entries go to the temp
 /// directory so nothing is lost.
 pub fn set_log_root(root: &Path) {
-    let path = root.join(".runtime").join("logs").join("desktop-lifecycle.log");
+    let path = resolve_runtime_root(root)
+        .join("logs")
+        .join("desktop-lifecycle.log");
     if let Some(parent) = path.parent() {
+        // Deliberately not fatal: logging must not be able to break the thing it is
+        // observing. If the directory cannot be created, `log()` falls back to
+        // dropping the entry rather than taking the application down with it.
         let _ = fs::create_dir_all(parent);
     }
     *LOG_PATH.lock().unwrap() = Some(path);

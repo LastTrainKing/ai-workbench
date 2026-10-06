@@ -70,7 +70,16 @@ def sha256(path: Path) -> str:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--build", action="store_true", help="actually build")
-    parser.add_argument("--skip-payload", action="store_true", help="reuse the existing payload")
+    parser.add_argument(
+        "--skip-payload",
+        action="store_true",
+        help=(
+            "reuse the existing payload. Only safe when no source has changed: the payload "
+            "carries the backend and the launcher, so reusing it after an edit ships the old "
+            "code inside a freshly built installer — which is exactly how a data-directory "
+            "change appeared not to work."
+        ),
+    )
     args = parser.parse_args()
 
     nsis = find_nsis()

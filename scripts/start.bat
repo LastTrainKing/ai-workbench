@@ -29,7 +29,15 @@ REM ===========================================================================
 setlocal EnableExtensions
 cd /d "%~dp0\.."
 set "ROOT=%CD%"
-set "LOGSDIR=%ROOT%\.runtime\logs"
+REM Where this copy keeps its data. An installed copy points it outside the program
+REM directory via data-dir.txt; see the same block in start-desktop.bat.
+set "RUNTIME=%ROOT%\.runtime"
+if exist "%ROOT%\data-dir.txt" set /p RUNTIME=<"%ROOT%\data-dir.txt"
+REM Guard the empty-file case: a zero-byte marker would leave RUNTIME undefined
+REM and "%RUNTIME%\logs" would resolve to the drive root.
+if defined AI_WORKBENCH_DATA_DIR set "RUNTIME=%AI_WORKBENCH_DATA_DIR%"
+if not defined RUNTIME set "RUNTIME=%ROOT%\.runtime"
+set "LOGSDIR=%RUNTIME%\logs"
 set "STARTUPLOG=%LOGSDIR%\startup.log"
 set "ERRORLOG=%LOGSDIR%\startup-error.log"
 set "HIDDEN=0"
