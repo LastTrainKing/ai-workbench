@@ -20,6 +20,7 @@ from __future__ import annotations
 import argparse
 import os
 import re
+import shutil
 import subprocess
 import sys
 import zipfile
@@ -87,9 +88,52 @@ def looks_synthetic(value: str) -> bool:
     return bool(body) and len(set(body)) <= 2
 
 
+def find_git() -> str:
+    """Locate `git`, and say where it looked when it cannot be found.
+
+    `git` is not on this machine's PATH. The previous version called the bare name, so
+    the failure surfaced as a bare `FileNotFoundError: [WinError 2]` from `subprocess`
+    — which says nothing about what was missing or what to do about it, and reads like
+    a bug in the script rather than a missing dependency.
+
+    Search order: PATH, then the places git is actually installed on a Windows
+    developer machine, including the portable copy that ships with this environment.
+    """
+    candidates: list[str] = []
+
+    on_path = shutil.which("git")
+    if on_path:
+        candidates.append(on_path)
+
+    candidates.extend(
+        [
+            r"C:\Program Files\Git\cmd\git.exe",
+            r"C:\Program Files (x86)\Git\cmd\git.exe",
+            str(Path.home() / "AppData" / "Local" / "Programs" / "Git" / "cmd" / "git.exe"),
+        ]
+    )
+
+    # The portable copy used by this environment, under any version.
+    portable = Path.home() / ".workbuddy-ai" / "binaries" / "PortableGit" / "versions"
+    if portable.is_dir():
+        for version in sorted(portable.iterdir(), reverse=True):
+            candidates.append(str(version / "cmd" / "git.exe"))
+
+    for candidate in candidates:
+        if Path(candidate).is_file():
+            return candidate
+
+    raise SystemExit(
+        "git was not found, and this script uses `git ls-files` as its file list.\n"
+        "Looked in:\n  " + "\n  ".join(candidates) + "\n"
+        "Install git, or add it to PATH, or pass the path in GIT_EXECUTABLE."
+    )
+
+
 def tracked_files() -> list[Path]:
+    git = os.environ.get("GIT_EXECUTABLE") or find_git()
     result = subprocess.run(
-        ["git", "ls-files", "-z"],
+        [git, "ls-files", "-z"],
         cwd=ROOT,
         capture_output=True,
         check=True,
