@@ -19,6 +19,7 @@ export type BuildStatus =
   | 'VERIFYING'
   | 'WAITING_USER'
   | 'COMPLETED'
+  | 'PARTIAL'
   | 'FAILED'
   | 'CANCELLED'
   | 'LIMIT_REACHED'
@@ -172,6 +173,7 @@ export const STATUS_LABELS: Record<BuildStatus, string> = {
   VERIFYING: '校验中',
   WAITING_USER: '等你确认',
   COMPLETED: '已完成',
+  PARTIAL: '部分完成',
   FAILED: '失败',
   CANCELLED: '已取消',
   LIMIT_REACHED: '已达上限',
@@ -186,6 +188,7 @@ export const STATUS_TONES: Record<BuildStatus, string> = {
   VERIFYING: 'accent',
   WAITING_USER: 'warn',
   COMPLETED: 'success',
+  PARTIAL: 'warn',
   FAILED: 'danger',
   CANCELLED: 'neutral',
   LIMIT_REACHED: 'warn',

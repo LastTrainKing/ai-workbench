@@ -87,6 +87,14 @@ class PlanStep:
     retry_count: int = 0
     result: str = ""
     error: str = ""
+    #: What each attempt actually did, and what was concluded from its failure.
+    #:
+    #: This is the difference between a retry and doing the same thing again.
+    #: Without it, the model is handed the same prompt, reaches the same decision
+    #: and fails the same way — which is exactly how a "recovering" agent burns
+    #: its whole budget in two steps. Each entry is
+    #: ``{attempt, tools_used, arguments, signature, error, analysis}``.
+    attempts: list[dict[str, Any]] = field(default_factory=list)
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -101,7 +109,12 @@ class PlanStep:
             "retry_count": self.retry_count,
             "result": self.result[:600],
             "error": self.error[:600],
+            "attempts": self.attempts,
         }
+
+    @property
+    def last_signature(self) -> str:
+        return str(self.attempts[-1].get("signature") or "") if self.attempts else ""
 
 
 @dataclass
@@ -120,6 +133,14 @@ class ExecutionPlan:
     revision: int = 0
     #: Set when the plan had to be regenerated after a failure.
     replanned_from: str = ""
+    #: What the task itself requires, derived in code from the goal. Kept on the
+    #: plan because it is the reason the plan looks the way it does, and "why is
+    #: this 10 pages?" should be answerable from the stored record.
+    hard_constraints: dict[str, Any] = field(default_factory=dict)
+    #: What happened to each long-term preference: applied, bounded, unsatisfiable
+    #: or guidance-only, with the reason. A preference that could not be honoured
+    #: is recorded rather than dropped, because the user has to be told.
+    preference_outcomes: list[dict[str, Any]] = field(default_factory=list)
 
     @classmethod
     def from_model(cls, payload: dict[str, Any], goal: str) -> ExecutionPlan:
@@ -221,6 +242,8 @@ class ExecutionPlan:
             "done_steps": self.done_steps,
             "failed_steps": self.failed_steps,
             "total_steps": len(self.steps),
+            "hard_constraints": self.hard_constraints,
+            "preference_outcomes": self.preference_outcomes,
         }
 
 

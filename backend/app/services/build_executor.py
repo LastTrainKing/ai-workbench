@@ -34,7 +34,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.ai.agent.plan import RunState
 from app.core.logging import get_logger
 from app.models.ai import ToolAuditLog
-from app.models.delivery import BuildRun, BuildStatus
+from app.models.delivery import BuildRun, BuildStatus, make_verification
 from app.services.delivery_service import DeliveryService
 
 logger = get_logger(__name__)
@@ -201,7 +201,13 @@ async def _watch(
             # that wrote a 70 KB deck reported "no output detected".
             collected = 0
             for attempt in range(4):
-                collected = await _collect(session, service, run=run, ai_run_id=db_run_id)
+                collected = await _collect(
+                    session,
+                    service,
+                    run=run,
+                    ai_run_id=db_run_id,
+                    run_state=state,
+                )
                 if collected:
                     break
                 await asyncio.sleep(2 + attempt * 2)
@@ -225,6 +231,20 @@ async def _watch(
                     run,
                     final,
                     summary="运行结束，但没有检测到产出文件。可能它只是回答了问题，或写到了别的位置。",
+                )
+            elif final is not BuildStatus.COMPLETED and collected:
+                # Files exist but the run did not succeed. Neither "failed" nor
+                # "completed" is true on its own, and the previous version picked
+                # one and left the deliverables marked `verified=True` — so the
+                # record said the run failed and its output was fine, at the same
+                # time. PARTIAL is that middle case, stated.
+                await service.set_status(
+                    run,
+                    BuildStatus.PARTIAL,
+                    summary=(
+                        f"运行终态是 {state}，但已产出 {collected} 个文件。"
+                        "这些文件真实存在，但运行没有走完，因此未标记为已验证。"
+                    ),
                 )
             else:
                 await service.set_status(
@@ -303,6 +323,7 @@ async def _collect(
     *,
     run: BuildRun,
     ai_run_id: str,
+    run_state: str = "",
 ) -> int:
     """Register every file the run actually wrote, with verification.
 
@@ -310,6 +331,9 @@ async def _collect(
     files this run did not produce — the user's own edits, another run's output —
     and a file the agent *said* it wrote is not evidence that it did. The
     intersection is: a successful call to a writing tool, naming a path that exists.
+
+    `run_state` is carried in so the registration can be honest about it: a file
+    produced by a run that did not succeed is registered, but never as *verified*.
     """
     # Read the audit log, not `tool_calls`.
     #
@@ -323,6 +347,15 @@ async def _collect(
     except ValueError:
         logger.warning("build_run_bad_id", extra={"ai_run_id": ai_run_id})
         return 0
+
+    succeeded = (run_state or "").upper() == "COMPLETED"
+    # The preferences that were in play, copied from the plan so the deliverable
+    # itself can answer "was my preference applied to this file?".
+    plan = run.plan if isinstance(run.plan, dict) else {}
+    applied = {
+        "hard_constraints": plan.get("hard_constraints") or {},
+        "preference_outcomes": plan.get("preference_outcomes") or [],
+    }
 
     stmt = (
         select(ToolAuditLog)
@@ -384,8 +417,27 @@ async def _collect(
                 kind=kind_for(str(target)),
                 title=target.stem,
                 style=str(arguments.get("style") or ""),
+                applied_preferences=applied,
             )
-            await service.verify_deliverable(owner_id=run.user_id, deliverable_id=item.id)
+            result = await service.verify_deliverable(
+                owner_id=run.user_id, deliverable_id=item.id
+            )
+            if not succeeded:
+                # The file is real; the run that made it is not finished. Recording
+                # that as a *failed check* rather than dropping it keeps both facts:
+                # the artifact is registered so the user can look at it, and it is
+                # not stamped `verified` as though the run had gone through.
+                checks = list(result.get("checks") or [])
+                checks.append(
+                    {
+                        "name": "run_state",
+                        "ok": False,
+                        "detail": f"运行终态是 {run_state}，产出物来自一次没有走完的运行",
+                    }
+                )
+                item.verification = make_verification(checks)
+                item.verified = item.verification["passed"]
+                await session.flush()
             registered += 1
         except Exception as exc:
             logger.warning(

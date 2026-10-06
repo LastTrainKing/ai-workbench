@@ -19,11 +19,20 @@ until someone notices.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
+from app.ai.agent.constraints import (
+    PreferenceResolution,
+    TaskConstraints,
+    derive_constraints,
+    load_preferences,
+    resolve_preferences,
+)
 from app.ai.agent.control import RunCancelledError, RunController
 from app.ai.agent.plan import ExecutionPlan, PlanStep, RunState, StepStatus
 from app.ai.agent.tools import ToolContext
@@ -46,6 +55,37 @@ EVIDENCE_TOOLS = {
 #: How many tool calls a single step may use before it is considered stuck.
 MAX_TOOLS_PER_STEP = 12
 
+#: A single step may never consume more than this fraction of the run's whole
+#: tool-call budget.
+#:
+#: The per-attempt ceiling above is not enough on its own: ``MAX_TOOLS_PER_STEP``
+#: (12) × ``max_retries + 1`` (4) is 48 calls for one step, so two unlucky steps
+#: can spend the entire 100-call run budget between them. That is precisely what
+#: happened — the third attempt burned 105 calls in two steps and ended in
+#: ``LIMIT_REACHED`` with no recovery ever taking effect. A step that cannot
+#: finish inside its share is a step that needs a different approach, not more
+#: of the same one.
+STEP_BUDGET_DIVISOR = 3
+
+#: Signature used when an attempt produced no tool call at all.
+EMPTY_ATTEMPT_SIGNATURE = "no-tools"
+
+#: Minimum completion budget for a call to the model.
+#:
+#: The default provider is a *reasoning* model: it spends tokens thinking before it
+#: emits a single character, and a budget too small for the thinking produces no
+#: answer at all — the provider raises `ai_reasoning_budget_exhausted` rather than
+#: returning something truncated. At 600 tokens the recovery call failed on every
+#: long prompt, so "recover" quietly degraded into "give up and stop the step".
+#: That is the same class of bug as the discarded return value: a failure that
+#: looks like a decision. 2,000 is the floor that makes thinking plus a short
+#: answer fit.
+MIN_REASONING_TOKENS = 2000
+
+
+def _completion_budget(ceiling: int = MIN_REASONING_TOKENS) -> int:
+    return max(MIN_REASONING_TOKENS, min(settings.ai_max_tokens, ceiling))
+
 #: Phrases that mark a step as *diagnostic* rather than *assertive*.
 #:
 #: "Run the tests and record which ones fail" is a step whose whole purpose is to
@@ -67,6 +107,61 @@ def is_diagnostic_step(step: PlanStep) -> bool:
     """True when the step is meant to gather information, not to assert success."""
     text = f"{step.description} {step.verification}".lower()
     return any(marker in text for marker in _DIAGNOSTIC_MARKERS)
+
+
+def attempt_signature(observations: list[dict[str, Any]]) -> str:
+    """A stable fingerprint of *what an attempt did*: the tools and their arguments.
+
+    Two attempts with the same signature did the same thing. Comparing them is how
+    "it retried" is distinguished from "it retried the same way" — and the second
+    of those is not a retry at all, it is a loop.
+
+    The arguments are hashed rather than stored verbatim because a
+    ``document_write`` call carries an entire deck in its ``sections``; keeping it
+    whole would put megabytes into the event stream. The digest answers "same or
+    different", which is the only question being asked here.
+    """
+    if not observations:
+        return EMPTY_ATTEMPT_SIGNATURE
+    parts: list[str] = []
+    for observation in observations:
+        name = str(observation.get("tool") or "")
+        if not name:
+            continue
+        payload = json.dumps(
+            observation.get("arguments"), ensure_ascii=False, sort_keys=True, default=str
+        )
+        digest = hashlib.sha1(payload.encode("utf-8")).hexdigest()[:12]
+        parts.append(f"{name}:{digest}")
+    if not parts:
+        return EMPTY_ATTEMPT_SIGNATURE
+    return "|".join(parts)
+
+
+def render_attempt_history(step: PlanStep) -> str:
+    """The block injected into a retry, so the next attempt is not the last one.
+
+    This is the fix for the root cause: ``_recover`` always returned an analysis and
+    the caller always threw it away, so every retry ran with an identical prompt and
+    therefore reached an identical decision. The analysis only becomes useful when
+    it is *read by the thing that is about to try again*.
+    """
+    if not step.attempts:
+        return ""
+    lines = ["你之前已经尝试过以下做法，它们都失败了："]
+    for record in step.attempts:
+        number = record.get("attempt")
+        tools = "、".join(record.get("tools_used") or []) or "（没有调用任何工具）"
+        error = str(record.get("error") or "未通过验证")[:200]
+        lines.append(f"  第 {number} 次：调用 {tools} → 失败：{error}")
+        analysis = str(record.get("analysis") or "").strip()
+        if analysis:
+            lines.append(f"           上次的分析：{analysis[:300]}")
+    lines.append(
+        "不要重复上面这些做法。必须换一个明显不同的方式：换一个工具，"
+        "或者对同一个工具换一组参数。如果你认为没有别的做法，就直接说明做不到，不要原样重试。"
+    )
+    return "\n".join(lines)
 
 
 @dataclass
@@ -255,6 +350,67 @@ class AutonomousAgent:
         )
         self._tool_messages: list[ChatMessage] = []
 
+        #: What the task itself requires, and what the user's preferences turned
+        #: into once those requirements were taken into account. Filled in by
+        #: `_resolve_requirements` before the plan is written, because the plan is
+        #: the first place the difference between the two shows up.
+        self.constraints = TaskConstraints()
+        self.preferences = PreferenceResolution()
+
+    async def _resolve_requirements(self, goal: str) -> None:
+        """Work out the hard constraints and what each preference becomes.
+
+        The order matters and is the whole point: constraints are derived from the
+        task *first*, then preferences are resolved *against* them. Resolving
+        preferences first — which is what a single blended prompt does — is how
+        "页数更少" ended up beating "15 分钟".
+        """
+        self.constraints = derive_constraints(goal, deliverable_kind=self.deliverable_kind)
+
+        loaded: list[Any] = []
+        if self.session is not None and self.owner_id is not None:
+            loaded = await load_preferences(self.session, self.owner_id)
+
+        workspace = Path(self.working_directory) if self.working_directory else Path.cwd()
+        self.preferences = resolve_preferences(loaded, self.constraints, workspace=workspace)
+
+        if self.constraints.has_slide_range:
+            self.controller.emit(
+                "state",
+                message=(
+                    f"任务硬约束：{self.constraints.duration_minutes:g} 分钟 → "
+                    f"{self.constraints.slide_min}~{self.constraints.slide_max} 页"
+                ),
+                data=self.constraints.as_dict(),
+            )
+
+        if self.preferences.outcomes:
+            self.controller.emit(
+                "state",
+                message=f"已解析 {len(self.preferences.outcomes)} 条长期偏好",
+                data=self.preferences.as_dict(),
+            )
+
+        # A preference that cannot be executed is reported, not dropped. Silence
+        # here is the failure mode the whole feature exists to avoid: the user
+        # walks away believing it took effect.
+        for outcome in self.preferences.unsatisfiable:
+            self.controller.emit(
+                "error",
+                message=f"偏好无法满足：「{outcome.text}」—— {outcome.detail}",
+                data=outcome.as_dict(),
+            )
+
+    def _requirements_block(self) -> str:
+        """The constraint and preference text injected into planner and executor."""
+        parts = []
+        if self.constraints.has_slide_range or self.constraints.duration_minutes:
+            parts.append(self.constraints.render())
+        rendered = self.preferences.render()
+        if rendered:
+            parts.append(rendered)
+        return "\n\n".join(parts)
+
     async def _personal_context(self, *, purpose: str = "agent") -> str:
         """Assemble the personal block and record what was injected.
 
@@ -299,6 +455,20 @@ class AutonomousAgent:
         combined = "\n\n".join(part for part in (personal, context) if part.strip()) or "（无）"
 
         system = prompt.render(tools=catalogue, goal=goal, context=combined)
+        requirements = self._requirements_block()
+        if requirements:
+            # Stated as a hard requirement, ahead of the goal, so the plan is built
+            # around it rather than patched to fit it afterwards.
+            system += (
+                "\n\n"
+                + requirements
+                + "\n\n【规划时必须遵守】\n"
+                "1. 硬约束是任务本身的要求，优先于任何长期偏好。\n"
+                "2. 长期偏好只能在硬约束范围内起作用；被标为 bounded 的偏好要按上面的结论执行，"
+                "不要自行放大或缩小。\n"
+                "3. 被标为 unsatisfiable 的偏好这次做不到，在最终汇报里必须明确说出来。\n"
+                "4. success_criteria 里必须包含一条能验证页数/行数/字数的标准。"
+            )
         if self.deliverable_kind and self.deliverable_kind != "mixed":
             # Stated as a hard requirement, not a preference.
             #
@@ -314,6 +484,22 @@ class AutonomousAgent:
                 "不允许用 .md / .txt 或纯文本代替；用 file_write 写一个同名文本文件不算完成。"
                 "最后一步必须回读该文件并核对页数、大小或行列数。"
             )
+            if self.deliverable_kind == "pptx" and self.constraints.has_slide_range:
+                target = self.preferences.target_slides or self.constraints.slide_min
+                chart_rule = (
+                    " 每个内容页都要带一个 chart（categories + series 结构），"
+                    "因为用户偏好图表更多。"
+                    if self.preferences.charts_per_slide
+                    else ""
+                )
+                system += (
+                    f" 调用 document_write 时，sections 必须包含标题页加至少 "
+                    f"{target - 1} 个内容页（合计 {target} 页），"
+                    f"并且必须传入 min_slides={self.constraints.slide_min}、"
+                    f"max_slides={self.constraints.slide_max}，"
+                    "由工具在写入时核对页数。"
+                    f"{chart_rule}"
+                )
 
         messages = [
             ChatMessage(role="system", content=system),
@@ -366,12 +552,16 @@ class AutonomousAgent:
     async def _run_tools_for_step(self, step: PlanStep, plan: ExecutionPlan) -> list[dict[str, Any]]:
         """Let the model work on one step until it stops calling tools."""
         personal = await self._personal_context(purpose="executor")
+        history = render_attempt_history(step)
+        requirements = self._requirements_block()
         system = (
             "你是运行在用户 Windows 电脑上的私人 AI Agent。\n"
             f"总目标：{plan.goal}\n"
             f"当前步骤（第 {step.id} 步）：{step.description}\n"
             f"该步骤的验收方式：{step.verification or '由你调用工具确认结果'}\n\n"
             + (f"{personal}\n\n" if personal else "")
+            + (f"{requirements}\n\n" if requirements else "")
+            + (f"{history}\n\n" if history else "")
             + "要求：\n"
             "1. 只处理当前这一步，不要跳到后面的步骤。\n"
             "2. 需要操作时调用工具，一次一个。\n"
@@ -425,6 +615,9 @@ class AutonomousAgent:
 
             observation = {
                 "tool": request.name,
+                # Kept so "the second attempt used a different tool or different
+                # arguments" is answerable from the record rather than re-run.
+                "arguments": _trim(request.arguments),
                 "ok": result.ok,
                 "summary": result.summary,
                 "error": result.error,
@@ -512,7 +705,7 @@ class AutonomousAgent:
                 self.llm.chat(
                     repair_tool_pairing(messages),
                     temperature=0.0,
-                    max_tokens=1200,
+                    max_tokens=_completion_budget(),
                     tools=self.registry.specs(),
                 ),
                 timeout=120,
@@ -587,14 +780,26 @@ class AutonomousAgent:
 
     # ================================================================= recover ==
     async def _recover(self, step: PlanStep, observations: list[dict[str, Any]]) -> str:
-        """Ask the model what to do about a failed step. Returns a short plan."""
+        """Ask the model what to do about a failed step.
+
+        Returns the analysis, or an empty string when no analysis could be
+        produced. The empty string is not a placeholder for "carry on": the caller
+        treats it as "there is no new strategy", and stops the step rather than
+        running the same attempt again. The previous version substituted a sentence
+        like ``（分析失败：TimeoutError）`` and retried anyway, which meant the
+        failure to analyse was itself silently converted into another blind retry.
+        """
         self.controller.set_state(RunState.RECOVERING, f"第 {step.id} 步失败，正在分析")
+        history = render_attempt_history(step)
         system = (
             "你正在修复一个失败的步骤。\n"
             f"目标：{plan_goal(self.controller.plan)}\n"
             f"失败的步骤：{step.description}\n"
+            f"该步骤的验收方式：{step.verification or '（未说明）'}\n"
             f"错误：{step.error or step.result}\n\n"
-            "请用两三句话说明：根因是什么，下一步具体做什么。不要长篇大论。"
+            + (f"{history}\n\n" if history else "")
+            + "请用两三句话说明：根因是什么，下一次尝试具体改用什么工具、什么参数。"
+            "必须给出一个与之前不同的具体做法，不要只说「再试一次」。"
         )
         messages = [
             ChatMessage(role="system", content=system),
@@ -605,20 +810,35 @@ class AutonomousAgent:
         ]
         try:
             chat = await asyncio.wait_for(
-                self.llm.chat(messages, temperature=0.2, max_tokens=600),
+                self.llm.chat(messages, temperature=0.2, max_tokens=_completion_budget()),
                 timeout=90,
             )
             analysis = (chat.content or "").strip()
-        except (TimeoutError, Exception) as exc:
-            analysis = f"（分析失败：{type(exc).__name__}）"
+        except Exception as exc:
+            # No blanket `except: pass`, and no invented analysis either. The
+            # caller is told, in the event stream, that recovery could not run —
+            # because a recovery that silently did nothing looks identical to one
+            # that worked, right up until the budget is gone.
+            reason = f"{type(exc).__name__}: {exc}"
+            logger.warning("recover_failed", extra={"step": step.id, "error": reason})
+            self.controller.emit(
+                "error",
+                message=f"第 {step.id} 步的恢复分析失败（{type(exc).__name__}），没有新的策略可用",
+                data={"step": step.id, "error": reason},
+            )
+            return ""
 
-        self.controller.emit("state", message=analysis[:400] or "继续重试")
+        self.controller.emit("state", message=analysis[:400] or "恢复分析没有给出新的做法")
         return analysis
 
     # ==================================================================== run ==
     async def run(self, goal: str, *, context: str = "") -> RunResult:
         started = time.monotonic()
         self.controller.emit("state", message="开始执行", state=RunState.PLANNING.value)
+
+        # Constraints and preferences are resolved before the plan is written, so
+        # the plan is built around the requirements rather than adjusted to them.
+        await self._resolve_requirements(goal)
 
         try:
             plan = await self._make_plan(goal, context)
@@ -628,6 +848,11 @@ class AutonomousAgent:
             logger.error("planning_failed", extra={"error": f"{type(exc).__name__}: {exc}"})
             self.controller.set_state(RunState.FAILED, f"制定计划失败：{exc}")
             return self._result(RunState.FAILED, started, error=str(exc))
+
+        # Recorded on the plan so the run can be asked afterwards what it was
+        # required to do and what it decided to do about the user's preferences.
+        plan.hard_constraints = self.constraints.as_dict()
+        plan.preference_outcomes = [o.as_dict() for o in self.preferences.outcomes]
 
         # Snapshot before anything is modified, so the run can be rolled back.
         snapshot_id = ""
@@ -665,7 +890,34 @@ class AutonomousAgent:
             step.started_at = time.strftime("%H:%M:%S")
             self.controller.set_state(RunState.EXECUTING, f"执行第 {step.id} 步：{step.description}")
 
+            # What this step has spent, so one step cannot eat the whole run.
+            #
+            # Counted from the controller rather than from `ResourceLimits`: the
+            # limits counter is only advanced by the tool executor, so business
+            # tools (which do not go through it) would be invisible here and a
+            # step could spend more than its share while the guard saw nothing.
+            step_budget_start = self.controller.tool_calls
+            step_ceiling = max(
+                MAX_TOOLS_PER_STEP, self.limits.max_tool_calls // STEP_BUDGET_DIVISOR
+            )
+
             for attempt in range(1, self.policy.max_retries + 2):
+                spent = self.controller.tool_calls - step_budget_start
+                if spent >= step_ceiling:
+                    # Stop the step, keep the run: the remaining steps may still be
+                    # able to finish, and "one step is stuck" is not the same fact
+                    # as "the run is out of budget".
+                    step.status = StepStatus.FAILED
+                    step.error = (
+                        f"该步骤已用掉 {spent} 次工具调用，达到单步上限 {step_ceiling}，停止该步骤"
+                    )
+                    self.controller.emit(
+                        "error",
+                        message=f"第 {step.id} 步用尽单步预算（{step_ceiling} 次工具调用），停止该步骤",
+                        data=step.as_dict(),
+                    )
+                    break
+
                 try:
                     observations = await self._run_tools_for_step(step, plan)
                 except RunCancelledError:
@@ -691,6 +943,42 @@ class AutonomousAgent:
                 self.controller.retries += 1
                 step.retry_count += 1
 
+                signature = attempt_signature(observations)
+                record: dict[str, Any] = {
+                    "attempt": attempt,
+                    "tools_used": [str(o.get("tool")) for o in observations if o.get("tool")],
+                    "arguments": [o.get("arguments") for o in observations if o.get("arguments")],
+                    "signature": signature,
+                    "error": (step.error or "")[:400],
+                    "analysis": "",
+                }
+                previous = step.attempts[-1] if step.attempts else None
+                record["same_as_previous"] = bool(
+                    previous and previous.get("signature") == signature
+                )
+                step.attempts.append(record)
+                self.controller.emit(
+                    "step",
+                    message=(
+                        f"第 {step.id} 步第 {attempt} 次尝试："
+                        + ("、".join(record["tools_used"]) or "没有调用工具")
+                        + ("（与上一次完全相同）" if record["same_as_previous"] else "（与上一次不同）")
+                    ),
+                    data={"attempt": record, "step": step.id},
+                )
+
+                if record["same_as_previous"]:
+                    # The same tools with the same arguments, twice. Running it a
+                    # third time is not a retry, it is a loop, and it is the exact
+                    # shape that spent 105 tool calls in two steps. Stop here.
+                    message = (
+                        f"第 {step.id} 步的第 {attempt} 次尝试与第 {attempt - 1} 次使用了完全相同的"
+                        "工具和参数，判定为无效重试，停止该步骤"
+                    )
+                    step.error = f"{step.error}｜无效重试：与上一次完全相同".strip("｜")
+                    self.controller.emit("error", message=message, data=step.as_dict())
+                    break
+
                 if attempt > self.policy.max_retries:
                     self.controller.emit(
                         "step",
@@ -704,7 +992,19 @@ class AutonomousAgent:
                     message=f"第 {step.id} 步未通过验证，第 {attempt} 次重试",
                     data={"attempt": attempt, "error": step.error[:400]},
                 )
-                await self._recover(step, observations)
+                analysis = await self._recover(step, observations)
+                if not analysis:
+                    # No new strategy means another attempt would be the same
+                    # attempt. Reporting that is the honest outcome; retrying
+                    # anyway is how the budget disappeared without anything
+                    # changing.
+                    self.controller.emit(
+                        "error",
+                        message=f"第 {step.id} 步没有获得新的做法，停止重试而不是重复同一次尝试",
+                        data=step.as_dict(),
+                    )
+                    break
+                record["analysis"] = analysis
                 step.status = StepStatus.RUNNING
 
         # ------------------------------------------------------------ final --
@@ -712,11 +1012,21 @@ class AutonomousAgent:
         verified, final_evidence = await self._final_verify(plan)
         all_evidence.extend(final_evidence)
 
-        if verified:
+        # A run with a failed step is not a success, whatever the criteria check
+        # says. The previous version let `verified` win, so a plan with a failed
+        # step could still end in COMPLETED — the same inconsistency as a FAILED
+        # run that leaves a `verified=True` file behind: the verdict and the work
+        # disagree, and the verdict is the one that gets read.
+        failed = [s for s in plan.steps if s.status is StepStatus.FAILED]
+        if verified and not failed:
             self.controller.set_state(RunState.COMPLETED, "成功标准已满足")
             state = RunState.COMPLETED
-        elif any(s.status is StepStatus.FAILED for s in plan.steps):
-            self.controller.set_state(RunState.FAILED, "存在未完成的步骤")
+        elif failed:
+            self.controller.set_state(
+                RunState.FAILED,
+                f"有 {len(failed)} 个步骤失败（{'、'.join(s.id for s in failed[:3])}）"
+                + ("，成功标准核验通过" if verified else "，成功标准未通过核验"),
+            )
             state = RunState.FAILED
         else:
             # Every step passed but the criteria did not. Report that honestly
@@ -761,7 +1071,7 @@ class AutonomousAgent:
                 self.llm.chat(
                     repair_tool_pairing(messages),
                     temperature=0.0,
-                    max_tokens=1200,
+                    max_tokens=_completion_budget(),
                     tools=self.registry.specs(),
                 ),
                 timeout=120,
@@ -776,7 +1086,20 @@ class AutonomousAgent:
         result = await self.registry.execute(self.ctx, request.name, request.arguments)
         self.controller.tool_calls += 1
         exit_code = getattr(result, "exit_code", None)
-        passed = result.ok and (exit_code in (None, 0))
+
+        # The same rule `_verify_step` already applies, and for the same reason:
+        # some tools succeed at answering "no". `file_exists` returning `ok=True`
+        # with `exists: false` is a truthful report that the artifact is missing —
+        # reading only `ok` here made the final gate pass on evidence that proved
+        # the opposite of what it was checking.
+        answer = result.data if isinstance(result.data, dict) else {}
+        answered_no = False
+        if request.name == "file_exists":
+            answered_no = not bool(answer.get("exists"))
+        elif request.name in ("file_read", "document_read") and not result.ok:
+            answered_no = True
+
+        passed = result.ok and (exit_code in (None, 0)) and not answered_no
 
         evidence.append(
             {
@@ -786,6 +1109,7 @@ class AutonomousAgent:
                 "exit_code": exit_code,
                 "summary": result.summary,
                 "passed": passed,
+                "answered_no": answered_no,
                 "final": True,
             }
         )
@@ -824,7 +1148,7 @@ class AutonomousAgent:
                         ChatMessage(role="user", content=f"目标：{plan.goal}"),
                     ],
                     temperature=0.3,
-                    max_tokens=800,
+                    max_tokens=_completion_budget(),
                 ),
                 timeout=120,
             )
@@ -833,7 +1157,16 @@ class AutonomousAgent:
             body = ""
 
         header = "\n".join(lines) + "\n\n"
-        return header + (body or "（模型未生成总结，以上为客观执行数据。）")
+        body = body or "（模型未生成总结，以上为客观执行数据。）"
+
+        # The trade-off note is generated here, not asked of the model. The
+        # question "did it explain why the deck is this long?" has to be answerable
+        # from the output, and a model that simply did not mention it would make
+        # the honest answer "no" — which is exactly what the last round produced.
+        report = self.preferences.report()
+        if report:
+            body = f"{body}\n\n{report}"
+        return header + body
 
     # ---------------------------------------------------------------- helpers --
     def _result(
@@ -884,4 +1217,15 @@ def _trim(value: Any, limit: int = 400) -> Any:
     return value
 
 
-__all__ = ["EVIDENCE_TOOLS", "MAX_TOOLS_PER_STEP", "AutonomousAgent", "RunResult"]
+__all__ = [
+    "EVIDENCE_TOOLS",
+    "MAX_TOOLS_PER_STEP",
+    "STEP_BUDGET_DIVISOR",
+    "AutonomousAgent",
+    "RunResult",
+    "attempt_signature",
+    "is_diagnostic_step",
+    "render_attempt_history",
+    "repair_tool_pairing",
+    "trim_history",
+]

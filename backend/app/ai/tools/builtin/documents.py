@@ -42,8 +42,7 @@ MAX_SECTIONS = 400
 
 #: Named styles, resolved from user preferences. The point of the product is that
 #: the same request produces a different document for a different person.
-STYLE_PRESETS: dict[str, dict[str, Any]] = {
-    "concise": {
+STYLE_PRESETS: dict[str, dict[str, Any]] = {    "concise": {
         "slides": "few",
         "bullets_per_slide": 4,
         "words_per_bullet": 12,
@@ -93,10 +92,23 @@ def _require(module: str, package: str) -> Any:
         ) from exc
 
 
+class ChartRenderError(ValidationError):
+    """A chart that was asked for and could not be drawn.
+
+    This exception exists because the previous version returned ``None`` and logged
+    a warning. That made "the chart failed" indistinguishable from "no chart was
+    requested": the deck came out with zero images, the user's stated preference
+    for more charts was silently not honoured, and every check still passed. A
+    failure the caller cannot see is not a handled failure — it is a hidden one.
+    """
+
+
 # --------------------------------------------------------------------------- #
 # Writers
 # --------------------------------------------------------------------------- #
-def _write_docx(path: Path, sections: list[dict[str, Any]], style: dict[str, Any]) -> dict[str, Any]:
+def _write_docx(
+    path: Path, sections: list[dict[str, Any]], style: dict[str, Any], **_options: Any
+) -> dict[str, Any]:
     docx = _require("docx", "python-docx")
     document = docx.Document()
 
@@ -128,31 +140,42 @@ def _write_docx(path: Path, sections: list[dict[str, Any]], style: dict[str, Any
     return {"paragraphs": len(document.paragraphs), "sections": len(sections)}
 
 
-def _render_chart(spec: dict[str, Any], target: Path) -> Path | None:
-    """Draw a chart from a spec and return the file, or None if it cannot be drawn.
+def _render_chart(spec: dict[str, Any], target: Path) -> Path:
+    """Draw a chart from a spec and return the file, or raise with the real reason.
 
-    Returning None rather than raising: a slide whose chart failed should still be
-    produced, and the caller records how many were drawn so a deck with zero visuals
-    is visible in the result instead of being a silent disappointment.
+    Raising rather than returning ``None``: a chart that was requested and did not
+    appear is a failure of the request, and the caller has to be able to tell that
+    apart from a section that simply had no chart. The previous version conflated
+    the two and the result was a deck with zero visuals, a satisfied-looking
+    result, and a user preference that had quietly not been applied.
     """
     try:
         import matplotlib
 
         matplotlib.use("Agg")
         import matplotlib.pyplot as plt
+    except ImportError as exc:
+        raise ChartRenderError(
+            "生成图表需要 matplotlib，当前环境没有安装。请先运行：pip install matplotlib。"
+            "工具不会假装画了图。"
+        ) from exc
 
-        # A CJK font, or Chinese labels render as empty boxes.
-        matplotlib.rcParams["font.sans-serif"] = [
-            "Microsoft YaHei", "SimHei", "DejaVu Sans",
-        ]
-        matplotlib.rcParams["axes.unicode_minus"] = False
+    # A CJK font, or Chinese labels render as empty boxes.
+    matplotlib.rcParams["font.sans-serif"] = [
+        "Microsoft YaHei", "SimHei", "DejaVu Sans",
+    ]
+    matplotlib.rcParams["axes.unicode_minus"] = False
 
-        categories = [str(c) for c in (spec.get("categories") or [])]
-        series = spec.get("series") or {}
-        if not categories or not isinstance(series, dict) or not series:
-            return None
+    categories = [str(c) for c in (spec.get("categories") or [])]
+    series = spec.get("series") or {}
+    if not categories or not isinstance(series, dict) or not series:
+        raise ChartRenderError(
+            "chart 画不出来：需要非空的 categories 和非空的 series。"
+            f"收到的 categories={categories!r}，series 类型={type(series).__name__}"
+        )
 
-        kind = str(spec.get("type") or "bar").lower()
+    kind = str(spec.get("type") or "bar").lower()
+    try:
         figure, axes = plt.subplots(figsize=(7.2, 4.0), dpi=150)
         positions = range(len(categories))
         width = 0.8 / max(1, len(series))
@@ -180,13 +203,28 @@ def _render_chart(spec: dict[str, Any], target: Path) -> Path | None:
         figure.tight_layout()
         figure.savefig(target, bbox_inches="tight")
         plt.close(figure)
-        return target
+    except ChartRenderError:
+        raise
     except Exception as exc:
-        logger.warning("chart_render_failed", extra={"error": f"{type(exc).__name__}: {exc}"})
-        return None
+        raise ChartRenderError(
+            f"绘图失败（{type(exc).__name__}: {exc}）。图表类型 {kind}，"
+            f"categories={categories[:8]}，series={list(series)[:8]}"
+        ) from exc
+
+    if not target.is_file() or target.stat().st_size == 0:
+        raise ChartRenderError(f"绘图没有产生文件：{target}")
+    return target
 
 
-def _write_pptx(path: Path, sections: list[dict[str, Any]], style: dict[str, Any]) -> dict[str, Any]:
+def _write_pptx(
+    path: Path,
+    sections: list[dict[str, Any]],
+    style: dict[str, Any],
+    *,
+    min_slides: int = 0,
+    max_slides: int = 0,
+    **_options: Any,
+) -> dict[str, Any]:
     pptx = _require("pptx", "python-pptx")
     presentation = pptx.Presentation()
     title_layout = presentation.slide_layouts[0]
@@ -199,7 +237,14 @@ def _write_pptx(path: Path, sections: list[dict[str, Any]], style: dict[str, Any
         cover.placeholders[1].text = str(sections[0].get("content") or "")[:200]
 
     images_placed = 0
+    chart_failures: list[dict[str, str]] = []
     limit = {"few": 8, "medium": 14, "many": 22}[style["slides"]]
+    if max_slides:
+        # A hard upper bound is a constraint, so the deck is cut to fit. Unlike the
+        # lower bound this is recoverable inside the writer — but it is *reported*
+        # rather than done quietly, because "your content was trimmed" is something
+        # the caller has to know.
+        limit = min(limit, max(1, max_slides - 1))
     body_sections = sections[1:] if len(sections) > 1 else sections
     per_slide = style["bullets_per_slide"]
 
@@ -230,11 +275,23 @@ def _write_pptx(path: Path, sections: list[dict[str, Any]], style: dict[str, Any
             if candidate.is_file():
                 visual = candidate
             else:
-                logger.warning("slide_image_missing", extra={"path": str(candidate)})
+                # A named image that is not there is also a failure, not a no-op:
+                # the slide was supposed to have a picture.
+                chart_failures.append(
+                    {"heading": heading or "（无标题）", "error": f"图片不存在：{candidate}"}
+                )
         elif isinstance(section.get("chart"), dict):
-            visual = _render_chart(
-                section["chart"], target=path.parent / f"_chart_{path.stem}_{len(presentation.slides)}.png"
-            )
+            try:
+                visual = _render_chart(
+                    section["chart"],
+                    target=path.parent / f"_chart_{path.stem}_{len(presentation.slides)}.png",
+                )
+            except ChartRenderError as exc:
+                chart_failures.append({"heading": heading or "（无标题）", "error": str(exc)})
+                logger.warning(
+                    "slide_chart_failed",
+                    extra={"heading": heading, "error": str(exc)},
+                )
 
         if visual is not None and visual.is_file():
             try:
@@ -245,17 +302,43 @@ def _write_pptx(path: Path, sections: list[dict[str, Any]], style: dict[str, Any
                 )
                 images_placed += 1
             except Exception as exc:
+                chart_failures.append(
+                    {"heading": heading or "（无标题）", "error": f"插入图片失败：{exc}"}
+                )
                 logger.warning(
                     "slide_image_failed", extra={"path": str(visual), "error": str(exc)}
                 )
 
+    total_slides = len(presentation.slides)
+    dropped = max(0, len(body_sections) - min(limit, MAX_SLIDES))
+
+    if min_slides and total_slides < min_slides:
+        # The one thing a writer cannot fix by itself is content that was never
+        # supplied. Failing here — loudly, and without leaving a file behind —
+        # is what stops a 2-slide deck being delivered for a 15-minute talk.
+        path.unlink(missing_ok=True)
+        raise ValidationError(
+            f"页数不达标：硬约束要求至少 {min_slides} 页，实际只能生成 {total_slides} 页。"
+            f"收到 {len(sections)} 个 section，需要至少 {min_slides} 个"
+            "（含 1 个标题页）。请补充内容后重写；不要用页数不足的文件充当交付物。"
+        )
+
     presentation.save(path)
     # `images` is reported rather than assumed: a deck that came out with none should
     # say so, because that is exactly what the user complained about.
-    return {"slides": len(presentation.slides), "images": images_placed}
+    return {
+        "slides": total_slides,
+        "images": images_placed,
+        "chart_failures": chart_failures,
+        "slides_dropped": dropped,
+        "min_slides": min_slides,
+        "max_slides": max_slides,
+    }
 
 
-def _write_xlsx(path: Path, sections: list[dict[str, Any]], style: dict[str, Any]) -> dict[str, Any]:
+def _write_xlsx(
+    path: Path, sections: list[dict[str, Any]], style: dict[str, Any], **_options: Any
+) -> dict[str, Any]:
     openpyxl = _require("openpyxl", "openpyxl")
     workbook = openpyxl.Workbook()
     default = workbook.active
@@ -302,7 +385,9 @@ def _write_xlsx(path: Path, sections: list[dict[str, Any]], style: dict[str, Any
     return {"sheets": len(workbook.sheetnames), "rows": total_rows}
 
 
-def _write_pdf(path: Path, sections: list[dict[str, Any]], style: dict[str, Any]) -> dict[str, Any]:
+def _write_pdf(
+    path: Path, sections: list[dict[str, Any]], style: dict[str, Any], **_options: Any
+) -> dict[str, Any]:
     _require("reportlab", "reportlab")
     from reportlab.lib.pagesizes import A4
     from reportlab.lib.styles import getSampleStyleSheet
@@ -327,7 +412,9 @@ def _write_pdf(path: Path, sections: list[dict[str, Any]], style: dict[str, Any]
     return {"sections": len(sections)}
 
 
-def _write_md(path: Path, sections: list[dict[str, Any]], style: dict[str, Any]) -> dict[str, Any]:
+def _write_md(
+    path: Path, sections: list[dict[str, Any]], style: dict[str, Any], **_options: Any
+) -> dict[str, Any]:
     lines: list[str] = []
     for section in sections[:MAX_SECTIONS]:
         if section.get("heading"):
@@ -344,7 +431,9 @@ def _write_md(path: Path, sections: list[dict[str, Any]], style: dict[str, Any])
     return {"sections": len(sections), "lines": len(lines)}
 
 
-def _write_csv(path: Path, sections: list[dict[str, Any]], style: dict[str, Any]) -> dict[str, Any]:
+def _write_csv(
+    path: Path, sections: list[dict[str, Any]], style: dict[str, Any], **_options: Any
+) -> dict[str, Any]:
     rows: list[Any] = []
     for section in sections[:20]:
         data = section.get("rows") or section.get("data") or []
@@ -383,6 +472,8 @@ class DocumentWriteTool(Tool):
         description=(
             "生成文档并写入工作区。支持 docx / xlsx / pptx / pdf / md / csv。"
             "风格会参考用户偏好（简洁 / 学术 / 商务）。"
+            "pptx 可传 min_slides / max_slides 强制页数区间（来自任务的时长硬约束）；"
+            "section 里带 chart（{type,title,categories,series}）会生成图表。"
             "注意：生成成功不代表内容正确，请随后用 document_read 回读校验页数、行列数等。"
         ),
         category="filesystem",
@@ -396,6 +487,14 @@ class DocumentWriteTool(Tool):
                     "description": "结构化内容：每项含 heading / content / rows / formulas / chart / notes",
                 },
                 "style": {"type": "string", "description": "concise / academic / business，留空则读用户偏好"},
+                "min_slides": {
+                    "type": "integer",
+                    "description": "仅 pptx：硬约束要求的最少页数，不足会直接失败而不是交出不足页数的文件",
+                },
+                "max_slides": {
+                    "type": "integer",
+                    "description": "仅 pptx：硬约束允许的最多页数，超出会被裁剪并在结果里报告",
+                },
             },
             "required": ["format", "path", "sections"],
         },
@@ -425,12 +524,44 @@ class DocumentWriteTool(Tool):
 
         style_name, style = _resolve_style(kwargs.get("style") or await _preferred_style(ctx))
         writer = WRITERS[fmt]
-        stats = writer(target, sections, style)
+
+        options: dict[str, Any] = {}
+        if fmt == "pptx":
+            options["min_slides"] = _as_int(kwargs.get("min_slides"))
+            options["max_slides"] = _as_int(kwargs.get("max_slides"))
+
+        stats = writer(target, sections, style, **options)
 
         size = target.stat().st_size
         if size > MAX_DOCUMENT_BYTES:
             target.unlink(missing_ok=True)
             raise ValidationError(f"生成的文档超过上限（{size} 字节）")
+
+        # A chart that was requested and did not appear is a failure of the request,
+        # not a cosmetic detail. Returning `ok=True` here is what let a deck with
+        # zero visuals pass every check while the user's "更多图表" preference went
+        # silently unapplied.
+        failures = stats.get("chart_failures") or []
+        if failures:
+            detail = "；".join(
+                f"{item.get('heading')}：{item.get('error')}" for item in failures[:4]
+            )
+            return ToolResult(
+                ok=False,
+                data={
+                    "path": str(target),
+                    "format": fmt,
+                    "style": style_name,
+                    "size_bytes": size,
+                    **stats,
+                    "verified": False,
+                },
+                error=(
+                    f"有 {len(failures)} 个图表没有生成：{detail}。"
+                    "文件已写出但不完整，不能算完成；请修正 chart 的 categories / series 后重写。"
+                ),
+                summary=f"partial {target.name} ({len(failures)} charts failed)",
+            )
 
         return ToolResult(
             ok=True,
@@ -445,6 +576,16 @@ class DocumentWriteTool(Tool):
             },
             summary=f"created {target.name} ({fmt}, {size} bytes, style={style_name})",
         )
+
+
+def _as_int(value: Any) -> int:
+    """Coerce an optional integer parameter, treating anything unusable as absent."""
+    if value is None or value == "":
+        return 0
+    try:
+        return max(0, int(value))
+    except (TypeError, ValueError):
+        return 0
 
 
 async def _preferred_style(ctx: ToolContext) -> str | None:
@@ -631,4 +772,10 @@ def _read_pdf(path: Path) -> dict[str, Any]:
     return payload
 
 
-__all__ = ["STYLE_PRESETS", "WRITERS", "DocumentReadTool", "DocumentWriteTool"]
+__all__ = [
+    "STYLE_PRESETS",
+    "WRITERS",
+    "ChartRenderError",
+    "DocumentReadTool",
+    "DocumentWriteTool",
+]

@@ -226,7 +226,7 @@ export default function WorkbenchPage() {
     refetchInterval: (query) => {
       const status = query.state.data?.status
       if (!status) return false
-      const terminal = ['COMPLETED', 'FAILED', 'CANCELLED', 'LIMIT_REACHED']
+      const terminal = ['COMPLETED', 'PARTIAL', 'FAILED', 'CANCELLED', 'LIMIT_REACHED']
       return terminal.includes(status) ? false : 4000
     },
   })

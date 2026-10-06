@@ -59,6 +59,15 @@ class BuildStatus(StrEnum):
     VERIFYING = "VERIFYING"
     WAITING_USER = "WAITING_USER"
     COMPLETED = "COMPLETED"
+    #: The run did not succeed, but it did leave files behind.
+    #:
+    #: This state exists because "FAILED" was previously reported for a run that had
+    #: produced a 70 KB deck, and the deck was registered with `verified=True`
+    #: anyway. Two facts that contradict each other, both written down, and the one
+    #: the user reads is the verdict. Naming the middle case is how the record stops
+    #: contradicting itself: the files are real, the run did not finish, and both
+    #: are true.
+    PARTIAL = "PARTIAL"
     FAILED = "FAILED"
     CANCELLED = "CANCELLED"
     LIMIT_REACHED = "LIMIT_REACHED"
@@ -67,6 +76,7 @@ class BuildStatus(StrEnum):
     def is_terminal(self) -> bool:
         return self in {
             BuildStatus.COMPLETED,
+            BuildStatus.PARTIAL,
             BuildStatus.FAILED,
             BuildStatus.CANCELLED,
             BuildStatus.LIMIT_REACHED,
