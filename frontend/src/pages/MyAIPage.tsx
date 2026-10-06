@@ -13,7 +13,9 @@
 
 import { useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { Link } from 'react-router-dom'
 import {
+  Archive,
   Brain,
   Check,
   FileText,
@@ -30,7 +32,13 @@ import {
 import { Badge, Card, CardBody, CardHeader, PageContainer, SectionHeader } from '@/components/ui/primitives'
 import { Button } from '@/components/ui/Button'
 import { EmptyState, ErrorState, InlineAlert, LoadingBlock } from '@/components/ui/feedback'
-import { contextApi, KIND_LABELS, KIND_TONES, scopeLabel } from '@/lib/contextApi'
+import {
+  contextApi,
+  KIND_LABELS,
+  KIND_TONES,
+  scopeLabel,
+  type MemoryStatus,
+} from '@/lib/contextApi'
 import type { Memory, MemoryKind, Profile } from '@/lib/contextApi'
 import { toApiError } from '@/lib/api'
 import { cn } from '@/lib/utils'
@@ -42,14 +50,17 @@ const KINDS: MemoryKind[] = ['identity', 'goal', 'preference', 'skill', 'constra
 function MemoryRow({
   memory,
   onDelete,
+  onArchive,
   onSave,
 }: {
   memory: Memory
   onDelete: () => void
+  onArchive: () => void
   onSave: (content: string) => void
 }) {
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(memory.content)
+  const origin = memory.structured?.origin
 
   return (
     <div className="flex items-start gap-3 border-b border-border/50 px-4 py-3 last:border-0">
@@ -64,6 +75,32 @@ function MemoryRow({
           />
         ) : (
           <p className="text-[13px] leading-relaxed text-text">{memory.content}</p>
+        )}
+        {origin && (
+          <div className="mt-2 rounded-lg border border-border/60 bg-inset/60 px-2.5 py-2 text-[11px] leading-relaxed text-muted">
+            <div>
+              来源：
+              {origin.decided_at ? `${origin.decided_at.slice(0, 10)} 的 ` : ''}
+              「{origin.deliverable_title || '（未命名交付）'}」
+              {origin.version ? ` 第 ${origin.version} 版` : ''}
+            </div>
+            {origin.decision === 'rejected' && origin.feedback && (
+              <div className="mt-0.5">你退回了它，说「{origin.feedback}」</div>
+            )}
+            {origin.decision === 'accepted' && (
+              <div className="mt-0.5">你接受了它，没有提出修改意见</div>
+            )}
+            {origin.build_run_id && (
+              <div className="mt-1">
+                <Link
+                  to={`/workbench/${origin.build_run_id}`}
+                  className="text-accent underline-offset-2 hover:underline"
+                >
+                  查看那次交付
+                </Link>
+              </div>
+            )}
+          </div>
         )}
         <div className="mt-1 flex flex-wrap items-center gap-2 text-[11px] text-faint">
           <span className={cn('text-' + (KIND_TONES[memory.kind] ?? 'neutral'))}>
@@ -104,6 +141,9 @@ function MemoryRow({
           <>
             <Button size="xs" variant="ghost" onClick={() => setEditing(true)}>
               <Pencil className="size-3" />
+            </Button>
+            <Button size="xs" variant="ghost" title="归档（不再参与检索，但保留记录）" onClick={onArchive}>
+              <Archive className="size-3" />
             </Button>
             <Button size="xs" variant="ghost" onClick={onDelete}>
               <Trash2 className="size-3" />
@@ -315,8 +355,15 @@ export default function MyAIPage() {
     onError: (exc) => setNotice(toApiError(exc).message),
   })
   const update = useMutation({
-    mutationFn: ({ id, content }: { id: string; content: string }) =>
-      contextApi.updateMemory(id, { content }),
+    mutationFn: ({
+      id,
+      content,
+      status,
+    }: {
+      id: string
+      content?: string
+      status?: MemoryStatus
+    }) => contextApi.updateMemory(id, { content, status }),
     onSuccess: invalidate,
     onError: (exc) => setNotice(toApiError(exc).message),
   })
@@ -507,6 +554,7 @@ export default function MyAIPage() {
                     key={memory.id}
                     memory={memory}
                     onDelete={() => remove.mutate(memory.id)}
+                    onArchive={() => update.mutate({ id: memory.id, status: 'archived' })}
                     onSave={(content) => update.mutate({ id: memory.id, content })}
                   />
                 ))}

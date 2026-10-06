@@ -76,8 +76,6 @@ async def run_scenario(
     deliverable_kind: str = "md",
 ) -> dict[str, Any]:
     """Drive the real agent through one scenario and return its record."""
-    from sqlalchemy import select
-
     from app.ai.agent.autonomous import AutonomousAgent
     from app.ai.agent.control import RunController
     from app.ai.providers.factory import build_llm_provider
@@ -90,6 +88,7 @@ async def run_scenario(
     from app.ai.tools.unified import UnifiedToolRegistry
     from app.infrastructure.database import session_scope
     from app.models.user import User
+    from sqlalchemy import select
 
     SCRATCH.mkdir(parents=True, exist_ok=True)
     workdir = SCRATCH / label
@@ -156,6 +155,8 @@ def dump_events(controller: Any, *, only: tuple[str, ...] = ("error", "step", "v
             continue
         text = (event.message or "").replace("\n", " ")[:150]
         print(f"    [{event.kind:12}] {text}")
+        if event.kind == "error" and event.data.get("error"):
+            print(f"                    ↳ {str(event.data['error'])[:220]}")
 
 
 def dump_attempts(plan: Any) -> None:

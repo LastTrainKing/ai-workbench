@@ -27,8 +27,7 @@ from __future__ import annotations
 import argparse
 import json
 import shutil
-import sys
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -83,9 +82,7 @@ def inventory(folder: Path) -> list[dict[str, Any]]:
 
 def is_ours(name: str) -> bool:
     """True when the entry is the project's, not the user's."""
-    if name in {source for source, _, _ in PLAN}:
-        return True
-    return False
+    return name in {source for source, _, _ in PLAN}
 
 
 def human(size: int) -> str:
@@ -96,7 +93,7 @@ def human(size: int) -> str:
     return f"{size} B"
 
 
-def _clear_readonly(func, path, _exc):  # noqa: ANN001
+def _clear_readonly(func, path, _exc):
     """Retry a failed delete after clearing the read-only bit.
 
     Git object files are written read-only, and on Windows that makes `unlink`
@@ -234,7 +231,7 @@ def main() -> int:
 
     after = inventory(DESKTOP)
     manifest = {
-        "at": datetime.now().isoformat(timespec="seconds"),
+        "at": datetime.now(UTC).isoformat(timespec="seconds"),
         "desktop": str(DESKTOP),
         "moved": done,
         "extracted": [{"from": str(s), "to": str(t)} for s, t in extracts],

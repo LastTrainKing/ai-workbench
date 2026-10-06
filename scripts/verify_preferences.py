@@ -86,9 +86,8 @@ async def with_temporary_preferences(texts: list[str]) -> None:
     from app.models.context import MemoryEntry
 
     async with session_scope() as session:
-        from sqlalchemy import select
-
         from app.models.user import User
+        from sqlalchemy import select
 
         user = (await session.execute(select(User).limit(1))).scalar_one()
         for text in texts:
@@ -108,10 +107,9 @@ async def with_temporary_preferences(texts: list[str]) -> None:
 
 
 async def clear_temporary_preferences() -> int:
-    from sqlalchemy import delete
-
     from app.infrastructure.database import session_scope
     from app.models.context import MemoryEntry
+    from sqlalchemy import delete
 
     async with session_scope() as session:
         result = await session.execute(
@@ -123,8 +121,6 @@ async def clear_temporary_preferences() -> int:
 
 async def run_case(label: str, goal: str) -> dict[str, Any]:
     """Drive the real agent for one criterion and return the record."""
-    from sqlalchemy import select
-
     from app.ai.agent.autonomous import AutonomousAgent
     from app.ai.agent.control import RunController
     from app.ai.providers.factory import build_llm_provider
@@ -136,6 +132,7 @@ async def run_case(label: str, goal: str) -> dict[str, Any]:
     from app.ai.tools.unified import UnifiedToolRegistry
     from app.infrastructure.database import session_scope
     from app.models.user import User
+    from sqlalchemy import select
 
     workdir = SCRATCH / label
     if workdir.exists():
@@ -162,7 +159,7 @@ async def run_case(label: str, goal: str) -> dict[str, Any]:
             business, computer, executor, confirm=get_broker().request, limits=limits
         )
 
-        llm, info = build_llm_provider()
+        llm, _info = build_llm_provider()
         controller = RunController(run_id=f"pref-{label}")
         agent = AutonomousAgent(
             llm=llm,
@@ -177,13 +174,20 @@ async def run_case(label: str, goal: str) -> dict[str, Any]:
         )
 
         print(f"  目标：{goal}")
-        print(f"  解析出的硬约束：{agent.constraints.as_dict()}")
         result = await agent.run(goal)
         print(f"  终态：{result.state.value}")
+        # Printed *after* the run: the constraints are derived inside `run()`, so
+        # reading them before it shows the empty defaults and reads like a bug in
+        # the derivation rather than in this print statement.
+        print(f"  解析出的硬约束：{agent.constraints.as_dict()}")
 
         print("  偏好处理结果：")
         for outcome in agent.preferences.outcomes:
             print(f"    [{outcome.verdict}] 「{outcome.text[:56]}」→ {outcome.detail[:110]}")
+        print("  取舍说明（运行报告里的原文）：")
+        for row in result.answer.split("\n"):
+            if row.startswith("- ") or "取舍说明" in row:
+                print(f"    {row[:150]}")
 
         return {
             "label": label,

@@ -12,7 +12,6 @@ Run:  python scripts/demo_1b_compare_versions.py
 
 from __future__ import annotations
 
-import sys
 import time
 from pathlib import Path
 

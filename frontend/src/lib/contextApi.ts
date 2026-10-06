@@ -37,11 +37,35 @@ export interface Profile {
   digest: string
 }
 
+/**
+ * Where a memory came from.
+ *
+ * A memory with no origin is an assertion from nowhere: "you prefer more charts"
+ * is only reviewable if the user can see which delivery taught it. Populated for
+ * memories learned from a delivery decision; absent for hand-written ones.
+ */
+export interface MemoryOrigin {
+  kind: string
+  decision?: 'accepted' | 'rejected'
+  deliverable_id?: string
+  build_run_id?: string
+  deliverable_title?: string
+  deliverable_kind?: string
+  version?: number
+  feedback?: string
+  decided_at?: string
+}
+
+export interface MemoryStructured {
+  origin?: MemoryOrigin
+}
+
 export interface Memory {
   id: string
   kind: MemoryKind
   scope: string
   content: string
+  structured?: MemoryStructured
   confidence: number
   source: string
   status: MemoryStatus
@@ -58,6 +82,7 @@ export interface MemoryCandidate {
   content: string
   reason: string
   confidence: number
+  structured?: MemoryStructured
   status: string
   conflicts_with: string
   created_at: string | null

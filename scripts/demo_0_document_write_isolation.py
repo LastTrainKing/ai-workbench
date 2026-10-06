@@ -18,7 +18,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "backend"))
 
-from app.ai.tools.permissions import default_workspace  # noqa: E402
+from app.ai.tools.permissions import default_workspace
 
 # The agent's own workspace, resolved the way the application resolves it. It used
 # to be hard-coded to a folder on the desktop — the very default this round removed.
@@ -90,13 +90,11 @@ XLSX_SECTIONS = [
 
 
 async def main() -> int:
-    from sqlalchemy import select
-
     from app.ai.agent.tools import ToolContext
-    from app.ai.tools.builtin.documents import DocumentReadTool, DocumentWriteTool
     from app.ai.tools.permissions import AgentPolicy, PermissionManager
     from app.infrastructure.database import session_scope
     from app.models.user import User
+    from sqlalchemy import select
 
     OUT.mkdir(parents=True, exist_ok=True)
     policy = AgentPolicy.from_settings(level=2)

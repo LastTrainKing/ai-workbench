@@ -141,6 +141,110 @@ def _write_docx(
     return {"paragraphs": len(document.paragraphs), "sections": len(sections)}
 
 
+def _as_number(value: Any) -> float | None:
+    """Coerce a chart value to a number, or None when it is not one."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            return float(value.strip().replace(",", "").replace("%", ""))
+        except ValueError:
+            return None
+    return None
+
+
+def normalise_chart(spec: dict[str, Any]) -> tuple[list[str], dict[str, list[float]]]:
+    """Accept the shapes a model actually produces, or say clearly what is wrong.
+
+    The first version required ``series`` to be ``{name: [values]}`` and the model
+    consistently sent ``[{"name": ..., "data": [...]}]`` — which is the more natural
+    reading of a field called `series`, and what every charting library in the world
+    accepts. Every chart failed, the deck came out with no visuals, and the user's
+    stated preference for more charts was not honoured.
+
+    Failing loudly was correct and is why this was caught. Failing *only* because
+    the caller guessed a private shape is not a useful contract, so both forms are
+    accepted, along with the usual aliases, and anything genuinely unusable raises
+    with the offending value quoted.
+    """
+    categories_raw = (
+        spec.get("categories")
+        or spec.get("labels")
+        or spec.get("x")
+        or spec.get("index")
+        or []
+    )
+    if isinstance(categories_raw, dict):
+        categories_raw = list(categories_raw.values())
+    categories = [str(c) for c in categories_raw] if isinstance(categories_raw, (list, tuple)) else []
+
+    raw_series = spec.get("series")
+    if raw_series is None:
+        raw_series = spec.get("data") or spec.get("values")
+    if isinstance(raw_series, dict):
+        raw_series = raw_series.get("data") if set(raw_series) == {"data"} else raw_series
+
+    series: dict[str, list[float]] = {}
+
+    def add(name: str, values: Any) -> None:
+        if isinstance(values, dict):
+            values = values.get("data") or values.get("values") or values.get("y")
+        if not isinstance(values, (list, tuple)):
+            raise ChartRenderError(
+                f"chart 的系列「{name}」不是数组：{values!r}。"
+                "series 应为 {名称: [数值]}，或 [{name, data}] 列表。"
+            )
+        numbers: list[float] = []
+        for value in values:
+            number = _as_number(value)
+            if number is None:
+                raise ChartRenderError(
+                    f"chart 的系列「{name}」里有非数值：{value!r}。"
+                    "图表只接受数字，请把文字说明放在标题或 categories 里。"
+                )
+            numbers.append(number)
+        series[name] = numbers
+
+    if isinstance(raw_series, dict):
+        for name, values in raw_series.items():
+            add(str(name), values)
+    elif isinstance(raw_series, (list, tuple)):
+        for index, item in enumerate(raw_series):
+            if isinstance(item, dict):
+                name = str(item.get("name") or item.get("label") or f"系列{index + 1}")
+                add(name, item.get("data") if "data" in item else item.get("values") or item.get("y") or item)
+            elif isinstance(item, (list, tuple)):
+                add(f"系列{index + 1}", item)
+            else:
+                # A flat list of numbers is one unnamed series.
+                add("数值", raw_series)
+                break
+    else:
+        raise ChartRenderError(
+            f"chart 的 series 类型无法识别：{type(raw_series).__name__}。"
+            "应为 {名称: [数值]} 或 [{name, data}]。"
+        )
+
+    if not categories:
+        raise ChartRenderError(
+            "chart 缺少 categories（横轴标签）。"
+            f"收到的字段：{sorted(spec)}"
+        )
+    if not series:
+        raise ChartRenderError("chart 的 series 是空的，画不出任何东西")
+
+    for name, values in series.items():
+        if len(values) != len(categories):
+            raise ChartRenderError(
+                f"chart 的系列「{name}」有 {len(values)} 个值，"
+                f"但 categories 有 {len(categories)} 个 —— 数量必须一致"
+            )
+
+    return categories, series
+
+
 def _render_chart(spec: dict[str, Any], target: Path) -> Path:
     """Draw a chart from a spec and return the file, or raise with the real reason.
 
@@ -167,15 +271,15 @@ def _render_chart(spec: dict[str, Any], target: Path) -> Path:
     ]
     matplotlib.rcParams["axes.unicode_minus"] = False
 
-    categories = [str(c) for c in (spec.get("categories") or [])]
-    series = spec.get("series") or {}
-    if not categories or not isinstance(series, dict) or not series:
-        raise ChartRenderError(
-            "chart 画不出来：需要非空的 categories 和非空的 series。"
-            f"收到的 categories={categories!r}，series 类型={type(series).__name__}"
-        )
+    categories, series = normalise_chart(spec)
 
-    kind = str(spec.get("type") or "bar").lower()
+    kind = str(spec.get("type") or spec.get("kind") or "bar").lower()
+    if kind not in {"bar", "line", "pie"}:
+        # Not fatal: an unknown type is drawn as a bar chart, but it is reported so
+        # "the chart is not what I asked for" is not a silent surprise.
+        logger.warning("chart_type_unknown", extra={"type": kind})
+        kind = "bar"
+
     try:
         figure, axes = plt.subplots(figsize=(7.2, 4.0), dpi=150)
         positions = range(len(categories))
@@ -485,7 +589,20 @@ class DocumentWriteTool(Tool):
                 "path": {"type": "string", "description": "相对于工作区的输出路径"},
                 "sections": {
                     "type": "array",
-                    "description": "结构化内容：每项含 heading / content / rows / formulas / chart / notes",
+                    "description": (
+                        "结构化内容数组。每项可含：\n"
+                        "- heading：标题（pptx 的页标题 / docx 的标题 / xlsx 的工作表名）\n"
+                        "- content：正文；字符串，或字符串数组（每个元素是一行/一条要点）\n"
+                        "- rows / data：表格数据，二维数组或对象数组\n"
+                        "- formulas：[{cell: \"B7\", formula: \"=SUM(B2:B6)\"}]，原样写入\n"
+                        "- chart：图表，形如 "
+                        "{\"type\": \"bar|line|pie\", \"title\": \"...\", "
+                        "\"categories\": [\"A\",\"B\"], "
+                        "\"series\": [{\"name\": \"系列名\", \"data\": [1,2]}]}；"
+                        "series 也接受 {\"系列名\": [1,2]} 形式。"
+                        "categories 与每个 series 的长度必须一致，值必须是数字。\n"
+                        "- notes：讲稿备注（仅 pptx）"
+                    ),
                 },
                 "style": {"type": "string", "description": "concise / academic / business，留空则读用户偏好"},
                 "min_slides": {

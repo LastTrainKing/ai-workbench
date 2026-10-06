@@ -163,6 +163,14 @@ class MemoryCandidate(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     #: Why the system thinks this is worth remembering, shown to the user.
     reason: Mapped[str] = mapped_column(Text, nullable=False, default="")
     confidence: Mapped[float] = mapped_column(Float, nullable=False, default=0.6)
+    #: Where this candidate came from, carried through to the entry on approval.
+    #:
+    #: A memory with no provenance is an assertion from nowhere. "You prefer more
+    #: charts" is only reviewable if the user can see *which* delivery taught it —
+    #: and a preference learned from a rejection should point back at the thing
+    #: that was rejected. Stored on the candidate as well as the entry so the
+    #: origin survives the approval step rather than being reconstructed later.
+    structured: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
     #: pending | approved | rejected
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="pending", index=True)
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -178,6 +186,7 @@ class MemoryCandidate(Base, UUIDPrimaryKeyMixin, TimestampMixin):
             "content": self.content,
             "reason": self.reason,
             "confidence": round(self.confidence, 3),
+            "structured": self.structured,
             "status": self.status,
             "conflicts_with": self.conflicts_with,
             "created_at": self.created_at.isoformat() if self.created_at else None,

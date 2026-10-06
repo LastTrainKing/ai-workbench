@@ -15,7 +15,10 @@ installDesktopShell({ blockContextMenu: true })
 // Exposed for the browser test: it asserts that the guards are active
 // rather than trusting that the call above ran.
 if (typeof window !== 'undefined') {
-  ;(window as unknown as { __awShell?: unknown }).__awShell = { isDesktopShell }
+  // Bound first rather than prefixed with a leading semicolon: the semicolon was
+  // an ASI guard, and it tripped the lint rule instead of guarding anything.
+  const shell = window as unknown as { __awShell?: unknown }
+  shell.__awShell = { isDesktopShell }
 }
 
 export const queryClient = new QueryClient({

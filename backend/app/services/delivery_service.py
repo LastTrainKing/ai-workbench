@@ -333,7 +333,27 @@ class DeliveryService:
                     "这个原因反映的是他/她的质量标准，不是一次性事务。"
                 )
 
-            verdict = await evaluator.evaluate(statement, context=context, source="delivery")
+            verdict = await evaluator.evaluate(
+                statement,
+                context=context,
+                source="delivery",
+                # The provenance. Without it the memory page can only say "delivery",
+                # which is not an answer to "why does it think that about me?" — the
+                # user needs the run, the version and the words they used.
+                structured={
+                    "origin": {
+                        "kind": "delivery",
+                        "decision": "accepted" if accepted else "rejected",
+                        "deliverable_id": str(item.id),
+                        "build_run_id": str(item.build_run_id) if item.build_run_id else "",
+                        "deliverable_title": item.title,
+                        "deliverable_kind": item.kind,
+                        "version": item.version,
+                        "feedback": item.feedback,
+                        "decided_at": item.decided_at.isoformat() if item.decided_at else "",
+                    }
+                },
+            )
             logger.info(
                 "memory_verdict_from_delivery",
                 extra={

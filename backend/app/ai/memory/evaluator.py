@@ -210,9 +210,23 @@ class MemoryEvaluator:
             return {"worth_remembering": False, "reason": "模型返回不可解析", "confidence": 0.0}
 
     # ---------------------------------------------------------------- evaluate --
-    async def evaluate(self, statement: str, *, context: str = "", source: str = "conversation") -> Verdict:
-        """Decide what to do with one candidate statement."""
+    async def evaluate(
+        self,
+        statement: str,
+        *,
+        context: str = "",
+        source: str = "conversation",
+        structured: dict[str, Any] | None = None,
+    ) -> Verdict:
+        """Decide what to do with one candidate statement.
+
+        `structured` is the provenance: which delivery, which rejection, when. It is
+        carried onto whatever row this produces — entry or candidate — because a
+        memory with no origin is an assertion from nowhere, and "why does it think
+        that about me?" has to be answerable.
+        """
         text = (statement or "").strip()
+        origin = structured or {}
 
         if not text:
             return Verdict(Routing.DROP, "空内容")
@@ -288,6 +302,7 @@ class MemoryEvaluator:
                     content=content,
                     reason=f"与已有记忆「{entry.content[:80]}」矛盾，需要你确认以哪条为准",
                     confidence=confidence,
+                    structured=origin,
                     status="pending",
                     conflicts_with=str(entry.id),
                 )
@@ -309,6 +324,7 @@ class MemoryEvaluator:
                 kind=kind,
                 scope=scope,
                 content=content,
+                structured=origin,
                 confidence=confidence,
                 source=source,
                 status="active",
@@ -332,6 +348,7 @@ class MemoryEvaluator:
             content=content,
             reason=str(judged.get("reason") or "可能值得记住，等你确认"),
             confidence=confidence,
+            structured=origin,
             status="pending",
         )
         self.session.add(candidate)
@@ -358,8 +375,15 @@ class MemoryEvaluator:
             kind=candidate.proposed_kind,
             scope=candidate.proposed_scope,
             content=candidate.content,
+            # The origin travels with the memory. Losing it at the approval step
+            # would leave the memory page unable to say where the memory came from,
+            # which is the whole point of recording it.
+            structured=candidate.structured or {},
             confidence=max(candidate.confidence, ACTIVE_THRESHOLD),
-            source="conversation",
+            # An approved candidate keeps the source it was proposed from, so a
+            # preference learned from a rejection still reads as "delivery" rather
+            # than being flattened into "conversation" on the way in.
+            source=str((candidate.structured or {}).get("origin", {}).get("kind") or "conversation"),
             status="active",
             confirmed_by_user=True,
         )

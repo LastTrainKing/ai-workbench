@@ -86,6 +86,56 @@ MIN_REASONING_TOKENS = 2000
 def _completion_budget(ceiling: int = MIN_REASONING_TOKENS) -> int:
     return max(MIN_REASONING_TOKENS, min(settings.ai_max_tokens, ceiling))
 
+
+#: The provider's code for "the thinking used the whole completion budget".
+#:
+#: It is a real, actionable signal rather than a generic failure: the answer is not
+#: "give up", it is "ask again with more room". Treating it as terminal is how the
+#: recovery call silently turned into "no new strategy" on long prompts.
+_REASONING_EXHAUSTED = "ai_reasoning_budget_exhausted"
+
+
+async def _chat(
+    llm: Any,
+    messages: list[ChatMessage],
+    *,
+    temperature: float,
+    tools: list[Any] | None = None,
+    timeout: float = 180,
+    ceiling: int = MIN_REASONING_TOKENS,
+) -> Any:
+    """Call the model, giving the reasoning budget one honest second chance.
+
+    A reasoning model that spends its whole budget thinking returns *nothing* — no
+    truncated answer, an exception. The recovery prompt is the longest in the loop
+    (it carries the whole attempt history), so it is exactly where the budget runs
+    out first. Retrying once with double the room is what the provider's own message
+    asks for; retrying with the same budget would be the same failure again.
+    """
+    budget = _completion_budget(ceiling)
+
+    def call(size: int) -> Any:
+        kwargs: dict[str, Any] = {"temperature": temperature, "max_tokens": size}
+        if tools is not None:
+            kwargs["tools"] = tools
+        return llm.chat(messages, **kwargs)
+
+    try:
+        return await asyncio.wait_for(call(budget), timeout=timeout)
+    except Exception as exc:
+        if getattr(exc, "code", "") != _REASONING_EXHAUSTED:
+            raise
+        # Straight to the ceiling rather than doubling: the failure mode is the
+        # model thinking itself to a standstill on a genuinely hard question ("find
+        # a different approach" when there may not be one), and a 2× bump was
+        # measured to still be short. The second attempt also gets more wall clock,
+        # because thinking for longer takes longer.
+        wider = min(settings.ai_max_tokens, budget * 4)
+        if wider <= budget:
+            raise
+        logger.warning("reasoning_budget_raised", extra={"from": budget, "to": wider})
+        return await asyncio.wait_for(call(wider), timeout=timeout * 2)
+
 #: Phrases that mark a step as *diagnostic* rather than *assertive*.
 #:
 #: "Run the tests and record which ones fail" is a step whose whole purpose is to
@@ -138,30 +188,40 @@ def attempt_signature(observations: list[dict[str, Any]]) -> str:
     return "|".join(parts)
 
 
-def render_attempt_history(step: PlanStep) -> str:
+def render_attempt_history(step: PlanStep, *, limit: int = 3) -> str:
     """The block injected into a retry, so the next attempt is not the last one.
 
     This is the fix for the root cause: ``_recover`` always returned an analysis and
     the caller always threw it away, so every retry ran with an identical prompt and
     therefore reached an identical decision. The analysis only becomes useful when
     it is *read by the thing that is about to try again*.
+
+    Only the most recent attempts are rendered, and each analysis is cut short. The
+    block goes into every prompt of the attempt, and it is also what `_recover`
+    itself is given — so an unbounded history would make the prompt grow with each
+    retry until the model's thinking budget ran out, which is a failure mode this
+    loop has already produced once.
     """
     if not step.attempts:
         return ""
     lines = ["你之前已经尝试过以下做法，它们都失败了："]
-    for record in step.attempts:
+    for record in step.attempts[-limit:]:
         number = record.get("attempt")
         tools = "、".join(record.get("tools_used") or []) or "（没有调用任何工具）"
-        error = str(record.get("error") or "未通过验证")[:200]
+        error = str(record.get("error") or "未通过验证")[:160]
         lines.append(f"  第 {number} 次：调用 {tools} → 失败：{error}")
         analysis = str(record.get("analysis") or "").strip()
         if analysis:
-            lines.append(f"           上次的分析：{analysis[:300]}")
+            lines.append(f"           上次的分析：{analysis[:220]}")
     lines.append(
         "不要重复上面这些做法。必须换一个明显不同的方式：换一个工具，"
         "或者对同一个工具换一组参数。如果你认为没有别的做法，就直接说明做不到，不要原样重试。"
     )
-    return "\n".join(lines)
+    # Hard ceiling on the block. It is injected into every prompt of the attempt
+    # *and* into the recovery call itself, so an unbounded history makes the prompt
+    # grow with every retry — and the thing it crowds out is the model's thinking
+    # budget, which is the failure this loop has already produced twice.
+    return "\n".join(lines)[:1500]
 
 
 @dataclass
@@ -586,14 +646,12 @@ class AutonomousAgent:
 
             # Repaired before it is sent: the invariant is enforced here rather
             # than assumed of every path that built the list.
-            chat = await asyncio.wait_for(
-                self.llm.chat(
-                    repair_tool_pairing(messages),
-                    temperature=0.0,
-                    max_tokens=min(settings.ai_max_tokens, 2500),
-                    tools=self.registry.specs(),
-                ),
-                timeout=180,
+            chat = await _chat(
+                self.llm,
+                repair_tool_pairing(messages),
+                temperature=0.0,
+                tools=self.registry.specs(),
+                ceiling=2500,
             )
 
             if not chat.tool_calls:
@@ -701,16 +759,14 @@ class AutonomousAgent:
         ]
 
         try:
-            chat = await asyncio.wait_for(
-                self.llm.chat(
-                    repair_tool_pairing(messages),
-                    temperature=0.0,
-                    max_tokens=_completion_budget(),
-                    tools=self.registry.specs(),
-                ),
+            chat = await _chat(
+                self.llm,
+                repair_tool_pairing(messages),
+                temperature=0.0,
+                tools=self.registry.specs(),
                 timeout=120,
             )
-        except (TimeoutError, Exception) as exc:
+        except Exception as exc:
             logger.warning("verify_call_failed", extra={"error": str(exc)})
             return False, {"tool": "", "reason": f"验证调用失败：{type(exc).__name__}"}
 
@@ -809,10 +865,7 @@ class AutonomousAgent:
             ),
         ]
         try:
-            chat = await asyncio.wait_for(
-                self.llm.chat(messages, temperature=0.2, max_tokens=_completion_budget()),
-                timeout=90,
-            )
+            chat = await _chat(self.llm, messages, temperature=0.2, timeout=90)
             analysis = (chat.content or "").strip()
         except Exception as exc:
             # No blanket `except: pass`, and no invented analysis either. The
@@ -940,8 +993,6 @@ class AutonomousAgent:
 
                 step.status = StepStatus.FAILED
                 step.error = evidence.get("error") or evidence.get("reason", "")
-                self.controller.retries += 1
-                step.retry_count += 1
 
                 signature = attempt_signature(observations)
                 record: dict[str, Any] = {
@@ -1005,6 +1056,13 @@ class AutonomousAgent:
                     )
                     break
                 record["analysis"] = analysis
+                # Counted here rather than on every failure: a *retry* is an attempt
+                # that actually happens. Incrementing on the final failure too made
+                # `retry_count` read `max_retries + 1`, so a step that retried three
+                # times claimed four retries and the number no longer matched the
+                # budget it was supposed to be bounded by.
+                self.controller.retries += 1
+                step.retry_count += 1
                 step.status = StepStatus.RUNNING
 
         # ------------------------------------------------------------ final --

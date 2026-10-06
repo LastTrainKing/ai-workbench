@@ -265,3 +265,73 @@ def test_a_chart_that_can_be_drawn_is_counted(tmp_path):
     assert stats["images"] == 1
     assert stats["chart_failures"] == []
     assert target.is_file()
+
+
+# --------------------------------------------------------------------------- #
+# The chart shape a model actually produces
+# --------------------------------------------------------------------------- #
+def test_the_series_shape_a_model_actually_sends_is_accepted(tmp_path):
+    """The real failure: `series: [{name, data}]` — the natural reading — was
+    rejected because the implementation expected `{name: [values]}`. Every chart in
+    a 10-slide deck failed, and the user's "more charts" preference went unapplied.
+    """
+    from app.ai.tools.builtin.documents import normalise_chart
+
+    categories, series = normalise_chart(
+        {
+            "type": "line",
+            "categories": ["1月", "2月", "3月"],
+            "series": [{"name": "月活", "data": [42, 48, 55]}],
+        }
+    )
+    assert categories == ["1月", "2月", "3月"]
+    assert series == {"月活": [42.0, 48.0, 55.0]}
+
+
+def test_a_full_deck_with_one_chart_per_slide_comes_out_with_every_chart(tmp_path):
+    target = tmp_path / "per-slide.pptx"
+    payload = sections(4)
+    for index, section in enumerate(payload):
+        section["chart"] = {
+            "type": "bar",
+            "title": f"图表 {index}",
+            "categories": ["一", "二"],
+            "series": [{"name": "数量", "data": [index + 1, index + 2]}],
+        }
+    stats = _write_pptx(target, payload, STYLE)
+    assert stats["chart_failures"] == []
+    # The first section becomes the cover, which carries no chart — so every
+    # content slide has one, which is what "每页至少 1 张图" means.
+    assert stats["images"] == len(payload) - 1
+    assert stats["slides"] == len(payload)
+
+
+def test_the_other_shapes_and_aliases_are_accepted():
+    from app.ai.tools.builtin.documents import normalise_chart
+
+    assert normalise_chart({"labels": ["a", "b"], "values": [1, 2]})[0] == ["a", "b"]
+    assert normalise_chart({"categories": ["a", "b"], "series": {"n": [1, 2]}})[1] == {"n": [1.0, 2.0]}
+    assert normalise_chart({"categories": ["a"], "series": [3]})[1] == {"数值": [3.0]}
+    assert normalise_chart({"x": ["a"], "series": [[1]]})[1] == {"系列1": [1.0]}
+    # Numeric strings and percent signs are what a model writes when it is unsure.
+    assert normalise_chart({"categories": ["a"], "series": {"n": ["42%"]}})[1] == {"n": [42.0]}
+
+
+def test_unusable_charts_say_exactly_what_is_wrong():
+    from app.ai.tools.builtin.documents import normalise_chart
+
+    with pytest.raises(ChartRenderError) as caught:
+        normalise_chart({"categories": ["a", "b"], "series": {"n": [1]}})
+    assert "数量必须一致" in str(caught.value)
+
+    with pytest.raises(ChartRenderError) as caught:
+        normalise_chart({"categories": ["a"], "series": {"n": ["很多"]}})
+    assert "非数值" in str(caught.value)
+
+    with pytest.raises(ChartRenderError) as caught:
+        normalise_chart({"series": {"n": [1]}})
+    assert "categories" in str(caught.value)
+
+    with pytest.raises(ChartRenderError) as caught:
+        normalise_chart({"categories": ["a"], "series": []})
+    assert "空" in str(caught.value)
