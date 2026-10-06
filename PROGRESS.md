@@ -95,6 +95,23 @@ tier 调用 1 次
 `这次由「知识库」回答 · 记忆 未命中 3ms · Skill 未命中 5ms · 知识库 命中 51ms`。
 **又是"看到没选中就断定选择逻辑坏了"，没先问"有没有可选的"。**
 
+## 交付物（本轮重建，commit `e62ed31`）
+
+| | 路径 | 体积 | SHA256 |
+|---|---|---|---|
+| 安装包 | `build/installer/AI-Workbench-Setup.exe` | 97,131,592 B | `cc36577146e3c33687e3a459cc1c4091c4a78bd766c6fc3e3cd69d8991e7ec11` |
+| 源码包 | `archive/releases/AI-Workbench-e62ed31-final.zip` | 8,429,452 B / 492 条目 | `ce5adb02d35e760f407174de568574c00b16e8c0e17f2b50450c2d32b53e1ad9` |
+
+- 前端生产构建 → Tauri build → EXE → NSIS → ZIP，**全部重跑，没有用旧产物**
+- 源码包 492 条目 == `git ls-files` 492
+- Secret Scan **PASS**（无凭据、无运行时产物、必需条目齐全）
+
+## 第 8 步仍未做
+
+- 文档同步：README / ARCHITECTURE / SKILL.md / RETRIEVAL.md / MEMORY.md / AGENT.md 等
+- 冷启动 + 二次启动的数据完整性验证
+- 桌面断言（`verify-desktop-entry.ps1`）
+
 ## 第 8 步 剩余（未做）
 
 前端生产构建已过 · Tauri build / EXE / NSIS 安装包 / 最终 ZIP **未重建** ·
