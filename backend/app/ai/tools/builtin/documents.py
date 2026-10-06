@@ -27,6 +27,9 @@ from typing import Any
 from app.ai.agent.tools import Tool, ToolContext
 from app.ai.types import ToolResult, ToolSpec
 from app.core.errors import ValidationError
+from app.core.logging import get_logger
+
+logger = get_logger(__name__)
 
 #: Refuse to write a document larger than this. Anything bigger is a mistake or
 #: an accident, and either way it should not land silently in the workspace.
@@ -125,6 +128,64 @@ def _write_docx(path: Path, sections: list[dict[str, Any]], style: dict[str, Any
     return {"paragraphs": len(document.paragraphs), "sections": len(sections)}
 
 
+def _render_chart(spec: dict[str, Any], target: Path) -> Path | None:
+    """Draw a chart from a spec and return the file, or None if it cannot be drawn.
+
+    Returning None rather than raising: a slide whose chart failed should still be
+    produced, and the caller records how many were drawn so a deck with zero visuals
+    is visible in the result instead of being a silent disappointment.
+    """
+    try:
+        import matplotlib
+
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+
+        # A CJK font, or Chinese labels render as empty boxes.
+        matplotlib.rcParams["font.sans-serif"] = [
+            "Microsoft YaHei", "SimHei", "DejaVu Sans",
+        ]
+        matplotlib.rcParams["axes.unicode_minus"] = False
+
+        categories = [str(c) for c in (spec.get("categories") or [])]
+        series = spec.get("series") or {}
+        if not categories or not isinstance(series, dict) or not series:
+            return None
+
+        kind = str(spec.get("type") or "bar").lower()
+        figure, axes = plt.subplots(figsize=(7.2, 4.0), dpi=150)
+        positions = range(len(categories))
+        width = 0.8 / max(1, len(series))
+
+        for index, (name, values) in enumerate(series.items()):
+            offsets = [p + index * width for p in positions]
+            if kind == "line":
+                axes.plot(list(positions), list(values), marker="o", label=str(name))
+            elif kind == "pie":
+                axes.pie(list(values), labels=categories, autopct="%1.1f%%")
+                break
+            else:
+                axes.bar(offsets, list(values), width=width, label=str(name))
+
+        if kind != "pie":
+            axes.set_xticks([p + width * (len(series) - 1) / 2 for p in positions])
+            axes.set_xticklabels(categories, fontsize=9)
+            if len(series) > 1:
+                axes.legend(fontsize=9)
+            axes.grid(axis="y", alpha=0.25)
+
+        title = str(spec.get("title") or "")
+        if title:
+            axes.set_title(title, fontsize=12)
+        figure.tight_layout()
+        figure.savefig(target, bbox_inches="tight")
+        plt.close(figure)
+        return target
+    except Exception as exc:
+        logger.warning("chart_render_failed", extra={"error": f"{type(exc).__name__}: {exc}"})
+        return None
+
+
 def _write_pptx(path: Path, sections: list[dict[str, Any]], style: dict[str, Any]) -> dict[str, Any]:
     pptx = _require("pptx", "python-pptx")
     presentation = pptx.Presentation()
@@ -137,6 +198,7 @@ def _write_pptx(path: Path, sections: list[dict[str, Any]], style: dict[str, Any
     if len(cover.placeholders) > 1:
         cover.placeholders[1].text = str(sections[0].get("content") or "")[:200]
 
+    images_placed = 0
     limit = {"few": 8, "medium": 14, "many": 22}[style["slides"]]
     body_sections = sections[1:] if len(sections) > 1 else sections
     per_slide = style["bullets_per_slide"]
@@ -159,8 +221,38 @@ def _write_pptx(path: Path, sections: list[dict[str, Any]], style: dict[str, Any
         if style["speaker_notes"]:
             slide.notes_slide.notes_text_frame.text = str(section.get("notes") or "")[:2000]
 
+        # A visual, when the section carries one. Placed to the right of the text
+        # rather than over it, so a chart never covers the bullets it illustrates.
+        visual: Path | None = None
+        raw_image = section.get("image")
+        if raw_image:
+            candidate = Path(str(raw_image))
+            if candidate.is_file():
+                visual = candidate
+            else:
+                logger.warning("slide_image_missing", extra={"path": str(candidate)})
+        elif isinstance(section.get("chart"), dict):
+            visual = _render_chart(
+                section["chart"], target=path.parent / f"_chart_{path.stem}_{len(presentation.slides)}.png"
+            )
+
+        if visual is not None and visual.is_file():
+            try:
+                from pptx.util import Inches
+
+                slide.shapes.add_picture(
+                    str(visual), Inches(4.7), Inches(1.7), width=Inches(4.8)
+                )
+                images_placed += 1
+            except Exception as exc:
+                logger.warning(
+                    "slide_image_failed", extra={"path": str(visual), "error": str(exc)}
+                )
+
     presentation.save(path)
-    return {"slides": len(presentation.slides)}
+    # `images` is reported rather than assumed: a deck that came out with none should
+    # say so, because that is exactly what the user complained about.
+    return {"slides": len(presentation.slides), "images": images_placed}
 
 
 def _write_xlsx(path: Path, sections: list[dict[str, Any]], style: dict[str, Any]) -> dict[str, Any]:
