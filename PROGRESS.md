@@ -106,11 +106,31 @@ tier 调用 1 次
 - 源码包 492 条目 == `git ls-files` 492
 - Secret Scan **PASS**（无凭据、无运行时产物、必需条目齐全）
 
+## 冷启动 + 二次启动 —— **36/36 PASS**
+
+```
+projects 不变 — 2 → 2            documents 不变 — 7 → 7
+tasks 不变 — 254 → 254           memories 不变 — 10 → 10
+delivery_deliverables_rejected 不变 — 10 → 10
+第 5 步创建的运行在重启后仍存在 — 50 → 51
+第 5 步创建的产出物在重启后仍存在 — 22 → 23
+desktop 进程只有一个 · API 端口只有一个监听 · 5173 依然未监听
+桌面断言（快捷方式）7 PASS / 0 FAIL
+```
+
+## 文档同步 —— 已完成
+
+| 文档 | 状态 |
+|---|---|
+| `SKILL.md` | **新增**：六个阶段、格式、七类安全规则、个性化注入点、两道门 |
+| `RETRIEVAL.md` | **新增**：阶梯、判定方式（含两次失败的证据与分布）、真实毫秒数 |
+| `MEMORY.md` | 追加「生命周期」：合并/衰减/冲突/遗忘、阈值、合并吃掉冲突那个 bug |
+| `ARCHITECTURE.md` | 追加「第三层 Skill」：六阶段、个性化在哪发生、两道门、库不变垃圾场 |
+
 ## 第 8 步仍未做
 
-- 文档同步：README / ARCHITECTURE / SKILL.md / RETRIEVAL.md / MEMORY.md / AGENT.md 等
-- 冷启动 + 二次启动的数据完整性验证
-- 桌面断言（`verify-desktop-entry.ps1`）
+- `AGENT.md` / `README.md` / `WORKSPACE.md` / `PERMISSIONS.md` / `TESTING.md` /
+  `SECURITY.md` / `DEPLOYMENT.md` / `RAG.md` 的对齐尚未逐份检查
 
 ## 第 8 步 剩余（未做）
 
