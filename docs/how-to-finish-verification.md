@@ -65,7 +65,22 @@ ImportError: DLL load failed while importing _pydantic_core:
 
 - 一台 Windows 10/11 x64，**Smart App Control 处于关闭或未启用状态**
 - 建议 8 GB 内存、5 GB 空闲磁盘
-- 不需要预先安装 Python / PostgreSQL / Node.js —— 安装包自带
+
+**前置条件分两种情况，别混：**
+
+```
+用【安装包】装   → 不需要任何前置。
+                   Python / PostgreSQL / Redis / Qdrant 全都自带，
+                   双击 exe 就行。
+
+用【源码包】跑   → 需要 Node.js。
+                   frontend/dist 不在 git 里（frontend/.gitignore 排除了它），
+                   必须自己构建；start-desktop.bat:88 会尝试 npm run build，
+                   那台机器没有 Node.js 就会失败。
+                   Python 与原生运行时不用管，scripts\fetch-runtime.ps1 会物化。
+```
+
+**一句话：安装包什么都要，源码包要 Node.js。**
 
 ### 步骤
 

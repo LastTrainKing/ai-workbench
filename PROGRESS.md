@@ -5,6 +5,28 @@
 
 ---
 
+【本阶段状态：已交付，验证待环境重建】
+
+已完成并可复现：
+  · payload 优化（1,204.9 MB → 439.7 MB）
+  · pgsql 裁剪（919.8 MB → 119.7 MB），verify_pgsql_trim.py 13/13
+  · 安装包 97,063,523 B，静态自检 41/41
+  · 源码包 7,316,244 B / 448 条目
+  · 数据布局：程序在 %LOCALAPPDATA%\AI Workbench\，
+              数据在 %LOCALAPPDATA%\AI Workbench Data\（uninstall 永不触碰）
+
+因 Smart App Control 无法完成（重装后补）：
+  · 安装验收中所有需要启动进程的步骤
+  · 卸载验收
+  · 首次启动进度可见性
+  · 第 2–8 步的全部验证
+
+第 2–8 步（开局对话 / 分级检索 / Skill 层 / 知识库自动补充 /
+记忆生命周期 / 界面重组 / 全量回归）尚未开始。
+规格见 docs/prompts/08-第八轮.md。
+
+---
+
 ## 当前阶段
 
 **第 1 步（共 8 步）：安装程序。**
@@ -101,121 +123,46 @@
 
 ## 下一步
 
-```powershell
-cd C:\Users\user\Desktop\ai-workbench
+本机无法继续，原因见「阻塞」。用户将重装 Windows 以解除阻塞。
 
-# 安装包重建完成后（约 6 分钟），跑验收
-.\.venv\Scripts\python.exe scripts\verify_installer.py --apply
+重装后的恢复顺序：
 
-# 30/30 之后进第 2 步
 ```
-
----
-
-## 阻塞
-
-**Smart App Control（智能应用控制）拦住了开发环境这条路径。**
-
-它按**文件信誉**判定能不能运行，不看路径也不看程序名。实测对照：
-
-| 解释器 | 能不能跑 |
-|---|---|
-| `vendor\runtime\python\python.exe`（随包，新下载的） | ✅ 能跑 |
-| `.venv\Scripts\python.exe` | ❌ 被阻止 |
-| venv 的原件（`.workbuddy-ai\binaries\python\...`） | ❌ 被阻止 |
-
-**同一个 Python：原件被拦、新下载的能跑、复制出来的被拦。**
-事件日志 `Microsoft-Windows-CodeIntegrity/Operational` 里有 36 条阻止记录。
-
-即使随包解释器放行，它的**第三方编译模块**也被拦：
-`ImportError: DLL load failed while importing _pydantic_core: 应用程序控制策略已阻止此文件。`
-
-**准确的说法是：开发环境这条路径断了，不是整个项目都不行。**
-
-### ⚠️ 不要关掉 Smart App Control
-
-**从"开启"切到"关闭"不可逆，关掉之后只能重装 Windows 才能再打开。**
-本轮没有尝试任何绕过（改注册表、改策略、签名）——不装作能修。
-
-### 因 SAC 无法进行的验收（一律 `NOT VERIFIED`，不标 PASS）
-
-| # | 验收项 | 原因 |
-|---|---|---|
-| 1 | 后端全量测试（438 个） | 需 `import pydantic` → 编译模块被拦 |
-| 2 | 安装：启动应用 / 原生窗口 / 无浏览器 / 无 5173 | 需启动进程 |
-| 3 | 安装：首次启动完成数据库初始化 | 同上 |
-| 4 | 安装：注册并登录 | 同上 |
-| 5 | 安装：强杀窗口后四服务退出 | 同上 |
-| 6 | 安装：卸载干净 | `Uninstall.exe` 被拦（WinError 4551） |
-| 7 | 首次启动的进度可见性 | 同上 |
-| 8 | 第 2 步及以后全部（开局对话 / 空账号隔离 / 分级检索 / Skill / 知识补充 / 记忆生命周期 / 界面重组） | 全部需要跑起来 |
-
-**在这台机器上仍能做且已做的**：读改代码、git、NSIS 静态检查、安装包结构自检、
-打源码包。见「已完成」一节。
-
-### 换一台机器怎么补
-
-**给用户的清单在 [`docs/how-to-finish-verification.md`](docs/how-to-finish-verification.md)**，
-里面有：需要什么机器、拷哪两个文件、校验哈希、逐步安装、补验收要跑的命令、
-以及在新机器上怎么建开发环境。**那份是写给用户的，不是给对话看的。**
-
----
-
-## 交接：本次会话结束时，第 1 步的真实状态
-
-### 已完成且已验证
-
-| 项 | 证据 |
-|---|---|
-| payload 优化 | 1,204.9 MB / 25,620 文件 → **439.7 MB / 8,672 文件**；安装包 **92.6 MB** |
-| pgsql 裁剪 | 919.8 MB → 119.7 MB；`scripts/verify_pgsql_trim.py` **13/13 PASS** |
-| 随包 Python | `vendor/runtime/python`（官方 NuGet 3.13.14），四种文档格式实测通过 |
-| 安装包 | `build/installer/AI-Workbench-Setup.exe`，SHA256 `4a9d1d63c48c41c8707f56df5946c5b4532f6e1d2c1c761f1bc41d478965070c` |
-| 数据与程序分离 | 装 `%LOCALAPPDATA%\AI Workbench\`，数据 `%LOCALAPPDATA%\AI Workbench Data\`；`data-dir.txt` 一行 |
-| 路径解析统一 | 四处同序：env → `data-dir.txt` → `.runtime`（见下表） |
-| 后端测试 | **438 个全通过**（在 runtime_root 集中化之后） |
-| 安装验收 1~7 步 | 干净路径安装 8,672 文件 · 快捷方式 · 原生窗口 · API healthy · 无 5173 · 无新增浏览器 · 自建数据目录并 initdb · UI 挂载 · 注册新账号 · **强杀窗口后 4 端口全释放** |
-
-### 四处路径解析（用户要求交叉核对）
-
-| 位置 | 顺序 | 结论 |
-|---|---|---|
-| `backend/app/core/config.py` | env → marker → `.runtime` | ✅ |
-| `desktop/src-tauri/src/lifecycle.rs` | env → marker → `.runtime` | ✅ **本次修复**：原来硬编码 `.runtime` 并无条件 `create_dir_all` |
-| `scripts/lib.ps1` | env → marker → `.runtime` | ✅ |
-| `scripts/start-desktop.bat` | `.runtime` → marker → env（顺序覆盖写法） | ✅ **语义相同**（后写覆盖先写 ⇒ env > marker > 默认），已补零字节 marker 的守卫 |
-
-**`lifecycle.rs` 那个硬编码就是本次的关键缺陷**：它在安装目录里无条件建出
-`.runtime\logs`，于是 `RMDir "$INSTDIR"` 永远失败、卸载删不掉安装目录。
-
-### 未完成
-
-1. **第 8 步（卸载）因策略阻塞未验证** —— 见上面「阻塞」。
-2. 首次启动的**进度可见性**未单独验证（splash 是否真的显示初始化进度与失败原因）。
-3. `data-dir.txt` 在卸载后被删除是**设计如此**（它在卸载器的删除清单里，属于程序文件而非数据）。
-   `verify_installer.py` 只在**卸载前**（第 5 步）断言它存在，所以那不是缺陷。
-
----
-
-## 下一步
-
-```powershell
-# 1. 先解决策略阻塞（见上），然后：
-cd C:\Users\user\Desktop\ai-workbench
-.\vendor\runtime\python\python.exe scripts\verify_installer.py --apply   # 目标 30/30
-
-# 2. 第 2 步：开局对话 + 第二个空账号
-#    规格：docs/prompts/08-第八轮.md 的「能力 A」与第五部分
+1. 克隆 / 恢复仓库，确认 git status 干净
+2. 重建环境（见「环境备忘 · 换机器重建」）
+3. 先跑静态检查：  python scripts\verify_installer_static.py     （应 41/41）
+4. 再补安装验收：  python scripts\verify_installer.py --apply     （目标 30/30）
+5. 验收补齐后，进第 2 步：开局对话 + 空账号数据隔离
 ```
-
-> **一处已解决的误判（记录下来，因为它是一个教训）**：我曾在这一节写过"第八轮提示词在本机找不到"。
-> 那是错的——`Get-ChildItem | Format-Table` 把中文文件名截断了，我**从截断的显示里得出了"文件不存在"的结论**。
-> 用转义码点重新枚举后，文件一直在：`AI-Workbench-第八轮提示词.md`，25,459 B。
-> 已复制为 `docs/prompts/08-第八轮.md`。**又是"用推断代替证据"，这次是"用不完整的输出代替证据"。**
-
----
 
 ## 环境备忘
+
+### 换机器重建（重装 Windows 后照这个来）
+
+```
+1. .venv —— 【不能拷贝】
+   Windows 的 venv 把解释器绝对路径写在 pyvenv.cfg 里，换个机器或换个路径就是坏的。
+   本项目已经因此踩过一次：复制过去的 venv 能用，只是因为原解释器还在那台机器上。
+   重建：python -m venv .venv
+         .\.venv\Scripts\pip install -r backend\requirements.txt
+
+2. 原生运行时 —— 一条命令重新物化：
+   powershell -File scripts\fetch-runtime.ps1
+   重新下载 PostgreSQL / Redis / Qdrant / Python，Python 那一步会顺带装依赖。
+
+3. frontend/dist —— 【不在 git 里】，需要构建：
+   cd frontend && npm install && npm run build
+   没有它，start-desktop.bat:88 会自己尝试 npm run build；那台机器没装 Node.js 就会失败。
+
+4. git —— 本机 git 不在 PATH。重装后先确认：
+   装了 Git for Windows → 直接可用
+   没装 → 用 PortableGit，并把位置告诉 build_delivery_zip.py 的 find_git()
+
+5. 重装后第一件事：确认 Smart App Control 是【关】的。
+   开了它会再拦一次；而它从开到关不可逆，关掉又要再重装一次。
+```
+
+### 本机现状（重装后会变）
 
 - 仓库：`C:\Users\user\Desktop\ai-workbench`，`vendor/` 与 `build/` 都在 `.gitignore` 里
 - 随包解释器：`vendor/runtime/python/python.exe`（322 MB，含全部依赖）
