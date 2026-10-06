@@ -61,6 +61,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     # Fail fast with a clear message if the schema is missing.
     await _bootstrap_schema()
+    await _reconcile_interrupted_runs()
 
     worker_task: asyncio.Task[None] | None = None
     if settings.worker_enabled:
@@ -84,6 +85,60 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         await close_vector_store()
         await dispose_engine()
         logger.info("application_stopped")
+
+
+async def _reconcile_interrupted_runs() -> None:
+    """Close runs that a process restart left open.
+
+    A `BuildRun` is driven by an in-process task and watched by a second one. When
+    the process is replaced — a restart, a crash, a deploy — both die with it, and
+    the row keeps whatever status it had. Nothing ever revisits it, so the run shows
+    as `EXECUTING` on the workbench forever while its plan says every step finished.
+
+    Observed exactly like that: a run whose plan read `6/6 DONE`, whose controller
+    was gone from the registry, whose build row still said `EXECUTING`, and which
+    had registered no deliverable. There is no way to recover the result of a task
+    that no longer exists, so the honest thing is to say so — once, at startup,
+    where it cannot be mistaken for a live run.
+    """
+    from datetime import UTC, datetime
+
+    from sqlalchemy import select
+
+    from app.infrastructure.database import session_scope
+    from app.models.delivery import BuildRun, BuildStatus
+
+    active = [state.value for state in BuildStatus if state.is_active]
+    try:
+        async with session_scope() as session:
+            rows = list(
+                (
+                    await session.execute(
+                        select(BuildRun).where(BuildRun.status.in_(active))
+                    )
+                ).scalars()
+            )
+            for run in rows:
+                run.status = BuildStatus.FAILED.value
+                run.finished_at = datetime.now(UTC)
+                run.error = "服务在运行过程中重启，这次运行的结果无法确认"
+                run.result_summary = (
+                    run.result_summary
+                    or "运行被服务重启打断；已产出的文件仍可在工作区找到，但这次运行不能算完成。"
+                )
+            if rows:
+                await session.commit()
+        if rows:
+            logger.warning(
+                "interrupted_runs_closed",
+                extra={"count": len(rows), "run_ids": [str(r.id) for r in rows[:10]]},
+            )
+    except Exception as exc:
+        # Startup must not fail because housekeeping failed, but it must not be
+        # silent either — an unreconciled run looks exactly like a running one.
+        logger.error(
+            "interrupted_run_reconcile_failed", extra={"error": f"{type(exc).__name__}: {exc}"}
+        )
 
 
 async def _bootstrap_schema() -> None:
