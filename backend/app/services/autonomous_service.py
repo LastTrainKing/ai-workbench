@@ -27,6 +27,7 @@ from app.ai.providers.factory import build_llm_provider
 from app.ai.tools.audit import make_audit_sink
 from app.ai.tools.confirmation import get_broker
 from app.ai.tools.executor import ResourceLimits, ToolExecutor
+from app.ai.tools.permissions import ensure_workspace_layout
 from app.ai.tools.policy_store import build_policy, capability_flags
 from app.ai.tools.registry import build_computer_registry
 from app.ai.tools.unified import UnifiedToolRegistry
@@ -50,7 +51,10 @@ def _build_agent(
 ) -> AutonomousAgent:
     """Assemble an autonomous agent for one run."""
     policy = build_policy()
-    policy.workspace.mkdir(parents=True, exist_ok=True)
+    # The workspace is created with its layout, not just as an empty directory:
+    # the shape is part of the contract, so a run never has to invent a place to
+    # put things and never has to wonder where a previous run put them.
+    ensure_workspace_layout(policy.workspace)
 
     business = __import__("app.ai.agent.tools", fromlist=["get_tool_registry"]).get_tool_registry()
     computer = build_computer_registry(policy, enabled=capability_flags())

@@ -18,8 +18,12 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "backend"))
 
-WORKSPACE = Path(r"C:\Users\user\Desktop\AI Workbench Workspace")
-OUT = WORKSPACE / "demo" / "isolated"
+from app.ai.tools.permissions import default_workspace  # noqa: E402
+
+# The agent's own workspace, resolved the way the application resolves it. It used
+# to be hard-coded to a folder on the desktop — the very default this round removed.
+WORKSPACE = default_workspace()
+OUT = WORKSPACE / ".tmp" / "isolated"
 
 PPTX_SECTIONS = [
     {

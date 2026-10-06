@@ -134,11 +134,26 @@ def _deny(reason: str, **kw: Any) -> PermissionVerdict:
 # Policy
 # --------------------------------------------------------------------------- #
 def default_workspace() -> Path:
-    """The agent's own scratch area, always writable."""
+    """The agent's own scratch area, always writable.
+
+    Resolution order: an explicit environment override, then the configured path,
+    then ``<project>/.runtime/workspace``.
+
+    The old default was ``%USERPROFILE%\\Desktop\\AI Workbench Workspace``, and it
+    was wrong in a way that showed up as a support problem rather than a bug: a
+    product whose whole pitch is "your private workspace" was creating its working
+    directory at the root of the user's desktop, next to their shortcuts. That is
+    the product tidying up by making a mess in someone else's room. The workspace
+    belongs to the product, so it lives inside the product's own directory — and
+    the path stays configurable for anyone who wants it elsewhere.
+    """
     override = os.environ.get("AI_WORKBENCH_AGENT_WORKSPACE")
     if override:
         return Path(override)
-    return Path(os.environ.get("USERPROFILE", str(Path.home()))) / "Desktop" / "AI Workbench Workspace"
+    configured = (getattr(settings, "agent_workspace", "") or "").strip()
+    if configured:
+        return Path(os.path.expandvars(configured))
+    return project_root() / ".runtime" / "workspace"
 
 
 def project_root() -> Path:
@@ -149,6 +164,46 @@ def project_root() -> Path:
     project outside its own allowed paths.
     """
     return Path(__file__).resolve().parents[4]
+
+
+#: The shape of the agent's workspace.
+#:
+#: Stated once, in one place, because the previous arrangement had no shape at all:
+#: the workspace was flat, so a finished deck, a half-written outline, a cloned
+#: project's virtualenv and a stray test artifact all sat at the same level. The
+#: user's private area contained 1,864 files belonging to a Python virtualenv — not
+#: a tidiness problem, but evidence that nothing had decided what the area was for.
+WORKSPACE_DIRS: tuple[str, ...] = ("deliverables", "notes", "sources", ".tmp")
+
+#: Where a file produced *for the user* goes when the caller did not say.
+#:
+#: Deliverables used to land wherever the model happened to point, including the
+#: root of the workspace and — once — the desktop itself. "Which of these files is
+#: the thing I asked for?" should not be a question the user has to answer by
+#: reading filenames.
+DELIVERABLES_DIR = "deliverables"
+
+
+def ensure_workspace_layout(workspace: Path) -> Path:
+    """Create the workspace directories. Idempotent, and safe to call every run."""
+    for name in WORKSPACE_DIRS:
+        (workspace / name).mkdir(parents=True, exist_ok=True)
+    return workspace
+
+
+def default_output_path(name: str) -> str:
+    """Route a bare filename into ``deliverables/``; leave an explicit path alone.
+
+    A caller that wrote ``notes/draft.md`` meant it. A caller that wrote ``a.pptx``
+    was not making a statement about location, so the product makes one.
+    """
+    text = str(name or "").strip()
+    if not text:
+        return text
+    normalised = text.replace("\\", "/")
+    if "/" in normalised or Path(normalised).is_absolute():
+        return text
+    return f"{DELIVERABLES_DIR}/{text}"
 
 
 #: Paths that are never readable by the agent, whatever else is granted.

@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Any
 
 from app.ai.agent.tools import Tool, ToolContext
+from app.ai.tools.permissions import default_output_path
 from app.ai.types import ToolResult, ToolSpec
 from app.core.errors import ValidationError
 from app.core.logging import get_logger
@@ -518,7 +519,9 @@ class DocumentWriteTool(Tool):
         if not isinstance(sections, list) or not sections:
             raise ValidationError("sections 必须是非空数组")
 
-        target = Path(ctx.resolve(str(kwargs.get("path") or f"document.{fmt}")))
+        target = Path(
+            ctx.resolve(default_output_path(str(kwargs.get("path") or f"document.{fmt}")))
+        )
         ctx.require_permission(target, write=True)
         target.parent.mkdir(parents=True, exist_ok=True)
 

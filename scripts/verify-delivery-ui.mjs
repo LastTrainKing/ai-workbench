@@ -103,14 +103,13 @@ async function main() {
     const token = (await login.json())?.data?.access_token
     check('测试取到 API token', Boolean(token))
 
+    // The workspace lives inside the project now, not on the desktop.
     const demoPath = [
-      'C:',
-      'Users',
-      'user',
-      'Desktop',
-      'AI Workbench Workspace',
-      'doc-demo',
-      'demo.pptx',
+      process.cwd(),
+      '.runtime',
+      'workspace',
+      'deliverables',
+      'ui-check.pptx',
     ].join('/')
 
     const attachResponse = await page.request.post(

@@ -108,6 +108,13 @@ scratch/
 *.orig
 *.rej
 
+# --------------------------------------------------------------- archive -----
+# Where the desktop's project litter is filed rather than deleted: old release
+# ZIPs, runtime backups, the pre-convention agent workspace. It is a filing
+# cabinet, not source — hundreds of megabytes of binaries that must not enter
+# history, and that nothing in the build reads.
+archive/
+
 # --------------------------------------------------- assistant workspace data --
 # Local notes/state kept alongside the project; not part of the deliverable.
 .workbuddy-ai/

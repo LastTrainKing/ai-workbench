@@ -110,7 +110,12 @@ def main() -> int:
     print("  两版对比")
     print("=" * 74)
 
-    first_path = Path(r"C:\Users\user\Desktop\AI Workbench Workspace\毕业设计答辩.pptx")
+    first_path = (
+        Path(__file__).resolve().parents[1]
+        / "samples"
+        / "demo-output"
+        / "答辩PPT-第一版-11页.pptx"
+    )
     second_path = Path(second[0]["path"])
 
     if not first_path.is_file():

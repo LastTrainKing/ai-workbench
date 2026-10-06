@@ -67,6 +67,16 @@ class Settings(BaseSettings):
     #: Hosts the agent may never contact, whatever the allow-list says.
     agent_blocked_domains: str = ""
 
+    #: Where the agent's own workspace lives. Empty means the default:
+    #: ``<project>/.runtime/workspace``.
+    #:
+    #: It used to be ``%USERPROFILE%\Desktop\AI Workbench Workspace`` — a personal
+    #: AI workbench that opened its scratch area at the root of the user's desktop,
+    #: which is the product emptying its pockets onto the one screen the user looks
+    #: at all day. It is configurable because a user may legitimately want it
+    #: somewhere else, but the default has to be a place the product owns.
+    agent_workspace: str = ""
+
     #: Resource ceilings. A runaway agent must hit a wall, not the user's patience.
     agent_max_tool_calls: int = 100
     agent_max_runtime_seconds: int = 1800
