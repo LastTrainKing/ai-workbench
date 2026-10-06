@@ -95,11 +95,12 @@ VIAddVersionKey "FileVersion"     "${APP_VERSION}"
   Pop $0
   Pop $1
   ${If} $0 == "7"
-    ; `IfSilent +2 0` skips the message box in silent mode but still aborts. A
-    ; MessageBox is not suppressed by `/S`, so an unguarded one hangs an
-    ; unattended uninstall forever - which is exactly what happened the first time
-    ; this was tested.
-    IfSilent +2 0
+    ; IfSilent jump_if_silent jump_if_not_silent: the first label is taken when
+    ; /S is in effect. This used to read IfSilent +2 0, and +2 counts from the
+    ; next instruction - so it jumped over the Abort as well, and a silent uninstall
+    ; skipped the guard entirely.  falls through to the MessageBox; +2 skips
+    ; the MessageBox and lands on the Abort, so the refusal holds in both modes.
+    IfSilent 0 +2
     MessageBox MB_OK|MB_ICONSTOP "${APP_NAME} 正在运行。$\r$\n$\r$\n请先关闭它，再重新运行安装程序。"
     Abort
   ${EndIf}

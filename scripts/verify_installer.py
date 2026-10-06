@@ -279,8 +279,18 @@ def main() -> int:
         check("8", "uninstaller exists", uninstaller.is_file())
         if uninstaller.is_file():
             subprocess.run([str(uninstaller), "/S"], capture_output=True, check=False)
-            for _ in range(30):
-                if not INSTALL_DIR.exists():
+            # Wait for *everything* the uninstaller removes, not just the directory.
+            #
+            # `/S` returns before the removal has finished, and the NSIS uninstall
+            # section deletes the shortcuts *before* the directory. Waiting only on
+            # the directory made the shortcut assertions race the removal: the check
+            # ran in the gap between "uninstaller returned" and "shortcuts gone", and
+            # reported two failures for an uninstall that had in fact succeeded.
+            # The directory is the last thing to go, so poll on all three conditions.
+            deadline = time.monotonic() + 90
+            while time.monotonic() < deadline:
+                remaining = [p for p in [INSTALL_DIR, *SHORTCUTS] if p.exists()]
+                if not remaining:
                     break
                 time.sleep(2)
             check("8", "install directory removed", not INSTALL_DIR.exists(), str(INSTALL_DIR))
