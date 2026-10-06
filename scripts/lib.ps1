@@ -9,7 +9,30 @@ $ProgressPreference = 'SilentlyContinue'
 # Resolve repository root (scripts/ -> root)
 $Script:RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 
-$Script:RuntimeDir = Join-Path $RepoRoot '.runtime'
+# Where the database, vectors, uploads and logs live.
+#
+# An **installed** copy keeps its data outside the program directory, so that
+# uninstalling the program cannot touch it. The installer writes `data-dir.txt` at the
+# tree root; a development checkout has no marker and falls back to `.runtime`.
+#
+# The same three-step order is implemented in `backend/app/core/config.py`. Two
+# implementations of one decision is one too many, but the launcher runs before Python
+# exists, so it cannot ask the backend. The order is therefore written down in both
+# places and kept identical on purpose.
+$Script:RuntimeDir = $null
+if ($env:AI_WORKBENCH_DATA_DIR) {
+    $Script:RuntimeDir = $env:AI_WORKBENCH_DATA_DIR
+} else {
+    $dataMarker = Join-Path $RepoRoot 'data-dir.txt'
+    if (Test-Path $dataMarker) {
+        $markerValue = (Get-Content -LiteralPath $dataMarker -Raw -ErrorAction SilentlyContinue)
+        if ($markerValue) { $Script:RuntimeDir = $markerValue.Trim() }
+    }
+    if (-not $Script:RuntimeDir) {
+        $Script:RuntimeDir = Join-Path $RepoRoot '.runtime'
+    }
+}
+
 $Script:VendorDir  = Join-Path $RepoRoot 'vendor\runtime'
 
 $Script:PgHome   = Join-Path $VendorDir 'pgsql\pgsql'

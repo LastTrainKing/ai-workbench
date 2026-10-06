@@ -30,7 +30,7 @@ from pathlib import Path
 from typing import Any
 
 from app.ai.tools.permissions import AgentMode, AgentPolicy, PermissionLevel
-from app.core.config import settings
+from app.core.config import runtime_root, settings
 from app.core.logging import get_logger
 
 logger = get_logger(__name__)
@@ -60,9 +60,8 @@ def _store_path() -> Path:
     override = os.environ.get("AI_WORKBENCH_AGENT_POLICY")
     if override:
         return Path(override)
-    from app.ai.tools.permissions import project_root
 
-    return project_root() / ".runtime" / "agent-policy.json"
+    return runtime_root() / "agent-policy.json"
 
 
 def load_overrides() -> dict[str, Any]:

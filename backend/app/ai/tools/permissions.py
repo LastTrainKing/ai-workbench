@@ -33,7 +33,7 @@ from enum import IntEnum, StrEnum
 from pathlib import Path
 from typing import Any
 
-from app.core.config import settings
+from app.core.config import runtime_root, settings
 from app.core.logging import get_logger
 
 logger = get_logger(__name__)
@@ -153,7 +153,7 @@ def default_workspace() -> Path:
     configured = (getattr(settings, "agent_workspace", "") or "").strip()
     if configured:
         return Path(os.path.expandvars(configured))
-    return project_root() / ".runtime" / "workspace"
+    return runtime_root() / "workspace"
 
 
 def project_root() -> Path:

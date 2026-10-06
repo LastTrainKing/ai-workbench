@@ -34,6 +34,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from app.core.config import runtime_root
 from app.core.logging import get_logger
 
 logger = get_logger(__name__)
@@ -73,9 +74,8 @@ def _digest_file(path: Path) -> str:
 
 
 def _snapshot_root() -> Path:
-    from app.ai.tools.permissions import project_root
 
-    return project_root() / ".runtime" / "snapshots"
+    return runtime_root() / "snapshots"
 
 
 @dataclass

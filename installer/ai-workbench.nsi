@@ -144,17 +144,9 @@ Section "Install"
   DetailPrint "正在释放程序文件（约 440 MB，8,600 个文件）..."
   File /r "${PAYLOAD}\*.*"
 
-  ; Bring back the data a previous uninstall set aside, if the user asked for it.
-  ; Done after extraction so `.runtime` lands on top of a complete tree, never the
-  ; other way round.
-  ${If} $R0 == "1"
-    IfFileExists "$LOCALAPPDATA\${DATA_DIR_NAME}\.runtime\*.*" 0 restore_skipped
-      DetailPrint "正在恢复上次保留的数据..."
-      nsExec::ExecToLog 'cmd /c move /Y "$LOCALAPPDATA\${DATA_DIR_NAME}\.runtime" "$INSTDIR\.runtime"'
-      Pop $0
-      RMDir "$LOCALAPPDATA\${DATA_DIR_NAME}"
-    restore_skipped:
-  ${EndIf}
+  ; Nothing to restore: the data lives outside this directory and was never touched by
+  ; a previous uninstall. An earlier design moved it aside on uninstall and moved it
+  ; back here; that move is what failed and lost a database, and it is gone.
 
   ; The environment file is written from the example, never from the developer's
   ; own `.env` - that file holds an API key, and shipping it would put a real
@@ -164,6 +156,23 @@ Section "Install"
       CopyFiles /SILENT "$INSTDIR\.env.example" "$INSTDIR\.env"
       DetailPrint "已生成 .env（不含任何密钥）"
   env_exists:
+
+  ; Point the copy at a data directory **outside** the program directory.
+  ;
+  ; This is the whole reason uninstalling is safe. With the data inside the install
+  ; directory, removing the program means either deleting the database or leaving a
+  ; directory behind - and the first attempt at this moved the data aside with a rename
+  ; that failed and took the database with it. With the data outside, uninstalling is
+  ; two independent decisions and nothing has to be moved.
+  ;
+  ; Both the launcher (`scripts/lib.ps1`) and the backend (`app/core/config.py`) read
+  ; this one line, so they cannot disagree about where the data is.
+  IfFileExists "$INSTDIR\data-dir.txt" marker_exists 0
+    FileOpen $9 "$INSTDIR\data-dir.txt" w
+    FileWrite $9 "$LOCALAPPDATA\${DATA_DIR_NAME}\.runtime"
+    FileClose $9
+    DetailPrint "数据目录：$LOCALAPPDATA\${DATA_DIR_NAME}\.runtime"
+  marker_exists:
 
   ; ------------------------------------------------------------ shortcuts --
   CreateDirectory "$SMPROGRAMS\${APP_NAME}"
@@ -194,44 +203,30 @@ Section "Uninstall"
   !insertmacro StopEverything
 
   ; ------------------------------------------------------------- user data --
-  ; Ask, and default to keeping it.
+  ; The data lives outside the program directory, so removing the program cannot
+  ; touch it. The only question is whether to remove it as well.
   ;
-  ; The database holds the user's documents, their memories and everything the
-  ; agent produced for them. Losing that to an uninstall would be the worst thing
-  ; this installer could do, so the destructive answer is the one the user has to
-  ; choose deliberately.
-  IfFileExists "$INSTDIR\.runtime\*.*" 0 no_data
+  ; Default to keeping it. The database holds the user's documents, their memories and
+  ; everything the agent produced for them; losing that to an uninstall would be the
+  ; worst thing this installer could do, so the destructive answer is the one that has
+  ; to be chosen deliberately.
+  ;
+  ; An earlier design put the data *inside* the install directory and moved it aside
+  ; here. That move failed, and the database went with the install directory. Keeping
+  ; the two apart removes the whole class of problem: there is nothing to move.
+  IfFileExists "$LOCALAPPDATA\${DATA_DIR_NAME}\.runtime\*.*" 0 no_data
     ; In silent mode there is nobody to ask, so the safe answer is taken: keep.
-    ; A MessageBox is not suppressed by `/S`, so an unguarded one makes an
-    ; unattended uninstall hang on a question no one can answer.
+    ; A MessageBox is not suppressed by `/S`, so an unguarded one makes an unattended
+    ; uninstall hang on a question no one can answer.
     IfSilent keep_data 0
     MessageBox MB_YESNO|MB_ICONQUESTION|MB_DEFBUTTON2 \
-      "是否同时删除你的数据？$\r$\n$\r$\n这些数据包括：资料库、记忆、档案、AI 产出物。$\r$\n$\r$\n选择「否」会把它们移动到：$\r$\n$LOCALAPPDATA\${DATA_DIR_NAME}$\r$\n$\r$\n选择「是」将永久删除，无法恢复。" \
+      "是否同时删除你的数据？$\r$\n$\r$\n这些数据包括：资料库、记忆、档案、AI 产出物。$\r$\n$\r$\n它们位于：$\r$\n$LOCALAPPDATA\${DATA_DIR_NAME}$\r$\n$\r$\n选择「否」会保留（默认）。$\r$\n选择「是」将永久删除，无法恢复。" \
       IDNO keep_data
       DetailPrint "用户选择删除数据"
-      RMDir /r "$INSTDIR\.runtime"
+      RMDir /r "$LOCALAPPDATA\${DATA_DIR_NAME}"
       Goto no_data
     keep_data:
-      ; Moved with NSIS's own `Rename`, not `cmd /c move`.
-      ;
-      ; The shell version failed silently: the uninstaller then removed the
-      ; install directory and the user's database went with it. A `nsExec` call
-      ; gives no result unless you go looking for one, and this is the one place
-      ; in the installer where a silent failure destroys something irreplaceable.
-      ; `Rename` sets the error flag, which is checked.
-      DetailPrint "保留数据：移动到 $LOCALAPPDATA\${DATA_DIR_NAME}"
-      CreateDirectory "$LOCALAPPDATA\${DATA_DIR_NAME}"
-      RMDir /r "$LOCALAPPDATA\${DATA_DIR_NAME}\.runtime"
-      ClearErrors
-      Rename "$INSTDIR\.runtime" "$LOCALAPPDATA\${DATA_DIR_NAME}\.runtime"
-      IfErrors 0 move_ok
-        ; Do not proceed to delete anything. Leaving the data where it is and
-        ; saying so is strictly better than reporting success over a lost
-        ; database.
-        MessageBox MB_OK|MB_ICONEXCLAMATION \
-          "无法移动数据目录，已保留在原处：$\r$\n$INSTDIR\.runtime$\r$\n$\r$\n卸载已停止，请关闭所有相关程序后重试。"
-        Abort
-      move_ok:
+      DetailPrint "数据保留在 $LOCALAPPDATA\${DATA_DIR_NAME}"
   no_data:
 
   Delete "$DESKTOP\${APP_NAME}.lnk"
@@ -246,6 +241,7 @@ Section "Uninstall"
   Delete "$INSTDIR\${APP_EXE}"
   Delete "$INSTDIR\.env"
   Delete "$INSTDIR\.env.example"
+  Delete "$INSTDIR\data-dir.txt"
   Delete "$INSTDIR\README.md"
   Delete "$INSTDIR\LICENSE"
   Delete "$INSTDIR\Uninstall.exe"
@@ -263,15 +259,10 @@ SectionEnd
 
 ; ----------------------------------------------------------------- callbacks --
 Function .onInit
-  ; A stale data directory from a previous uninstall: offer to bring it back.
-  ; Decided before the directory page so the choice is made with the path visible,
-  ; and applied after extraction so it lands on top of a complete tree.
-  StrCpy $R0 "0"
-  IfFileExists "$LOCALAPPDATA\${DATA_DIR_NAME}\.runtime\*.*" 0 no_stale
-    IfSilent no_stale 0
-    MessageBox MB_YESNO|MB_ICONQUESTION \
-      "发现上次卸载时保留的数据：$\r$\n$LOCALAPPDATA\${DATA_DIR_NAME}$\r$\n$\r$\n是否恢复到新安装中？" \
-      IDNO no_stale
-      StrCpy $R0 "1"
-  no_stale:
+  ; Nothing to prepare.
+  ;
+  ; An earlier version asked here whether to restore a data directory that a previous
+  ; uninstall had moved aside. That whole mechanism is gone: the data lives outside the
+  ; install directory and a reinstall simply finds it, so there is nothing to ask and
+  ; nothing to move. `data-dir.txt` is rewritten on every install to point at it.
 FunctionEnd

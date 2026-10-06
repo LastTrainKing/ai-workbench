@@ -29,13 +29,13 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from app.core.config import PROJECT_ROOT, settings
+from app.core.config import RUNTIME_ROOT, settings
 from app.core.errors import ValidationError
 from app.core.logging import get_logger, mask_secret
 
 logger = get_logger(__name__)
 
-CONFIG_PATH: Path = PROJECT_ROOT / ".runtime" / "ai-config.json"
+CONFIG_PATH: Path = RUNTIME_ROOT / "ai-config.json"
 
 # Fields the UI is allowed to override.
 OVERRIDABLE = (

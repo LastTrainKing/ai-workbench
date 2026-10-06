@@ -23,6 +23,59 @@ BACKEND_DIR = Path(__file__).resolve().parents[2]
 PROJECT_ROOT = BACKEND_DIR.parent
 
 
+def _resolve_runtime_root() -> Path:
+    """Where the database, vectors, uploads and logs live.
+
+    Resolved once, here, so the launcher and the backend cannot disagree about it.
+
+    An **installed** copy keeps its data outside the program directory. That is not a
+    preference, it is what makes uninstalling safe: if the user's database sits inside
+    the install directory, then removing the program means either deleting the data or
+    leaving a directory behind - and the first attempt at this moved the data aside with
+    a rename that failed, taking the database with it.
+
+    With the data outside, uninstalling is two independent decisions: remove the program
+    (always), remove the data (asked, defaults to no). Nothing has to be moved.
+
+    Resolution order:
+
+    1. ``AI_WORKBENCH_DATA_DIR`` - explicit, wins over everything
+    2. ``<root>/data-dir.txt`` - written by the installer, one line, the path
+    3. ``<root>/.runtime`` - a development checkout
+
+    The marker file rather than an environment variable because it is visible: a user
+    (or a support conversation) can open it and see where their data is.
+    """
+    explicit = os.environ.get("AI_WORKBENCH_DATA_DIR", "").strip()
+    if explicit:
+        return Path(explicit).expanduser()
+
+    marker = PROJECT_ROOT / "data-dir.txt"
+    if marker.is_file():
+        try:
+            text = marker.read_text(encoding="utf-8").strip()
+        except OSError:
+            text = ""
+        if text:
+            return Path(text).expanduser()
+
+    return PROJECT_ROOT / ".runtime"
+
+
+RUNTIME_ROOT = _resolve_runtime_root()
+
+
+def runtime_root() -> Path:
+    """The one answer to "where does this copy keep its data?".
+
+    Every module that used to compute `PROJECT_ROOT / ".runtime"` for itself now asks
+    here. Five copies of one decision is five chances for an installed copy to write
+    half its state into the program directory and half outside it - which is exactly
+    the failure this exists to prevent.
+    """
+    return RUNTIME_ROOT
+
+
 class Settings(BaseSettings):
     """Typed, validated application settings."""
 
@@ -169,7 +222,7 @@ class Settings(BaseSettings):
     rerank_enabled: bool = True
 
     # ------------------------------------------------------------ storage ---
-    storage_dir: str = str(PROJECT_ROOT / ".runtime" / "storage")
+    storage_dir: str = str(RUNTIME_ROOT / "storage")
     max_upload_mb: int = 25
     allowed_extensions: str = ".md,.markdown,.txt,.pdf"
 
