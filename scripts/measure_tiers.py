@@ -111,23 +111,36 @@ async def main() -> int:
 
     # A question the documents can answer, built from a chunk that is actually indexed —
     # so "hits" is a fact about the data rather than a hope about the query.
+    #
+    # Prose only, and CJK: the first version took the first chunk by id, which was a
+    # mermaid diagram, and asked a question made of mermaid syntax. The tier correctly
+    # declined it — a question nobody would ask — and the run then reported "knowledge
+    # hit" against a case that never exercised the tier.
     knowledge_question = ""
     async with factory() as session:
         from app.models.knowledge import DocumentChunk
 
-        chunk = (
-            await session.execute(
-                select(DocumentChunk)
-                .where(DocumentChunk.content.isnot(None))
-                .order_by(DocumentChunk.id)
-                .limit(1)
-            )
-        ).scalars().first()
-        if chunk and chunk.content:
-            knowledge_question = chunk.content[:14]
-            print(f"  知识库命中用的问题（取自已入库分块 {chunk.id} 的前 14 字）：{knowledge_question!r}")
-        else:
-            print("  (库里没有已索引的分块，知识库命中这一档测不了)")
+        candidates = list(
+            (
+                await session.execute(
+                    select(DocumentChunk)
+                    .where(DocumentChunk.content.isnot(None))
+                    .order_by(DocumentChunk.id)
+                    .limit(200)
+                )
+            ).scalars()
+        )
+        for chunk in candidates:
+            text = (chunk.content or "").strip()
+            if len(text) < 60 or "```" in text:
+                continue
+            if not any("\u4e00" <= c <= "\u9fff" for c in text):
+                continue
+            knowledge_question = "".join(text.split())[:18]
+            print(f"  知识库命中用的问题（取自已入库分块 {chunk.id} 的前 18 字）：{knowledge_question!r}")
+            break
+        if not knowledge_question:
+            print("  (库里没有可用的散文分块，知识库命中这一档测不了)")
 
     if knowledge_question:
         questions.append(("知识库命中", knowledge_question))

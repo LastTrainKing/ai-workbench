@@ -49,19 +49,46 @@ TIERS = ("memory", "skill", "knowledge", "general")
 #: questions it exists to answer.
 MIN_TERM_OVERLAP = 1
 
-#: A retrieved chunk counts as an answer only if the question's own terms appear in it.
+#: How relevant a retrieved chunk has to be before the library counts as having answered.
 #:
-#: Measured, not assumed. The first version of this tier used the retriever's fused score
-#: with a 0.35 threshold, and "explain quantum entanglement and relativity" — a question
-#: the library has nothing about — scored **0.70**, comfortably above it. The hybrid score
-#: is normalised across the returned set, so its top value is high whether or not anything
-#: matched; a threshold on it cannot separate "covered" from "five loosely related
-#: passages".
+#: **Measured, not guessed** — twice, which is the point. Both earlier attempts picked a
+#: number first and looked at the data afterwards:
 #:
-#: Term overlap can. It is the same signal tier 1 uses, for the same reason: it answers
-#: the question actually being asked — *does this material contain what was asked about* —
-#: rather than *which of these chunks is least unlike the question*.
-MIN_KNOWLEDGE_OVERLAP = 2
+#: 1. the fused score with a 0.35 cut-off. An unrelated question scored **0.70**, because
+#:    the hybrid score is normalised *within the returned set* — its top value is high
+#:    whether or not anything matched. Measured overlap between the two populations: 0.337.
+#: 2. term overlap, the signal tier 1 uses. The same unrelated question matched on
+#:    ordinary-word bigrams ("关系", "一下"). Overlap: 1.000.
+#:
+#: So `scripts/sample_relevance.py` was written to sample first: eight questions the
+#: library genuinely covers, six plausible questions it does not, every candidate signal
+#: printed for both groups. Results:
+#:
+#:     fused_top     covered 0.294-0.977   unrelated 0.099-0.632   overlap 0.337
+#:     vector_top    covered 0.117-0.557   unrelated 0.097-0.124   overlap 0.007
+#:     keyword_top   covered 0.000-14.565  unrelated 0.000-3.246   overlap 3.246
+#:     overlap_top   covered 1.000-16.000  unrelated 0.000-2.000   overlap 1.000
+#:     combined      covered 1.763-7.283   unrelated 0.647-1.623   overlap -0.140  <- separable
+#:
+#: The absolute vector similarity nearly separates on its own (0.007 of overlap against
+#: the fused score's 0.337) because it is not normalised against the returned set — which
+#: is exactly the property the two failures lacked. It fails in one place: the offline
+#: hash embedding places an exact phrase poorly, so a question quoting the library can
+#: score low. The sparse score fails in the opposite place: zero for a paraphrase sharing
+#: no surface form. Taking the larger of the two covers both, and the populations separate.
+#:
+#: The margin is narrow (0.14) on fourteen samples, and that is stated rather than
+#: smoothed over: this is a cut-off that works, not one with room to spare. It should be
+#: re-measured if the corpus or the embedding changes — `sample_relevance.py` prints the
+#: two distributions and the gap, so the check is one command.
+RELEVANCE_FLOOR = 1.693
+
+#: Divisors that put the two absolute signals on a comparable scale before comparing
+#: them. They come from the same measurement: a vector score around 0.15 and a sparse
+#: score around 2.0 are both "clearly about this", and dividing by those makes the larger
+#: of the two readable as a single number.
+VECTOR_SCALE = 0.15
+KEYWORD_SCALE = 2.0
 
 
 @dataclass
@@ -233,36 +260,41 @@ async def _try_knowledge(
     if not chunks:
         return TierAttempt("knowledge", False, elapsed, "知识库里没有相关资料"), []
 
-    # Keep only the chunks that actually contain what was asked about.
-    wanted = _terms(question)
-    relevant = [c for c in chunks if len(wanted & _terms(c.content)) >= MIN_KNOWLEDGE_OVERLAP]
+    def relevance(chunk: Any) -> float:
+        """The combined absolute signal, on one scale. See RELEVANCE_FLOOR."""
+        vector = getattr(chunk, "vector_score", 0.0) or 0.0
+        keyword = getattr(chunk, "keyword_score", 0.0) or 0.0
+        return max(vector / VECTOR_SCALE, keyword / KEYWORD_SCALE)
 
-    if not relevant:
-        best = max(len(wanted & _terms(c.content)) for c in chunks)
-        # The retriever found *something*, because it always does. Below the overlap gate
-        # that is not an answer, and saying so is the difference between "your library
-        # covers this" and "here are five loosely related passages" — the second of which
-        # the user would read as sourced when it is not.
+    scored = sorted(((relevance(c), c) for c in chunks), key=lambda pair: pair[0], reverse=True)
+    top_score, _ = scored[0]
+
+    if top_score < RELEVANCE_FLOOR:
+        # The retriever found *something*, because it always does. Below the floor that is
+        # not an answer, and saying so is the difference between "your library covers
+        # this" and "here are five loosely related passages" — the second of which the
+        # user would read as sourced when it is not.
         return (
             TierAttempt(
                 "knowledge",
                 False,
                 elapsed,
-                f"检索到 {len(chunks)} 段但都不含问题里的词（最高重合 {best}，需要 {MIN_KNOWLEDGE_OVERLAP}）——视为没有相关资料",
+                f"检索到 {len(chunks)} 段，最相关的一段相关度 {top_score:.2f}，低于 {RELEVANCE_FLOOR} —— 视为没有相关资料",
             ),
             [],
         )
 
-    top = max(c.score for c in relevant)
-    return TierAttempt("knowledge", True, elapsed, f"命中 {len(relevant)} 段（最高分 {top:.2f}）"), [
+    kept = [c for score, c in scored if score >= RELEVANCE_FLOOR]
+    return TierAttempt("knowledge", True, elapsed, f"命中 {len(kept)} 段（相关度 {top_score:.2f}）"), [
         {
             "chunk_id": c.chunk_id,
             "document_id": c.document_id,
             "document_title": c.document_title,
             "text": c.content,
             "score": c.score,
+            "relevance": round(relevance(c), 3),
         }
-        for c in relevant
+        for c in kept
     ]
 
 
