@@ -32,7 +32,14 @@ PAYLOAD = ROOT / "build" / "installer-payload"
 DIST = ROOT / "build" / "installer"
 
 #: Copied into the payload, in this order.
+#:
+#: The shell goes in as `AI Workbench.exe` at the tree root, which is where
+#: `find_project_root()`'s ancestor search expects to find it: the exe's own parent
+#: directory is the first candidate, so a root-level exe resolves the root. Placing it
+#: anywhere else would require `AI_WORKBENCH_HOME` to be set by the shortcut, and an
+#: environment variable in a shortcut is a fragile thing to depend on.
 INCLUDE: list[tuple[str, str]] = [
+    ("desktop/src-tauri/target/release/ai-workbench-desktop.exe", "AI Workbench.exe"),
     ("backend", "backend"),
     ("frontend/dist", "frontend/dist"),
     ("scripts", "scripts"),
@@ -56,6 +63,11 @@ EXCLUDE_DIRS = {
     "test",
 }
 EXCLUDE_SUFFIXES = {".pyc", ".pyo", ".log", ".tmp"}
+#: The download caches. `fetch-runtime.ps1` leaves the archives it expanded next to
+#: what it expanded — `vendor/runtime/python-nuget.zip` and friends. Shipping them
+#: would put the same bytes in the installer twice, once compressed inside the other.
+#: Nothing at runtime reads a `.zip`.
+EXCLUDE_SUFFIXES |= {".zip"}
 #: The developer's database, uploads and logs. Shipping this would hand a stranger a
 #: copy of someone else's work, and the first launch would try to use it.
 EXCLUDE_ANY = {".runtime", ".venv", "archive", "samples", "docs"}
