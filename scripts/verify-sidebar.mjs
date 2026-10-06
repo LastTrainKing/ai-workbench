@@ -6,7 +6,7 @@
  * still resolves - what changed is where they sit and what they are called.
  */
 
-import { chromium } from 'playwright-core'
+import { chromium } from './_playwright.mjs'
 
 const BASE = process.env.AWB_BASE ?? 'http://127.0.0.1:8000'
 const results = []

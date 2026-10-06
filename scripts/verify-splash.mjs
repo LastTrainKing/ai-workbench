@@ -13,7 +13,7 @@
  *   node scripts/verify-splash.mjs
  */
 
-import { chromium } from 'playwright-core'
+import { chromium } from './_playwright.mjs'
 import { mkdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'

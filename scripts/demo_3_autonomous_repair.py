@@ -277,7 +277,12 @@ async def main() -> int:
         "测试文件未被改动（sha256 一致）": tests_before == tests_after,
         "源码确实被改了（sha256 不一致）": source_before != source_after,
         "git diff 只改了 src/": all(
-            row.split()[-1].startswith("src/") for row in diff_stat.strip().splitlines() if "|" in row
+            # The path is the *first* token of a `--stat` row (`src/stats.py | 9 +++-`),
+            # not the last — reading the last token compared the change bars against
+            # "src/", which fails on a correct diff.
+            row.split()[0].startswith("src/")
+            for row in diff_stat.strip().splitlines()
+            if "|" in row
         ),
         "原失败用例现在通过": after["exit_code"] == 0 and not after["failed_tests"],
     }

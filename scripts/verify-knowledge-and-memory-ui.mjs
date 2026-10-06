@@ -12,7 +12,7 @@
  *   node scripts/verify-knowledge-and-memory-ui.mjs
  */
 
-import { chromium } from 'playwright-core'
+import { chromium } from './_playwright.mjs'
 import { mkdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -65,8 +65,10 @@ async function main() {
     // rather than the first one — "the data is there but this page happens not to
     // show it" is exactly the failure this test exists to catch.
     const tasks = []
-    for (let page = 1; page <= 5; page += 1) {
-      const listed = await api(page, `/tasks?page_size=100&page=${page}`)
+    // `pageNumber`, not `page`: the loop variable shadowed the browser page, so every
+    // API call was made on the number 1.
+    for (let pageNumber = 1; pageNumber <= 5; pageNumber += 1) {
+      const listed = await api(page, `/tasks?page_size=100&page=${pageNumber}`)
       const items = listed?.data?.items ?? []
       if (items.length === 0) break
       tasks.push(...items)

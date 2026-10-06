@@ -12,7 +12,7 @@
  *   node scripts/verify-delivery-ui.mjs
  */
 
-import { chromium } from 'playwright-core'
+import { chromium } from './_playwright.mjs'
 import { mkdirSync, existsSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
