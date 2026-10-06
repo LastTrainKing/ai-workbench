@@ -221,7 +221,7 @@ step.status = StepStatus.RUNNING
 | 工作区卫生干净 + `deliverables/` 约定建立 | **PASS** | `.runtime/workspace/{deliverables,notes,sources,.tmp}` |
 | 任务页关联知识浏览器实测 | **PASS** | `node scripts/verify-knowledge-and-memory-ui.mjs` 5/5 |
 | 记忆页来源追溯可跳转 | **PASS** | 同上 8/8（13/13 总计） |
-| 冷启动 10 步 + 真实数字 | 见 §7 | `.runtime/cold-start.json` |
+| 冷启动 10 步 + 真实数字 | **PASS** | `.runtime/cold-start.txt` / `cold-start.json`，**36/36** |
 | 桌面断言 12/12 | **PASS** | `verify_shortcut.py` 7/7 + 桌面整理后 13 个顶层条目全部是用户的 |
 | 后端 / 前端 / typecheck / lint / build | **PASS** | 后端 411+ 测试、前端 114 测试、`tsc` 干净、`eslint` 0 error、`vite build` 通过 |
 | 旧路由全部可用 | **PASS** | 后端全量测试通过 |
@@ -236,22 +236,25 @@ step.status = StepStatus.RUNNING
 
 （由 `scripts/verify_cold_start.py --apply` 实测，记录见 `.runtime/cold-start.json`）
 
-由 `scripts/verify_cold_start.py --apply` 实测（记录：`.runtime/cold-start.json`），**34/38 通过**。
+**第一次跑：34/38。** 那 4 项"失败"是同一件事——第 5 步故意跑了一次 BuildRun，所以
+`build_runs_total` 和 `deliverables_total` 本来就应该变。拿它们做"不变"断言，测的是测试自己，
+不是产品。
+
+**脚本修好之后重跑：36/36 全通过**（`.runtime/cold-start.txt`，退出码 0）。
 
 | 步骤 | 断言 | 实测 | 结果 |
 |---|---|---|---|
 | 1 全停 | PG / Redis / Qdrant / API / 5173 端口全关 | 5 个端口全部关闭，`ai-workbench-desktop.exe` 已退出 | **PASS** |
 | 2 双击快捷方式 | 快捷方式存在 | `AI Workbench.lnk` | **PASS** |
 | 3 冷启动断言 | 原生窗口 / health 200 / 无新 msedge / 5173 未监听 | 桌面进程存在；`/health` 200；msedge 进程集合未增加；**5173 未监听** | **PASS** |
-| 4 首页数据 | 真实数字 | 项目 **2** / 资料 **7** / 任务 **252** / 记忆 **7** / BuildRun **37** / 产出物 **16**（已验证 16、被退回 6、待验收 10） | **PASS** |
+| 4 首页数据 | 真实数字 | 项目 **2** / 资料 **7** / 任务 **252** / 记忆 **7** / BuildRun **38** / 产出物 **17**（已验证 17、被退回 6、待验收 11） | **PASS** |
 | 5 跑一次 BuildRun | 到达终态 | **COMPLETED** | **PASS** |
 | 6 关窗 | PG/Redis/Qdrant/API 全退、无残留 | 4 个端口全部关闭；无 desktop 残留；无 API 残留（8000 端口 0 监听） | **PASS** |
 | 7 再次双击 | 正常启动 | 已启动 | **PASS** |
-| 8 数据仍在 | 逐项对比第 4 步 | 项目 2→2、资料 7→7、任务 252→252、记忆 7→7、被退回 6→6 **全部不变** | **PASS** |
+| 8 数据仍在 | 第 5 步不可能改的数据逐项不变 | 项目 2→2、资料 7→7、任务 252→252、记忆 7→7、被退回 6→6、已验收 0→0 **全部不变** | **PASS** |
+| 8 持久化的正证 | 第 5 步创建的运行与产出物在重启后仍在 | 运行 **38→39**、产出物 **17→18** | **PASS** |
 | 9 无重复进程 | 无重复、无端口冲突 | desktop 进程 1 个、API 监听 1 个、5173 仍未监听 | **PASS** |
 | 10 桌面断言 | 12 条不许回退 | 快捷方式独立断言 **7 PASS / 0 FAIL** | **PASS** |
-
-**4 项"未通过"的如实说明**：它们是同一件事——第 5 步故意跑了一次 BuildRun，所以 `build_runs_total`（37→38）和 `deliverables_total`（16→17）本来就应该变。拿它们做"不变"断言，测的是测试自己，不是产品。脚本已改为只比较第 5 步不可能影响的数据，并把这两项换成更强的断言：**第 5 步创建的运行和产出物在重启后仍然存在**。
 
 **一处如实记录**：交付构建后 `git status` 并非 clean——Agent 在项目根目录留下了 `chart1.png … chart4.png`、`chart_data.json`。已归档到 `archive/agent-assets/`，之后 `git status` 干净。这与 §8 限制 3 是同一类问题。
 
@@ -341,8 +344,12 @@ Tauri 构建    npm run tauri build → 编译 1m50s → EXE + NSIS 安装包
 ## 附二：一处必须单独说明的发现——Agent 提交进了正式仓库
 
 `git log` 里有一条提交 `bac3a7d docs(report): fill in the delivery section with the built artefacts`
-（17:07），作者是仓库配置的 `AI Workbench / dev@aiworkbench.dev`。**这条提交不是人写的，是一次
+（17:07），作者是 `AI Workbench <noreply@local>`。**这条提交不是本会话写的，是一次
 Agent 运行自己做的**：它读到了交付产物、给 `REPORT.md` 补了一段交付物章节，并用 `git_commit` 提交了。
+
+**作者身份本身就是证据**：本仓库配置的提交身份是 `AI Workbench <dev@aiworkbench.dev>`，本轮其余
+每一条提交（`ff8efba`、`ab97b27` …）都用这个身份；`bac3a7d` 用的是 `<noreply@local>`，是 Agent
+运行自己的身份。两条不同的身份，指向两个不同的提交者。
 
 这正是任务书里明令禁止的那件事：
 
