@@ -553,6 +553,16 @@ class AutonomousAgent:
                     "由工具在写入时核对页数。"
                     f"{chart_rule}"
                 )
+            elif self.deliverable_kind == "docx":
+                # A document whose headings are all at the same level has no
+                # hierarchy, whatever it looks like. `level` is a field of the
+                # section, so the plan has to say what the levels are — otherwise
+                # every chapter comes out as H1 and the result is a flat list.
+                system += (
+                    " 调用 document_write 时，sections 的每一项都要给出 level："
+                    "章用 level=1，节用 level=2，必要时小节用 level=3；"
+                    "整篇至少要出现两个不同的 level，形成真正的层级。"
+                )
 
         messages = [
             ChatMessage(role="system", content=system),
