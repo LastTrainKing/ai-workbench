@@ -111,6 +111,16 @@ def _write_docx(path: Path, sections: list[dict[str, Any]], style: dict[str, Any
                 if paragraph.strip():
                     document.add_paragraph(paragraph.strip())
 
+    if not document.paragraphs:
+        # A writer that recognises none of the caller's keys produces a valid but
+        # empty document and reports success. That is how a 36 KB blank .docx gets
+        # delivered as a finished report — the file opens, so nothing looks wrong
+        # until someone reads it.
+        raise ValidationError(
+            "没有写入任何内容：sections 里没有可识别的字段。"
+            "docx 使用 heading / content（或 text）。"
+        )
+
     document.save(path)
     return {"paragraphs": len(document.paragraphs), "sections": len(sections)}
 
