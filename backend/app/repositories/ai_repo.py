@@ -37,7 +37,26 @@ class AIRunRepository(BaseRepository[AIRun]):
         return stmt.order_by(AIRun.created_at.desc())
 
     async def by_run_id(self, run_id: str, owner_id: uuid.UUID) -> AIRun | None:
-        return await self.get_or_none(AIRun.run_id == run_id, AIRun.owner_id == owner_id)
+        """Find a run by its display id **or** by its primary key.
+
+        Two ids identify an AI run and they are different values: `run_id` is the
+        display string (`run_ab12…`) and `id` is the UUID. Callers hold one or the
+        other — `BuildRun.ai_run_id` is the UUID, the URL of a run page is the display
+        id — and an endpoint that only accepts one of them returns "not found" for a
+        run that plainly exists.
+
+        That is exactly what happened: a completed build run exposed its UUID, the
+        report endpoint resolved by display id, and reading the run's own report came
+        back `404 AI run not found`. An id is an id; both are accepted.
+        """
+        run = await self.get_or_none(AIRun.run_id == run_id, AIRun.owner_id == owner_id)
+        if run is not None:
+            return run
+        try:
+            as_uuid = uuid.UUID(str(run_id))
+        except (ValueError, AttributeError, TypeError):
+            return None
+        return await self.get_or_none(AIRun.id == as_uuid, AIRun.owner_id == owner_id)
 
     async def tool_calls(self, ai_run_id: uuid.UUID) -> list[ToolCall]:
         return await self.list_of(
