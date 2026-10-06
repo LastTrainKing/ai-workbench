@@ -114,25 +114,35 @@ cd C:\Users\user\Desktop\ai-workbench
 
 ## 阻塞
 
-**一条硬阻塞：Windows 应用程序控制策略开始阻止本项目的可执行文件。**
+**硬阻塞：Windows 应用程序控制策略已阻止本项目的原生模块，不只是 exe。**
 
 ```
-.venv\Scripts\python.exe                    -> 应用程序控制策略已阻止此文件
-C:\...\AI Workbench InstallTest\Uninstall.exe -> OSError [WinError 4551] 应用程序控制策略已阻止此文件
-vendor\runtime\python\python.exe            -> 仍然可用
+.venv\Scripts\python.exe                                  -> 应用程序控制策略已阻止此文件
+AI Workbench InstallTest\Uninstall.exe                     -> WinError 4551 已阻止
+vendor\runtime\python\Lib\site-packages\pydantic_core\_pydantic_core.pyd
+                                                          -> ImportError: DLL load failed
+                                                             while importing _pydantic_core:
+                                                             应用程序控制策略已阻止此文件
 ```
 
-发生时间：在一次系统资源耗尽之后（`bash: fork: Resource temporarily unavailable`，
-当时进程数一度异常）。**不是代码问题，是环境策略**——但结果是：
+发生时间：一次系统资源耗尽之后（`bash: fork: Resource temporarily unavailable`）。
+**不是代码问题**，是 Windows 侧的策略。
 
-- 开发 venv 跑不了 → 后端测试暂时无法运行
-- 安装出来的 `Uninstall.exe` 跑不了 → 安装验收的第 8 步（卸载）无法完成
+**后果（全部已实测，不是推测）**：
 
-**可以绕过的部分**：`vendor\runtime\python\python.exe` 仍可用，所以
-`scripts/verify_installer.py` 能用它跑（该脚本只用标准库）。第 1~7 步就是这么跑完的。
+| 想做的事 | 能不能做 | 实测 |
+|---|---|---|
+| 跑后端 | ❌ | `import pydantic` → `_pydantic_core.pyd` 被阻止 |
+| 跑后端测试 | ❌ | 同上，连导入都过不去 |
+| 跑安装验收第 8 步（卸载） | ❌ | `Uninstall.exe` 被阻止 |
+| 用随包 Python 绕过 | ❌ | 随包解释器能启动，但它的依赖 DLL 也被阻止 |
+| 读写文件 / git | ✅ | git 2.55（PortableGit），工作区干净 |
 
-**需要人处理的部分**：解除对本项目目录的应用程序控制策略（或换一台机器），
-否则安装验收的第 8 步无法验证。
+**需要人处理**：解除对本项目目录（以及 `%LOCALAPPDATA%\AI Workbench*`）的应用程序控制策略，
+或换一台机器。在此之前，第 1 步的最后一步（卸载验收）与第 2 步之后的所有验证都无法进行。
+
+**已尝试并确认无效的绕过**：改用随包解释器（`vendor/runtime/python`）——它自己被放行，
+但它的 `.pyd` 被阻止，所以同样跑不起来。
 
 ---
 
