@@ -144,3 +144,58 @@ that grows from chatter fills with things the user never said.
 - [WORKSPACE.md](WORKSPACE.md) — where the agent works and what shape that area has
 - [docs/architecture.md](docs/architecture.md) — the long version, with the bugs that
   produced each decision
+
+---
+
+## The third layer: Skill
+
+Memory is what is true about you. Knowledge is what you have. **Skill is how you work.**
+
+It is the layer that makes the product useful on day one rather than after months of use:
+instead of waiting for behaviour to accumulate, **it goes out and finds the ways of working
+that fit, verifies them, and installs them.** A new user gets a library on their first
+day; a product that waits gets an empty one.
+
+The six stages, and where each lives:
+
+```
+FIND      ai/skills/discovery.py   profile + need -> search terms -> GitHub
+ASSESS    ai/skills/discovery.py   drop what cannot work, rank, and say why
+VERIFY    ai/skills/scanner.py     seven rules, all of them blocking
+ADOPT     ai/skills/registry.py    *only on confirmation*, then bind params
+USE       ai/skills/registry.py    match, render the personalised body
+REVIEW    ai/skills/registry.py    count uses, take a rating, retire
+```
+
+### Where personalisation actually happens
+
+**An imported skill is general, not personal.** What makes it yours is the binding step:
+
+```
+general skeleton   <- imported from a public source
+    + your profile      ({{audience}} = 院学生会指导老师)
+    + your preferences  ({{tone}} = 正式、简洁)
+    = the work done the way you would do it
+```
+
+Which is why importing is not enough on its own: **the memory and knowledge layers have to
+be genuinely connected**, or what comes in stays a general template.
+
+### Two gates, deliberately not split
+
+`adopt()` holds both — the user's confirmation and the security scan — because splitting
+them across call sites is how one of them eventually gets skipped. **Confirming is not
+enough either**: a hostile skill is refused even when the user says yes, because they are
+saying yes to something they have not read.
+
+### The library must not become a dumping ground
+
+`installed_skills` records what makes a skill *reviewable* rather than merely stored:
+source and commit, the scan result verbatim, use counts, and a rating that is `None` until
+a person judges it — **which is a different thing from "it was fine"**.
+
+`record_use()` counts failures too. Counting only successes would make `use_count` a
+quality score rather than a usage count, and the review stage needs to see the skill that
+gets tried and fails — that is the one to retire.
+
+- [SKILL.md](SKILL.md) — the format, the six stages, the security rules, the injection point
