@@ -1,0 +1,576 @@
+第九章 系统测试
+
+本章描述系统的测试策略、测试用例组织、真实运行结果，以及测试过程中发现并修复的
+真实缺陷。所有数字与结果均来自实际运行，不作估算或美化。
+
+9.1 测试策略
+
+系统采用三层测试策略，逐层提高真实性：
+
+| 层次 | 工具 | 位置 | 外部依赖 |
+|---|---|---|---|
+| 单元测试 | pytest | `backend/tests/unit/` | 无（纯函数） |
+| 集成/接口测试 | pytest + httpx ASGI | `backend/tests/` | PostgreSQL、Redis（语义路径需 Qdrant） |
+| 端到端测试 | 自研冒烟测试 | `scripts/smoke_test.py` | 运行中的后端 + 三件基础设施 |
+| 前端测试 | Vitest + Testing Library | `frontend/` | **独立工作流**，不在本后端测试套件内 |
+
+本项目没有独立的浏览器驱动 E2E 套件。冒烟测试驱动**真实 HTTP 接口**完成端到端
+验证，它就是本项目的 E2E 层。这一选择与"本地优先、后端先行"的项目阶段相符：前端
+作为独立工作流在 `frontend/` 下并行开发，其后端契约由本套件与 `docs/api.md` 共同
+保证。
+
+9.2 单元测试
+
+单元测试位于 `backend/tests/unit/`，均为纯函数、快速执行，无需外部服务。
+
+9.2.1 `test_chunker.py`
+
+覆盖标题感知分块器：
+
+- 分块被产出且非空；
+- 索引连续（`[c.index for c in chunks] == range(len(chunks))`）；
+- 标题面包屑被前缀到嵌入文本（如 `"JVM 学习笔记 > 垃圾回收"` 存在且分块以其开头）；
+- 大小目标被遵守（单个超长句允许文档化的 2 倍松弛）；
+- 重叠保证相邻分块内容连续；
+- 空输入与纯空白输入返回 `[]`；
+- 非正 `chunk_size` 抛 `ValueError`；
+- `overlap` 被钳制为块大小的一半；
+- `token_estimate` 被填充且 `char_count == len(content)`；
+- 单个超长句被硬切分。
+
+9.2.2 `test_heuristic_provider.py`
+
+覆盖确定性离线引擎：
+
+- 分词处理 CJK 与拉丁文并去除停用词；
+- 句子切分处理中英文标点；
+- 嵌入确定性、L2 归一化、固定 384 维；
+- 相关文本的余弦相似度高于无关文本；
+- 空嵌入输入不返回向量；
+- `task` 标记路由到正确算法（`document_summary`、`knowledge_extraction`、
+  `task_planner`、`rag_answer`）；
+- 知识抽取返回全部预期键并找到真实 TODO 行；
+- 规划器产出的阶段任务含标题、完成标准、整数工时与合法优先级；
+- RAG 答案仅使用给定上下文，无上下文时诚实作答；
+- 用量被上报且 `total == prompt + completion`；
+- 智能体策略以 `knowledge_search` 起始、按工具序列推进、工具用尽后终止；
+- `supports_tool_calling` 为真。
+
+9.2.3 `test_retry.py`
+
+覆盖有界重试助手：
+
+- 无重试即成功；
+- 重试后成功（断言尝试次数）；
+- 达到 `max_attempts` 后放弃；
+- 不可重试错误快速失败（仅一次尝试）；
+- 退避指数增长且有上限（1, 2, 4, 8，上限 10）；
+- `max_elapsed` 约束总时间；
+- `on_retry` 回调收到尝试序号；
+- 取消不被重试；
+- `chunked()` 均匀切分并拒绝 size ≤ 0。
+
+9.2.4 `test_security_and_files.py`
+
+覆盖安全助手、文件存储与解析器：
+
+- bcrypt 每次哈希加盐且可验证；损坏哈希安全失败；超长密码被截断而非崩溃；
+- JWT 往返；非法与过期令牌抛 `AuthenticationError`（`token_expired`）；
+- 文件名净化阻断路径穿越、反斜杠、绝对路径、NUL 字节与盘符冒号，保留扩展名，
+  处理 Windows 保留名；
+- 扩展名白名单接受 `.md/.markdown/.txt/.pdf`，拒绝 `.exe/.sh/.zip/.php` 及无扩展名；
+- Content-Type 不一致被拒；`application/octet-stream` 与缺失 Content-Type 被接受；
+- 存储根包含校验：内部路径通过、外部路径拒绝；`delete_file` 拒绝删除根外文件；
+- Markdown 与文本解析器提取标题与标题层级；文本解析器回退 `gb18030`；
+- 空文件、不支持扩展名、损坏 PDF、无可提取文本的 PDF 抛
+  `DocumentParseError` / `UnsupportedMediaTypeError`；
+- 真实样例 PDF 解析出 3 页且包含 "CAP Theorem"；
+- 空白归一化正确折叠；
+- 语言检测返回 `zh` / `en` / `unknown`；
+- 超过上限的流式上传抛 `PayloadTooLargeError` 且不留半成品文件；空上传抛
+  `StorageError`。
+
+9.3 端到端冒烟测试
+
+9.3.1 定位与运行
+
+`scripts/smoke_test.py` 驱动**真实 HTTP 接口**，验证整条产品链路：
+上传 → 解析 → 分块 → 嵌入 → 检索 → 回答 → 规划 → 智能体 → 轨迹，并覆盖失败路径。
+
+```powershell
+.venv\Scripts\python.exe scripts\smoke_test.py --base-url http://127.0.0.1:8000
+```
+
+退出码 0 表示全部通过，2 表示后端不可达。
+
+9.3.2 结构
+
+测试组织为 **16 个编号分组**。完整一轮执行 **75 个断言**（`report.check`）。
+静态调用点少于 75，因为若干断言位于循环内（4 次上传、4 次摄取检查、3 种检索
+模式），另有少量断言是条件性的（注册回退、知识库 ID 存在、样例存在），在顺利
+路径上不执行。通过时计数显示 `75/75 checks passed`。
+
+| 分组 | 主题 | 代表性断言 |
+|---|---|---|
+| [1] | 健康与依赖 | `GET /health`；PostgreSQL、Redis、Qdrant 可达；打印在用的 AI 提供商 |
+| [2] | 认证 | 登录/注册；获取访问令牌；`GET /auth/me`；未认证请求被拒（401）；错误密码被拒（401） |
+| [3] | 项目与知识库 | 创建项目；创建知识库；重名知识库被拒（409） |
+| [4] | 文档上传输入 | 上传 4 个样例；重复上传被检出；不支持类型被拒（415）；超限上传被拒（413） |
+| [5] | 后台摄取流水线 | 每份文档达到 `COMPLETED`，`chunks > 0` 且 `embedded == chunks` |
+| [6] | 检索 | 关键词/语义/混合三种模式均返回命中；混合检索暴露两个分数组件；相同检索第二次命中缓存 |
+| [7] | RAG | `POST /chat/rag`；答案非空；返回引用；每条引用指向真实分块；记录 `run_id`；未知知识库被拒（404） |
+| [8] | AI 任务规划 | `POST /planner/plan`；计划含阶段；每个任务有完成标准；任务被持久化；任务树分层 |
+| [9] | 工具调用智能体 | `POST /agents/run`；至少执行一个工具；产出最终答复；创建真实实体；工具目录暴露（≥ 6） |
+| [10] | AI 文档分析 | `POST /documents/{id}/analyze`；产出摘要；笔记被持久化 |
+| [11] | AI 执行轨迹 | `GET /ai-runs`；运行携带提示词版本与 Token 用量；轨迹暴露检索元数据、引用来源与提示词名/版本；指标聚合 |
+| [12] | 提示词版本化 | 列出模板（≥ 8）；详情含版本；创建新版本（201）；重置为内置（200） |
+| [13] | 仪表盘、图谱与统计 | 任务统计；知识数字来自数据库；AI 统计；动态流；提供商状态；图谱节点/边；图谱连接知识与任务 |
+| [14] | 错误处理 | 缺失资源 404；非法 UUID 422；空任务标题 422；非法枚举 422 |
+| [15] | 任务工作流 | 创建依赖；完成被阻塞任务被拒（409）；循环依赖被拒（409）；依赖满足后任务可完成；知识关联到任务 |
+| [16] | 级联清理 | 删除知识库；删除后知识库不存在；文档随知识库级联删除 |
+
+9.3.3 测试夹具
+
+冒烟测试上传 `samples/` 下的四个文件：
+
+| 文件 | 类型 |
+|---|---|
+| `java-backend-notes.md` | Markdown（9 个标题） |
+| `rag-notes.md` | Markdown（8 个标题） |
+| `software-engineering-checklist.txt` | 纯文本 |
+| `distributed-systems.pdf` | PDF（3 页） |
+
+9.3.4 测试环境与配置
+
+冒烟测试运行于开发机上的真实环境，关键配置如下：
+
+| 项 | 取值 |
+|---|---|
+| 操作系统 | Windows 11（本项目仅在 Windows 验证） |
+| Python | 3.13.14 |
+| 基础设施 | PostgreSQL 16.4 / Redis / Qdrant 1.12.4，均由 `infra-start.ps1` 以本地进程启动 |
+| AI 提供商 | `offline`（未配置 `AI_API_KEY`） |
+| 嵌入提供商 | `offline`（`heuristic-hash-ngram-v1`，384 维） |
+| 后台 worker | 随应用内嵌启动（`WORKER_ENABLED=true`） |
+| 缓存 | 启用（Redis） |
+| 测试入口 | `.venv\Scripts\python.exe scripts\smoke_test.py --base-url http://127.0.0.1:8000` |
+
+集成测试（pytest）使用独立配置：环境变量在导入 `app` **之前**设置，强制
+`AI_PROVIDER=offline`、`EMBEDDING_PROVIDER=offline`、`WORKER_ENABLED=false`、
+`CACHE_ENABLED=true`、`APP_ENV=test`，并连接独立数据库 `aiworkbench_test` 与
+Redis DB 1，从而与开发数据完全隔离。
+
+9.3.5 断言的组织方式
+
+75 个断言并非平铺，而是按业务链路分层组织：
+
+- **基础设施层**：健康与依赖可达性（分组 [1]）；
+- **身份与工作区层**：认证、项目、知识库（分组 [2][3]）；
+- **知识层**：文档上传、摄取流水线、检索（分组 [4][5][6]）；
+- **AI 层**：RAG、规划器、智能体、文档分析、执行轨迹、提示词版本（分组 [7]–[12]）；
+- **聚合与展示层**：仪表盘、图谱、统计（分组 [13]）；
+- **健壮性层**：错误处理、任务工作流、级联清理（分组 [14]–[16]）。
+
+这种组织方式使失败定位直接——某一分组的失败通常指向该层或其下游的问题。
+
+9.4 真实缺陷清单
+
+测试与验证过程中发现并修复了以下真实缺陷。每一条都给出表现、根因与修复。
+
+| 编号 | 缺陷 | 表现 | 根因 | 修复 |
+|---|---|---|---|---|
+| **D1** | 事件循环饥饿 | 当所有 worker 槽位都忙时，进程（含同进程 API）**完全冻结** | `Worker.start()` 主循环在 `_fill_slots()` 返回 0（队列空**或**槽位全忙）时直接再次循环，未 `await` 任何可让出控制权的操作，事件循环无法运行任务协程 | 在无可认领任务时始终异步等待停止事件或轮询间隔（`await asyncio.wait_for(self._stop.wait(), timeout=worker_poll_interval)`），源码中留有明确注释 |
+| **D2** | 重复索引名 | 全新克隆启动时 `create_all` **失败**，启动中断 | 两个表定义了同名索引，违反命名唯一性 | 修正索引命名，遵循确定性命名约定 |
+| **D3** | `extra={"message": ...}` 触发 KeyError | 本应返回 **409** 的冲突被误转为 **500** | 日志调用使用了与 `LogRecord` 保留属性冲突的键 `message`，触发 `KeyError` | 改用非保留键名，日志调用不再污染记录属性 |
+| **D4** | 通用仓储类型混淆 | 通用查询返回**错误实体类型** | 通用助手使用 `self.model` 搭配"另一张表的条件"，构造出错误实体类型的查询（如 `ProjectRepository.model` 配 `KnowledgeBase` 条件） | 新增显式接收模型的助手 `list_of` / `get_one_of` / `count_of`，调用方必须显式传入目标模型 |
+| **D5** | 写工具静默失败 | 智能体写工具**静默返回 `ok:false`**，智能体误以为成功 | 服务模块合并后，智能体工具仍引用旧导入路径 | 修正导入路径；确立"工具失败必须可见"原则，失败写入 `tool_calls` 并反映在最终答复 |
+| **D6** | 服务端 `updated_at` 过期 | 异步序列化时抛 **`MissingGreenlet`** | 服务端生成的 `updated_at` 在 flush 后处于过期状态，Pydantic 序列化触发惰性加载，在 asyncpg 下失败 | 声明式基类开启 `eager_defaults = True`，通过 `RETURNING` 在同一条语句取回服务端生成列 |
+
+其中 **D1 最为严重**：它会导致进程冻结，且因为 worker 默认与应用同进程运行，
+API 也会一并失去响应。该缺陷的修复在 `worker/runner.py` 中留有显式注释，说明
+"为什么必须让出"。
+
+9.5 实测验证结果（2026-10-03）
+
+冒烟测试在开发机上针对运行中的后端执行，结果如下：
+
+| 项目 | 结果 |
+|---|---|
+| 断言通过 | **75/75** |
+| PostgreSQL | **16.4** 可达 |
+| Redis | 可达 |
+| Qdrant | **1.12.4** 可达 |
+| 文档摄取分块数 | 8 / 7 / 1 / 3（共 **19** 个分块） |
+| 嵌入成功率 | **100%**（每个分块均嵌入） |
+| 在用的 AI 提供商 | **离线引擎**（`heuristic-extractive-v1`）——未配置云端 Key |
+| 测试日期 | 2026-10-03 |
+
+因为使用的是离线引擎，答案、计划与抽取内容均为**抽取式且确定性**的；这正是
+`AI_API_KEY` 为空时的预期行为，并在 `GET /health/deps` 与每条 `ai_runs` 记录中
+如实标注。
+
+对结果的说明：这些数字是**功能正确性**的验证，而非性能基准。75/75 表明整条
+产品链路在真实基础设施上可端到端工作，但不代表系统在高并发下的表现。
+
+9.5.1 结果分析
+
+从验证结果可以得出以下判断：
+
+1. **链路完整**：从文档上传到 RAG 回答、规划、智能体、轨迹查看，整条闭环的每个
+   环节都有断言覆盖并全部通过，说明各层接口对接正确。
+2. **知识化真实发生**：19 个分块 100% 嵌入成功，说明分块器、嵌入器与向量库之间的
+   数据流正确，且 `embedded == chunks` 的一致性被断言保证。
+3. **降级路径真实生效**：在未配置云端密钥的情况下，全部 AI 能力仍然可用，证明
+   离线引擎是真实实现而非占位桩；同时 `degraded` 状态被如实标注，符合设计预期。
+4. **失败路径被覆盖**：409/413/415/422/404/401 等错误路径均有断言，说明系统对
+   非法输入的处理符合契约。
+5. **数据一致性被验证**：分组 [16] 的级联清理断言确认删除知识库后文档随之消失，
+   验证了数据库级联与服务层副作用的正确配合。
+
+同时必须指出，**该结果不能推断性能**：测试为单用户顺序执行，未测量吞吐与并发；
+也未对检索质量作量化评估。这些局限在 9.6 节与第十章如实列出。
+
+9.6 未覆盖的内容
+
+为避免夸大测试范围，以下内容**未被测试**：
+
+- **前端测试不在本套件内**：前端是独立工作流（`frontend/`，Vitest + Testing
+  Library），其测试不由本后端套件运行。
+- **无负载/性能测试**：未做吞吐、并发或内存基准。延迟在运行期按请求与按 AI 运行
+  计量，但不存在负载画像。
+- **无安全扫描**：未做 SAST/DAST、依赖漏洞扫描或渗透测试。
+- **无交叉编码器重排评估**：未对标注集计算 recall@k、MRR、nDCG 等检索质量指标；
+  检索质量仅以"返回命中""分数组件存在"断言。
+- **无 OCR 路径**：扫描版 PDF 超出范围并会显式失败；因为没有功能，所以没有测试。
+- **云端提供商未在自动化中测试**：套件强制使用离线引擎，OpenAI 兼容与 Ollama
+  提供商没有自动化测试，仅在具备 Key/守护进程时人工验证过。
+- **无迁移测试**：`backend/alembic/versions/` 为空，故无升级/降级路径测试。
+- **无多 worker 压力测试**：`FOR UPDATE SKIP LOCKED` 认领由单进程内嵌 worker
+  验证，未由多个并发 worker 进程验证。
+- **无混沌/故障注入测试**：降级路径（Redis 宕机、Qdrant 宕机）已实现并记录日志，
+  但未自动化测试。
+- **仅 Windows 验证**：脚本与原生运行时仅在 Windows 上验证，Linux/macOS 未测试，
+  未使用 Docker。
+
+9.7 复现测试的命令
+
+```powershell
+1. 启动基础设施
+powershell -ExecutionPolicy Bypass -File scripts\infra-start.ps1
+
+2. 单元测试（纯函数无需外部服务）
+cd backend
+..\.venv\Scripts\python.exe -m pytest tests/unit -q
+
+3. 完整测试套件（需 PostgreSQL + Redis；语义路径需 Qdrant）
+..\.venv\Scripts\python.exe -m pytest -q
+
+4. 启动应用并运行端到端冒烟测试
+cd ..
+powershell -ExecutionPolicy Bypass -File scripts\dev.ps1 start
+.venv\Scripts\python.exe scripts\smoke_test.py
+```
+
+代码质量检查（配置于 `backend/pyproject.toml`）：`ruff check`、`ruff format --check`
+与 `mypy app`。Ruff 选择 `E, W, F, I, B, UP, C4, SIM, RUF`；mypy 聚焦 AI/领域层，
+排除 `app.repositories.*`，因为 SQLAlchemy 的异步类型在缺少插件时噪音较大。
+
+9.8 本章小结
+
+本章给出系统的测试全貌：三层测试策略、四个单元测试文件的覆盖点、16 组 75 断言
+的端到端冒烟测试结构；在真实基础设施上的实测结果为 **75/75 通过**，PostgreSQL
+16.4、Redis、Qdrant 1.12.4 均可达，19 个分块 100% 嵌入成功，使用确定性离线引擎。
+测试过程中发现并修复了六类真实缺陷，其中事件循环饥饿（D1）最为严重。本章同时
+如实列出未被测试的内容，避免对测试覆盖度作出夸大陈述。
+
+
+第八章 系统实现
+
+本章描述系统的具体实现：开发与运行环境、应用启动流程、关键中间件、文档摄取、
+检索、智能体与后台执行器的落地方式，以及实现过程中发现并修复的真实缺陷。所有
+数字与类名均取自实际代码库，代码规模统计为对源码的实测结果。
+
+8.1 代码规模统计
+
+| 范围 | 文件数 | 行数 |
+|---|---|---|
+| 后端应用 `backend/app/` | 77 个 `.py` | 13973 |
+| 脚本 `scripts/` | 5 个 `.py` | 716 |
+| 测试 `backend/tests/` | 14 个 `.py` | 2618 |
+| 环境变量样例 `.env.example` | 1 | 52 个配置键 |
+
+后端按 `core / domain / models / repositories / services / ai / infrastructure /
+api / worker` 九个包组织。测试包含 4 个单元测试文件与集成测试。
+
+8.2 运行环境
+
+| 组件 | 版本 | 获取方式 |
+|---|---|---|
+| Python | 3.13.14 | 系统安装 |
+| FastAPI | 0.142.2 | `pip` |
+| SQLAlchemy | 2.0.54 | `pip` |
+| qdrant-client | 1.19.1 | `pip` |
+| redis (Python 客户端) | 5.3.1 | `pip` |
+| pydantic | 2.13.5 | `pip` |
+| alembic | 1.20.0 | `pip` |
+| pypdf | 5.9.0 | `pip` |
+| PostgreSQL | 16.4 | `vendor/runtime/` 本地二进制 |
+| Redis | 5.0.14.1 | `vendor/runtime/` 本地二进制 |
+| Qdrant | 1.12.4 | `vendor/runtime/` 本地二进制 |
+
+8.2.1 关于不使用 Docker 的说明
+
+本项目**在本机刻意不使用 Docker**。原因有二：一是开发环境未安装 Docker Desktop，
+二是 Docker Hub 在该网络环境下不可达。取而代之的是把 PostgreSQL、Redis、Qdrant
+的可执行文件作为**原生 Windows 二进制**下载到 `vendor/runtime/`，由
+`scripts/infra-start.ps1` 启动。
+
+仓库中**同时提供**了 `docker-compose.yml`（postgres / redis / qdrant / api /
+frontend，另含可选的 worker profile）与三个 Dockerfile，供具备 Docker 的环境使用；
+但该路径**未在本机构建或启动**，文件顶部与 `FINAL_CHECKLIST.md` 均已明确标注。
+这是环境约束下的工程决策，不是遗漏。
+
+运行时的下载由 `scripts/fetch-runtime.ps1` 完成，公共逻辑在 `scripts/lib.ps1`。
+Qdrant 以独立进程监听端口，Redis 与 PostgreSQL 同样以本地进程运行。
+
+8.3 应用启动流程
+
+`backend/app/main.py` 采用 FastAPI 应用工厂模式，核心是 `lifespan` 异步上下文：
+
+```mermaid
+flowchart TD
+    A[configure_logging] --> B[settings.ensure_dirs]
+    B --> C[_bootstrap_schema]
+    C --> D{worker_enabled?}
+    D -->|是| E[启动内嵌 Worker 任务]
+    D -->|否| F[跳过]
+    E --> G[yield 提供服务]
+    F --> G
+    G --> H[收到关闭信号]
+    H --> I[request_stop + 等待 worker 结束]
+    I --> J[close_vector_store]
+    J --> K[dispose_engine]
+```
+
+8.3.1 模式自举 `_bootstrap_schema()`
+
+启动时检查数据库现有表名，对缺失的表执行 `Base.metadata.create_all`（幂等），
+随后在 `session_scope()` 中：`ensure_seeded(session)` 播种九个内置提示词模板，
+若用户数为零则创建演示账号。该函数捕获异常并记录日志后重新抛出，实现**快速失败**
+——模式缺失时启动即报错，而不是运行到一半才崩溃。
+
+8.3.2 内嵌 worker 生命周期
+
+当 `settings.worker_enabled` 为真时，应用在同一事件循环内以
+`asyncio.create_task` 启动 `Worker`。关闭时调用 `worker.request_stop()`，并以
+`asyncio.wait_for(worker_task, timeout=20)` 等待其优雅退出；超时则取消任务并记录
+`worker_shutdown_timeout`。这保证了在途任务有机会完成、资源被释放。
+
+8.4 中间件与可观测性实现
+
+`create_app()` 注册了 CORS、GZip 与一个自定义 HTTP 中间件：
+
+- **CORS**：`allow_origins=settings.cors_origin_list`（白名单），`allow_credentials=True`，
+  暴露 `X-Request-ID` 与 `X-Process-Time-Ms` 响应头。
+- **GZip**：`minimum_size=1024`，对大响应体压缩。
+- **可观测性中间件**：读取或生成 `X-Request-ID`，写入上下文变量
+  `request_id_var`，用 `time.perf_counter()` 计时；成功时在响应头回写
+  `X-Request-ID` 与 `X-Process-Time-Ms`，并按状态码选择日志级别
+  （`>= 400` 用 `warning`）记录一行结构化日志；异常时记录 `request_failed`
+  后重新抛出。
+
+根路由 `/` 返回应用名、版本、文档地址与 API 前缀，便于快速自检。
+
+8.5 统一错误处理实现
+
+`app/core/errors.py` 定义领域异常族，`register_exception_handlers(app)` 把它们
+注册为全局处理器，转换为统一 JSON 结构。领域异常携带 `code`、`message` 与可选
+`details`；HTTP 状态码由异常类型映射。这样服务层只抛领域异常，接口层无需重复
+`try/except`，前端也能依赖稳定的错误码（`ai_error`、`document_parse_error` 等）。
+
+8.6 文档摄取实现
+
+摄取由 `DocumentService` 入队、`worker/runner.py` 的 `_handle_ingest` 执行。实现
+要点：
+
+1. **上传校验**：扩展名白名单 + MIME 一致性检查 + 流式大小限制。
+2. **安全写盘**：文件名替换为 UUID（保留扩展名），写入前校验路径位于存储根内。
+3. **去重**：计算 SHA-256，在同一知识库内查重（唯一约束
+   `uq_documents_kb_content_hash`）。
+4. **解析**：PDF 用 `pypdf` 提取文本，Markdown/TXT 直接读取；解析失败抛
+   `DocumentParseError`。
+5. **分块**：调用 `chunker`（标题感知 + 句边界 + 重叠 + 面包屑前缀），写入
+   `document_chunks`。
+6. **嵌入**：`EmbeddingService` 批量调用 `EmbeddingProvider`，回填
+   `embedding_status` 与 `vector_id`。
+7. **索引**：`VectorStore.upsert` 写入 Qdrant，集合载荷索引在
+   `ensure_collection` 中按 `KEYWORD` 创建。
+8. **完成**：文档置 `READY`、`progress=100`，写 `activity_events`。
+
+进度通过 `_process` 内的 `progress(percent, stage)` 回调持续更新，前端可轮询
+`GET /documents/{id}` 获取。
+
+8.7 检索实现
+
+检索由 `SearchService.search` 委托 `RagPipeline`。实现遵循第 7.5 节的十阶段管线，
+其中两处工程细节值得说明：
+
+- **稀疏腿**：先用 `ILIKE` 从 PostgreSQL 取得候选分块（利用 `content` 列），再在
+  进程内用 BM25 公式（`k1=1.5`，`b=0.75`）打分。选择"数据库取候选 + 进程内打分"
+  而非数据库内置全文检索，是为了在 Windows 环境下避免额外扩展依赖。
+- **融合**：对稠密与稀疏分数先做最小—最大归一化，再按
+  `alpha=HYBRID_ALPHA`（默认 0.6）加权，最后叠加词法重排分
+  （`0.65 * fused + 0.35 * lexical`）。
+
+检索结果进入上下文组装阶段，在 Token 预算内拼装；生成后由引用抽取把答案中的
+引用映射为 `ai_run_sources` 记录。
+
+8.8 智能体实现
+
+`AgentService.run` 构造 `AgentExecutor` 并执行有界循环。实现要点：
+
+- 系统提示词由 `prompts` 注册表按名解析（`agent_system`），并注入**实时**工具目录、
+  目标、上下文与 `max_steps`。
+- 每步调用 `LLMProvider.chat`，若返回工具调用则经 `Tool.run` 校验参数后执行，
+  记录一条 `tool_calls`；否则视为最终答复。
+- `ToolContext.consume_write()` 限制写操作次数（每次运行 40 次），超出抛
+  `ToolExecutionError`。
+- 重复调用保护：对调用签名哈希，重复出现则记录一条 `SKIPPED` 调用，原因
+  `duplicate call`。
+- 步数上限 `steps_allowed = max(1, min(max_steps or DEFAULT_MAX_STEPS, 16))`，
+  默认 8、硬上限 16。
+
+8.9 后台执行器实现与事件循环饥饿修复
+
+8.9.1 认领
+
+`JobRepository.claim_next(WORKER_ID)` 使用
+`SELECT ... FOR UPDATE SKIP LOCKED`，条件为 `status='QUEUED' AND scheduled_at <= now()`，
+按 `priority` 升序。`SKIP LOCKED` 使多 worker 并发认领互不阻塞。
+
+8.9.2 主循环与缺陷 D1
+
+`Worker.start()` 的主循环结构如下（源码片段）：
+
+```python
+while not self._stop.is_set():
+    claimed = await self._fill_slots()
+    if self._stop.is_set():
+        break
+    if claimed:
+        # Yield once so the freshly created job tasks actually start.
+        await asyncio.sleep(0)
+        continue
+
+    # IMPORTANT — event-loop starvation guard.
+    # _fill_slots returns 0 both when the queue is empty *and*
+    # when every slot is busy. If we simply looped again here the
+    # coroutine would never await anything, the event loop would
+    # never get a chance to run the job tasks, and the whole process
+    # (including the API when the worker runs in-process) would
+    # freeze. Always yielding for the poll interval fixes that.
+    with contextlib.suppress(asyncio.TimeoutError):
+        await asyncio.wait_for(self._stop.wait(), timeout=settings.worker_poll_interval)
+```
+
+修复前的缺陷是：当所有 worker 槽位都忙时，`_fill_slots()` 返回 0 且没有可等待的
+操作，主循环空转不让出控制权，导致事件循环饥饿、进程（含同进程 API）冻结。
+修复方式是**在无可认领任务时始终进行异步等待**（等待停止事件或轮询间隔）。这是
+本项目最严重的缺陷，在第 9 章列为 D1。
+
+8.9.3 可靠消费
+
+- `_recover_stale()` 在启动时把超时仍处 `RUNNING` 的任务重新入队
+  （`requeue_stale(worker_stale_job_seconds)`）。
+- 每个任务在 `asyncio.timeout(worker_job_timeout_seconds)` 内执行，超时按失败处理。
+- 失败按指数退避重排，达到 `max_attempts` 后置 `FAILED`。
+
+8.10 缓存实现
+
+`app/core/cache.py` 封装 Redis（`aioredis`）：
+
+| 函数 | 作用 |
+|---|---|
+| `get_redis` / `close_redis` / `ping` | 连接管理与健康探测 |
+| `make_key(namespace, *parts)` | 生成命名空间化键 |
+| `cache_get` / `cache_set` / `cache_delete` | 基础读写删 |
+| `cache_delete_prefix` | 前缀删除 |
+| `cache_incr` | 计数 |
+| `acquire_lock` / `release_lock` | 轻量分布式锁 |
+| `namespace_version` / `bump_namespace` | 命名空间版本失效 |
+| `cache_stats` | 统计 |
+
+**降级策略**：Redis 不可用时 `_note_degraded` 记录降级状态并直接穿透到数据源，
+请求不失败。**失效策略**：以命名空间版本号为键前缀，写操作递增版本使旧键自然
+过期，避免逐键扫描删除。冒烟测试第 6 组验证了"相同检索第二次命中缓存"
+（`cached` 为真）。
+
+8.11 向量库实现
+
+`app/infrastructure/vector_store.py` 的 `VectorStore` 封装 Qdrant 异步客户端：
+
+- `ensure_collection(dimension)`：不存在则创建集合，距离度量取自
+  `settings.qdrant_distance`，并为 `knowledge_base_id`、`document_id`、`owner_id`
+  创建 `KEYWORD` 载荷索引；
+- `upsert` / `delete_points` / `delete_by_document` / `delete_by_knowledge_base`；
+- `search`：按载荷过滤的近邻查询；
+- `count`：可按知识库统计；
+- `ping`：健康探测。
+
+8.12 实现过程中修复的真实缺陷
+
+实现与验证阶段发现并修复了若干真实缺陷（完整表见第 9.4 节）。此处先概述其类型，
+以说明实现质量：
+
+| 编号 | 缺陷类型 | 影响 |
+|---|---|---|
+| D1 | 事件循环饥饿（worker 主循环不让出） | 进程冻结（最严重） |
+| D2 | 重复索引名 | `create_all` 失败，启动中断 |
+| D3 | `extra={"message": ...}` 触发 KeyError | 409 被误转为 500 |
+| D4 | 通用仓储用 `self.model` 配他表条件 | 返回错误实体类型 |
+| D5 | 服务合并后工具引用旧导入路径 | 写工具静默 `ok:false` |
+| D6 | 服务端 `updated_at` 过期 | 异步序列化 `MissingGreenlet` |
+
+这些缺陷都被修复并纳入验证。第 9 章给出每一条的现象、根因与修复方式。
+
+8.13 命令行与脚本实现
+
+`app/cli.py` 提供应用管理命令（如启动服务、运行 worker）。`scripts/` 下的脚本：
+
+| 脚本 | 作用 |
+|---|---|
+| `infra-start.ps1` | 启动本地 PostgreSQL / Redis / Qdrant 进程 |
+| `fetch-runtime.ps1` | 下载原生运行时二进制到 `vendor/runtime/` |
+| `lib.ps1` | 脚本公共函数 |
+| `dev.ps1` | 开发辅助（创建虚拟环境、安装依赖、启动） |
+| `smoke_test.py` | 端到端冒烟测试（第 9 章详述） |
+
+8.14 尚未实现的部分（如实说明）
+
+为避免夸大，以下内容在本仓库中**尚未具备或尚未完成**：
+
+1. **容器化路径未验证**：`docker-compose.yml` 与三个 Dockerfile 均已提供，
+   但开发机没有 Docker 且镜像仓库不可达，因此**未构建、未启动**。
+   `FINAL_CHECKLIST.md` 中对应两项记为 N/A。
+2. **未接入云端大模型**：开发环境没有配置 API Key，全部 AI 功能验证走的是
+   确定性离线引擎。OpenAI 兼容与 Ollama 两条 provider 路径代码完整、
+   可通过配置切换，但**未对真实厂商端点运行过**，因此本文不给出任何
+   托管模型的输出质量结论。
+3. **无 OCR**：扫描版 PDF（无文本层）会以明确错误信息失败，而不是产出空文档。
+4. **重排为词面重排**：未内置交叉编码器模型，因为它需要下载数百 MB 权重，
+   与"本地优先、开箱即用"的定位冲突。
+5. **无流式输出**：AI 回答整体返回，未做 token 级 SSE 推送。
+6. **无 CI 流水线**：全部测试为手工执行。
+7. **无速率限制、令牌轮换、审计日志与上传病毒扫描**。
+
+以上均在第 10 章"不足与后续工作"中列出。
+
+8.15 本章小结
+
+本章说明了系统在真实环境下的实现：以原生 Windows 二进制替代 Docker 承载基础设施；
+以应用工厂与 `lifespan` 管理启动、模式自举与内嵌 worker 生命周期；以自定义中间件
+实现请求级可观测性；以统一的领域异常与处理器保证错误一致；文档摄取、混合检索、
+工具调用智能体与数据库驱动执行器各有清晰实现路径。实现过程中发现并修复了包括
+事件循环饥饿在内的六类真实缺陷，体现了"验证驱动"的工程方法。前端作为独立工作流
+在 `frontend/` 下并行开发，若干工程化配套（迁移版本化、容器化、一键启动）尚未落地，
+已如实说明。
