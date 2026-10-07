@@ -3,8 +3,10 @@
 ;
 ;  Built with NSIS directly rather than through Tauri's bundler.
 ;
-;  Reason: the payload is 8,669 files / 440 MB, and what this installer has to do
-;  is not what a bundler does. It must refuse to install over a running copy,
+;  Reason: the payload is thousands of files and well over 400 MB (the exact count
+;  changes on every build, so it is measured rather than stated here - see
+;  build/installer-report.json), and what this installer has to do is not what a
+;  bundler does. It must refuse to install over a running copy,
 ;  create shortcuts that point at the exe, register an uninstaller that stops
 ;  four child processes before deleting anything, and - the part that decides the
 ;  design - ask the user whether to keep their data. A generated NSIS script can
