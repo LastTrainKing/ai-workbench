@@ -239,6 +239,53 @@ export const STATUS_LABELS: Record<BuildStatus, string> = {
   LIMIT_REACHED: '已达上限',
 }
 
+export type RunTone = 'doing' | 'done' | 'trouble' | 'waiting'
+
+/**
+ * The run's state as one sentence a person would say.
+ *
+ * The conversation shows this instead of the status code. `PARTIAL` and
+ * `WAITING_USER` are precise words for the record and meaningless words on a
+ * screen — the user's complaint about the old interface was exactly that: a row of
+ * coloured pills that had to be decoded before anything could be understood.
+ *
+ * `STATUS_LABELS` is kept because the record pages (the run list, the workbench
+ * header) are for looking into the system, and there the precise word is right.
+ */
+export function runSentence(run: BuildRun): { text: string; tone: RunTone } {
+  switch (run.status) {
+    case 'DRAFT':
+    case 'READY':
+      return { text: '还没开始 —— 打开它点一下「开始」', tone: 'waiting' }
+    case 'PLANNING':
+      return { text: '正在想怎么做…', tone: 'doing' }
+    case 'EXECUTING':
+      return {
+        text: run.steps_total > 0 ? `正在做 —— ${run.steps_done}/${run.steps_total} 步` : '正在做…',
+        tone: 'doing',
+      }
+    case 'VERIFYING':
+      return { text: '正在检查它做出来的东西', tone: 'doing' }
+    case 'WAITING_USER':
+      return { text: '做完了，但它没能自己确认结果 —— 需要你看一眼', tone: 'waiting' }
+    case 'COMPLETED':
+      return {
+        text: run.deliverable_count > 0 ? `做好了 —— ${run.deliverable_count} 份文件` : '做好了',
+        tone: 'done',
+      }
+    case 'PARTIAL':
+      return { text: '东西做出来了，但这次运行没有走完', tone: 'trouble' }
+    case 'FAILED':
+      return { text: run.error ? `没做成：${run.error}` : '没做成 —— 原因已记录在上面', tone: 'trouble' }
+    case 'CANCELLED':
+      return { text: '已取消', tone: 'waiting' }
+    case 'LIMIT_REACHED':
+      return { text: '做到一半就达到资源上限了', tone: 'trouble' }
+    default:
+      return { text: run.status, tone: 'waiting' }
+  }
+}
+
 /** Tone for the status pill. Terminal states are visually distinct on purpose. */
 export const STATUS_TONES: Record<BuildStatus, string> = {
   DRAFT: 'neutral',

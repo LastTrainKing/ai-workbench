@@ -52,26 +52,23 @@ describe('saveBlob', () => {
     const revokeObjectURL = vi.fn()
     vi.stubGlobal('URL', { ...URL, createObjectURL, revokeObjectURL })
 
-    let clicked: HTMLAnchorElement | null = null
-    const realClick = HTMLAnchorElement.prototype.click
-    HTMLAnchorElement.prototype.click = function () {
-      clicked = this
-    }
+    // The anchor is read off the spy's `instances` rather than captured from
+    // `this` inside the stub: the element is detached from the DOM immediately
+    // after the click, so querying for it afterwards would find nothing.
+    const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
 
-    try {
-      saveBlob(new Blob(['x']), 'Java基础教程.pptx')
+    saveBlob(new Blob(['x']), 'Java基础教程.pptx')
 
-      expect(createObjectURL).toHaveBeenCalledOnce()
-      expect(clicked).not.toBeNull()
-      // The name the user sees. Not the blob URL, not the id.
-      expect(clicked!.download).toBe('Java基础教程.pptx')
-      expect(clicked!.href).toBe('blob:test')
-      // Cleaned up: an anchor left behind is a leak that shows up as a stray node
-      // in every later test that counts them.
-      expect(document.body.querySelectorAll('a')).toHaveLength(0)
-    } finally {
-      HTMLAnchorElement.prototype.click = realClick
-    }
+    expect(createObjectURL).toHaveBeenCalledOnce()
+    expect(clickSpy).toHaveBeenCalledOnce()
+
+    const anchor = clickSpy.mock.instances[0] as unknown as HTMLAnchorElement
+    // The name the user sees. Not the blob URL, not the id.
+    expect(anchor.download).toBe('Java基础教程.pptx')
+    expect(anchor.href).toBe('blob:test')
+    // Cleaned up: an anchor left behind is a leak that shows up as a stray node
+    // in every later test that counts them.
+    expect(document.body.querySelectorAll('a')).toHaveLength(0)
   })
 
   it('revokes the object URL later rather than immediately', () => {

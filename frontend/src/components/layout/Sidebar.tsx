@@ -8,7 +8,7 @@ import { useUiStore } from '@/store/ui'
 import { useToastStore } from '@/store/toast'
 import { Avatar } from '@/components/ui/primitives'
 import { IconButton } from '@/components/ui/Button'
-import { NAV_SECTIONS, SETTINGS_ITEM, type NavItem } from './nav'
+import { NAV_SECTIONS, type NavItem } from './nav'
 
 function NavEntry({ item, collapsed, onNavigate }: { item: NavItem; collapsed: boolean; onNavigate: () => void }) {
   const Icon = item.icon
@@ -107,9 +107,10 @@ function SidebarBody({ collapsed, onNavigate }: { collapsed: boolean; onNavigate
 
       {/* footer */}
       <div className="shrink-0 border-t border-subtle p-2">
-        <NavEntry item={SETTINGS_ITEM} collapsed={collapsed} onNavigate={onNavigate} />
-
-        <div className={cn('mt-1 flex items-center gap-1', collapsed && 'flex-col')}>
+        {/* No settings entry here any more. It is one of the four main entries,
+            and a second copy made the short list read as a long one — which is the
+            complaint this restructure answers. */}
+        <div className={cn('flex items-center gap-1', collapsed && 'flex-col')}>
           <IconButton label="切换主题" size="xs" onClick={toggleTheme}>
             {theme === 'dark' ? <Sun className="size-3.5" /> : <Moon className="size-3.5" />}
           </IconButton>

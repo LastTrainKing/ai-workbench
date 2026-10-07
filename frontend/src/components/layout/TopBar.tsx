@@ -1,7 +1,17 @@
 import { useEffect, useRef, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useLocation } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
-import { Command, Menu, Moon, PanelRightClose, PanelRightOpen, Search, Sun, TriangleAlert } from 'lucide-react'
+import {
+  Command,
+  Menu,
+  Moon,
+  PanelRightClose,
+  PanelRightOpen,
+  Search,
+  Settings,
+  Sun,
+  TriangleAlert,
+} from 'lucide-react'
 import { api } from '@/lib/api'
 import { cn } from '@/lib/utils'
 import { useUiStore } from '@/store/ui'
@@ -69,11 +79,20 @@ export function TopBar() {
   const toggleRightPanel = useUiStore((state) => state.toggleRightPanel)
   const setCommandPalette = useUiStore((state) => state.setCommandPalette)
 
+  // The conversation screen gets a minimal bar: model status, theme, settings. The
+  // global search box and the command-palette button are still there on every other
+  // page, and Ctrl+K still opens the palette from anywhere — this is the top bar
+  // matching the one screen that is supposed to feel like a chat window, not the
+  // search going away.
+  const { pathname } = useLocation()
+  const minimal = pathname === '/'
+
   const [query, setQuery] = useState('')
   const inputRef = useRef<HTMLInputElement>(null)
 
   // "/" focuses the global search unless the user is already typing somewhere.
   useEffect(() => {
+    if (minimal) return undefined
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== '/') return
       const target = event.target as HTMLElement | null
@@ -84,7 +103,7 @@ export function TopBar() {
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [])
+  }, [minimal])
 
   const submit = (event: React.FormEvent) => {
     event.preventDefault()
@@ -100,47 +119,59 @@ export function TopBar() {
         <Menu className="size-4" />
       </IconButton>
 
-      <form onSubmit={submit} className="relative min-w-0 flex-1 max-w-lg">
-        <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-faint" />
-        <input
-          ref={inputRef}
-          value={query}
-          onChange={(event) => setQuery(event.target.value)}
-          placeholder="全局检索文档片段…"
-          aria-label="全局检索"
-          className="aiw-input h-8 pl-8 pr-16"
-        />
-        <span className="pointer-events-none absolute right-2 top-1/2 hidden -translate-y-1/2 items-center gap-1 sm:flex">
-          <kbd className="aiw-kbd font-sans">/</kbd>
-        </span>
-      </form>
+      {minimal ? (
+        <span className="truncate text-[13px] font-medium text-muted">跟它说一件你想完成的事</span>
+      ) : (
+        <form onSubmit={submit} className="relative min-w-0 flex-1 max-w-lg">
+          <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-faint" />
+          <input
+            ref={inputRef}
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="全局检索文档片段…"
+            aria-label="全局检索"
+            className="aiw-input h-8 pl-8 pr-16"
+          />
+          <span className="pointer-events-none absolute right-2 top-1/2 hidden -translate-y-1/2 items-center gap-1 sm:flex">
+            <kbd className="aiw-kbd font-sans">/</kbd>
+          </span>
+        </form>
+      )}
 
-      <button
-        type="button"
-        onClick={() => setCommandPalette(true)}
-        className="hidden h-8 items-center gap-2 rounded border border-subtle bg-inset px-2 text-xs text-muted transition-colors hover:border-strong hover:text-primary sm:inline-flex"
-      >
-        <Command className="size-3.5" />
-        命令面板
-        <span className="flex items-center gap-0.5">
-          <kbd className="aiw-kbd">Ctrl</kbd>
-          <kbd className="aiw-kbd">K</kbd>
-        </span>
-      </button>
+      {!minimal && (
+        <button
+          type="button"
+          onClick={() => setCommandPalette(true)}
+          className="hidden h-8 items-center gap-2 rounded border border-subtle bg-inset px-2 text-xs text-muted transition-colors hover:border-strong hover:text-primary sm:inline-flex"
+        >
+          <Command className="size-3.5" />
+          命令面板
+          <span className="flex items-center gap-0.5">
+            <kbd className="aiw-kbd">Ctrl</kbd>
+            <kbd className="aiw-kbd">K</kbd>
+          </span>
+        </button>
+      )}
 
       <div className="ml-auto flex items-center gap-1.5">
-        <ProviderBadge className="hidden lg:inline-flex" />
+        <ProviderBadge className={minimal ? 'inline-flex' : 'hidden lg:inline-flex'} />
         <IconButton label="切换主题" size="sm" onClick={toggleTheme}>
           {theme === 'dark' ? <Sun className="size-4" /> : <Moon className="size-4" />}
         </IconButton>
-        <IconButton
-          label={rightPanelOpen ? '收起右侧面板' : '展开右侧面板'}
-          size="sm"
-          className="hidden lg:inline-flex"
-          onClick={toggleRightPanel}
-        >
-          {rightPanelOpen ? <PanelRightClose className="size-4" /> : <PanelRightOpen className="size-4" />}
-        </IconButton>
+        {minimal ? (
+          <IconButton label="设置" size="sm" onClick={() => navigate('/settings')}>
+            <Settings className="size-4" />
+          </IconButton>
+        ) : (
+          <IconButton
+            label={rightPanelOpen ? '收起右侧面板' : '展开右侧面板'}
+            size="sm"
+            className="hidden lg:inline-flex"
+            onClick={toggleRightPanel}
+          >
+            {rightPanelOpen ? <PanelRightClose className="size-4" /> : <PanelRightOpen className="size-4" />}
+          </IconButton>
+        )}
       </div>
     </header>
   )

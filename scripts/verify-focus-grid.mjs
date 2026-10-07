@@ -1,10 +1,15 @@
 /**
- * Keyboard navigation test for the home screen.
+ * Keyboard navigation test for the launch grid.
  *
  * The claim being checked is specific: the launch grid can be driven entirely
  * from the keyboard, the focus ring is visible, and the mouse and the keyboard
  * agree about where "here" is. A grid that responds to arrows but gives no visual
  * feedback is not navigable — it is just a keyboard shortcut nobody can use.
+ *
+ * **It navigates to `/dashboard`**, where the grid lives. It used to navigate to
+ * `/`, which was the home screen until the home screen became the conversation.
+ * The grid was not removed — this test was looking at a route that no longer has
+ * it, and failing for a reason that said nothing about the grid.
  *
  *   node scripts/verify-focus-grid.mjs
  */
@@ -45,11 +50,11 @@ async function main() {
     await page.fill('#password', 'demo1234')
     await page.click('button[type="submit"]')
     await page.waitForURL((u) => !u.pathname.includes('/login'))
-    await page.goto(`${BASE}/`, { waitUntil: 'networkidle' })
+    await page.goto(`${BASE}/dashboard`, { waitUntil: 'networkidle' })
     await page.waitForTimeout(1500)
 
     const grid = page.locator('[aria-label="快速入口"]')
-    check('首页存在入口栅格', (await grid.count()) > 0)
+    check('/dashboard 存在入口栅格', (await grid.count()) > 0)
 
     const cards = grid.locator('button[data-focused]')
     const cardCount = await cards.count()
@@ -123,7 +128,8 @@ async function main() {
     check('Enter 进入对应页面', page.url().includes('/agent'), page.url())
 
     // The mouse still works, and hover sets the same focus the keyboard uses.
-    await page.goto(`${BASE}/`, { waitUntil: 'networkidle' })
+    // Back to /dashboard, where the grid is — not `/`, which is the conversation now.
+    await page.goto(`${BASE}/dashboard`, { waitUntil: 'networkidle' })
     await page.waitForTimeout(1200)
     const third = grid.locator('button[data-focused]').nth(2)
     await third.hover()

@@ -50,25 +50,45 @@ async function main() {
     await page.waitForURL((u) => !u.pathname.includes('/login'))
     check('登录成功', true)
 
-    // ------------------------------------------------------------ home page --
+    // ------------------------------------------------------ the conversation --
+    // `/` is the conversation now, and the four-area home moved to `/home`
+    // unchanged. Both are checked, in that order, because "the old screen is gone"
+    // and "the old screen still exists" are different claims and only one of them
+    // is acceptable.
     await page.goto(`${BASE}/`, { waitUntil: 'networkidle' })
+    await page.waitForTimeout(2500)
+    const conversation = await page.locator('body').innerText()
+
+    check('对话页：有时间线', /你想完成的事|告诉它你想做什么/.test(conversation))
+    check('对话页：有输入框', (await page.locator('[data-testid="goal-input"]').count()) > 0)
+    check('对话页不含状态码', !/DRAFT|PARTIAL|LIMIT_REACHED/.test(conversation))
+
+    await page.goto(`${BASE}/home`, { waitUntil: 'networkidle' })
     await page.waitForTimeout(2000)
     const home = await page.locator('body').innerText()
 
-    check('① 区域「你想让我完成什么」存在', /你想让我完成什么/.test(home))
+    check('① 区域「你想让我完成什么」存在（旧四区首页仍在 /home）', /你想让我完成什么/.test(home))
     check('② 区域「正在处理」存在', /正在处理/.test(home))
     check('③ 区域「最近产出」存在', /最近产出/.test(home))
     check('④ 区域「它学到了什么」存在', /它学到了什么/.test(home))
 
     check('资料范围可见', /用哪些资料/.test(home))
     check('产出格式可选', /产出格式/.test(home) && /PPT/.test(home))
-
-    const goalInput = page.locator('[data-testid="goal-input"]')
-    check('目标输入框存在', (await goalInput.count()) > 0)
     await page.screenshot({ path: join(SHOTS, '60-home.png'), fullPage: true })
 
     // -------------------------------------------------------- create a run --
-    await goalInput.fill('用我的资料做一份 15 分钟的答辩 PPT')
+    // Submitted from the conversation, because that is where a person does it now.
+    await page.goto(`${BASE}/`, { waitUntil: 'networkidle' })
+    await page.waitForTimeout(1500)
+    const goalInput = page.locator('[data-testid="goal-input"]')
+    check('目标输入框存在', (await goalInput.count()) > 0)
+
+    const goalText = `用我的资料做一份 15 分钟的答辩 PPT（${Date.now()}）`
+    await goalInput.fill(goalText)
+    // The format chips are behind 「选项」 on the conversation screen — one click,
+    // not a removal.
+    await page.locator('[data-testid="toggle-options"]').click()
+    await page.waitForTimeout(300)
     await page.locator('[data-testid="format-pptx"]').click()
     const before = calls.length
     await page.locator('[data-testid="start-build"]').click()
@@ -81,8 +101,12 @@ async function main() {
     await page.waitForTimeout(1500)
 
     const posted = calls.slice(before).some((c) => c === 'POST /build-runs')
-    check('点击「开始」真的创建了 BuildRun', posted, calls.slice(before).slice(0, 3).join(' | '))
-    check('提交后跳到工作台', page.url().includes('/workbench/'), page.url())
+    check('点击「发送」真的创建了 BuildRun', posted, calls.slice(before).slice(0, 3).join(' | '))
+
+    // It stays on the conversation. Navigating away to a detail page is what the
+    // old screen did, and the whole point of this one is that the work shows up
+    // where you asked for it.
+    check('提交后留在对话页（产出会出现在这条对话里）', new URL(page.url()).pathname === '/', page.url())
 
     // create + execute, in that order. Asserting on `POST /build-runs` alone passed
     // while the product was broken — the run was created and then never started, which
@@ -95,15 +119,17 @@ async function main() {
       createAt !== -1 && executeAt !== -1 && executeAt > createAt,
       seq.slice(0, 4).join(' | '),
     )
-    check('execute 带上的是刚创建的那个 run', executeAt !== -1)
 
     // The real failure the user hit: the row stays DRAFT. Read it back from the API
     // rather than trusting the UI, because the UI is what lied.
-    const runIdForStatus = page.url().split('/workbench/')[1]
     const loginEarly = await page.request.post(`${BASE}/api/v1/auth/login`, {
       data: { identifier: 'demo', password: 'demo1234' },
     })
     const tokenEarly = (await loginEarly.json())?.data?.access_token
+    const newest = await page.request.get(`${BASE}/api/v1/build-runs?limit=1`, {
+      headers: { Authorization: `Bearer ${tokenEarly}` },
+    })
+    const runIdForStatus = (await newest.json())?.data?.build_runs?.[0]?.id
     const statusResponse = await page.request.get(`${BASE}/api/v1/build-runs/${runIdForStatus}`, {
       headers: { Authorization: `Bearer ${tokenEarly}` },
     })
@@ -120,23 +146,27 @@ async function main() {
       String(statusBody?.data?.started_at ?? '(空)'),
     )
 
+    // The turn is in the conversation, with its goal, without going anywhere.
+    await page.reload({ waitUntil: 'networkidle' })
+    await page.waitForTimeout(2500)
+    const conversationAfter = await page.locator('body').innerText()
+    check('新的一轮出现在对话时间线上', conversationAfter.includes(goalText))
+    await page.screenshot({ path: join(SHOTS, '60b-conversation-submitted.png'), fullPage: true })
+
     // ------------------------------------------------------------ workbench --
+    await page.goto(`${BASE}/workbench/${runIdForStatus}`, { waitUntil: 'networkidle' })
     await page.waitForTimeout(2500)
     const workbenchVisible = await page.locator('body').innerText()
-    // The three panels now live inside a collapsed 「详情」. They are still on the
-    // page and still reachable — that is the requirement — but asserting on visible
-    // text alone would have failed for the wrong reason after the layout change. So
-    // assert on the section being present, then open it and assert on its contents.
     check('工作台：产出物栏', /产出物/.test(workbenchVisible))
     check('工作台显示目标原文', /答辩 PPT/.test(workbenchVisible))
 
-    const details = page.locator('[data-testid="workbench-details"]')
+    const details = page.locator('[data-testid="run-details"]')
     check('工作台：详情区存在', (await details.count()) > 0)
     if ((await details.count()) > 0) {
       // It is open by default while a run is EXECUTING, so clicking unconditionally
       // would toggle it *shut* and fail the next assertions for the wrong reason.
       const open = await page
-        .locator('details:has([data-testid="workbench-details"])')
+        .locator('details:has([data-testid="run-details"])')
         .evaluate((el) => el.hasAttribute('open'))
       if (!open) {
         await details.click()
@@ -152,7 +182,7 @@ async function main() {
     // ---------------------------------------------- register a deliverable --
     // The agent has not run for this BuildRun, so a file is attached through the
     // API the same way the execution path would, then verified in the UI.
-    const runId = page.url().split('/workbench/')[1]
+    const runId = runIdForStatus
     check('拿到 BuildRun id', Boolean(runId), runId)
 
     // Obtain a token the way any client would, rather than reaching into the
@@ -212,7 +242,9 @@ async function main() {
     const withFile = await page.locator('body').innerText()
     check('产出物出现在工作台', /答辩PPT v1/.test(withFile))
     check('显示验证证据', /验证证据/.test(withFile))
-    check('显示「已机器校验」', /已机器校验/.test(withFile))
+    // The badge now reads as a sentence rather than a pill — same fact, said the
+    // way the conversation says it.
+    check('显示文件已通过机器校验', /可以打开|已机器校验/.test(withFile), (withFile.match(/可以打开|已机器校验/) ?? ['(无)'])[0])
 
     const checks = page.locator('[data-testid="verification-checks"]')
     check('验证证据是结构化列表', (await checks.count()) > 0)
@@ -237,14 +269,31 @@ async function main() {
     await reason.fill('图表太少，页数也偏多')
     await page.waitForTimeout(300)
     const beforeReject = calls.length
+    // Wait for the *response*, not a duration. Rejecting runs the memory evaluator
+    // synchronously — one real model call — so the round trip is tens of seconds and
+    // a fixed 6s sleep read the page while the textarea still held the typed reason.
+    // The old assertion passed on that text by accident and failed on the state it
+    // was actually checking.
+    const rejectResponse = page.waitForResponse(
+      (r) => /\/api\/v1\/deliverables\/[^/]+\/reject$/.test(r.url()) && r.request().method() === 'POST',
+      { timeout: 90000 },
+    )
     await confirmReject.click()
-    await page.waitForTimeout(6000)
+    const rejectedResponse = await rejectResponse.catch(() => null)
+    check('退回真的调用了 reject 端点', calls.slice(beforeReject).some((c) => c.includes('/reject')), calls.slice(beforeReject).slice(0, 3).join(' | '))
+    check('退回接口返回成功', rejectedResponse?.status() === 200, `HTTP ${rejectedResponse?.status() ?? '无响应'}`)
 
-    const rejected = calls.slice(beforeReject).some((c) => c.includes('/reject'))
-    check('退回真的调用了 reject 端点', rejected, calls.slice(beforeReject).slice(0, 3).join(' | '))
+    // And wait for the card to actually show it, rather than for a guess about how
+    // long the refetch takes.
+    await page
+      .locator('[data-testid="deliverable-card"]')
+      .filter({ hasText: '你已退回' })
+      .first()
+      .waitFor({ timeout: 20000 })
+      .catch(() => null)
 
     const afterReject = await page.locator('body').innerText()
-    check('界面显示已退回', /已退回/.test(afterReject))
+    check('界面显示已退回', /你已退回|已退回/.test(afterReject))
     check('界面回显退回原因', /图表太少/.test(afterReject))
     await page.screenshot({ path: join(SHOTS, '63-workbench-rejected.png'), fullPage: true })
 

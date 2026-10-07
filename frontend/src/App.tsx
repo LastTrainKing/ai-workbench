@@ -20,6 +20,7 @@ const NotesPage = lazy(() => import('@/pages/NotesPage'))
 const AgentWorkbenchPage = lazy(() => import('@/pages/AgentWorkbenchPage'))
 const AgentPermissionsPage = lazy(() => import('@/pages/AgentPermissionsPage'))
 const HomePage = lazy(() => import('@/pages/HomePage'))
+const ConversationPage = lazy(() => import('@/pages/ConversationPage'))
 const WorkbenchPage = lazy(() => import('@/pages/WorkbenchPage'))
 const MyAIPage = lazy(() => import('@/pages/MyAIPage'))
 const OnboardingPage = lazy(() => import('@/pages/OnboardingPage'))
@@ -44,7 +45,12 @@ export default function App() {
 
           <Route element={<RequireOnboarding />}>
             <Route element={<AppShell />}>
-              <Route index element={<HomePage />} />
+              {/* `/` is the conversation. The four-area home it replaced still
+                  exists at `/home` rather than being deleted — nothing was removed
+                  to make the new screen look simpler, and the old routes all still
+                  resolve (verify-sidebar.mjs counts them). */}
+              <Route index element={<ConversationPage />} />
+              <Route path="home" element={<HomePage />} />
               <Route path="dashboard" element={<DashboardPage />} />
               <Route path="workbench" element={<WorkbenchPage />} />
               <Route path="workbench/:runId" element={<WorkbenchPage />} />

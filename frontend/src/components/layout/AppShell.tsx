@@ -1,5 +1,5 @@
 import { useEffect } from 'react'
-import { Outlet } from 'react-router-dom'
+import { Outlet, useLocation } from 'react-router-dom'
 import { useUiStore } from '@/store/ui'
 import { Sidebar } from './Sidebar'
 import { TopBar } from './TopBar'
@@ -95,6 +95,16 @@ export function AppShell() {
   useNativeMenu()
 
   const connection = useConnection()
+  const { pathname } = useLocation()
+
+  // The conversation screen has one job, and the right panel is the engine room:
+  // quick actions (all in the sidebar), recent AI runs with token counts and
+  // latencies, workspace counts, dependency badges. On every other page it is the
+  // right thing to have; on the one screen that is supposed to feel like talking to
+  // something, it is the console the user objected to. Hidden there, present
+  // everywhere else — and still one click away, because the toggle stays in the top
+  // bar on every page that shows it.
+  const showRightPanel = pathname !== '/'
 
   return (
     <div className="flex h-full overflow-hidden bg-base">
@@ -106,7 +116,7 @@ export function AppShell() {
           <main className="aiw-scroll min-w-0 flex-1">
             <Outlet />
           </main>
-          <RightPanel />
+          {showRightPanel && <RightPanel />}
         </div>
       </div>
 
