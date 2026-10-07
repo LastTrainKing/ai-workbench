@@ -83,25 +83,36 @@ function Start-Postgres {
             }
 
             Write-StartupLog -Service 'PostgreSQL' -State 'STARTING' -Detail "port $PgPort"
+            # `logging_collector`, because none of the restricted launches below can
+            # redirect stdout/stderr — they have no inherited handles to redirect, and
+            # postgres.log is the first place anyone looks when the cluster will not start.
+            $pgArguments = ConvertTo-ProcessArgumentList @(
+                '-D', $PgData, '-p', "$PgPort",
+                '-c', 'listen_addresses=127.0.0.1',
+                '-c', 'logging_collector=on',
+                '-c', "log_directory=$LogDir",
+                '-c', 'log_filename=postgres.log'
+            )
             if (Test-IsElevated) {
                 # postgres.exe refuses to run with an elevated token, and Start-Process
-                # cannot drop privileges. Two ways to get a restricted token, tried in
-                # this order because each works where the other does not:
+                # cannot drop privileges. Three ways to get a non-elevated one, tried in
+                # this order because each works where the others do not — see the header of
+                # `_restricted-launch.ps1` for the measurements:
                 #
-                #   1. `runas /trustlevel:0x20000` — works from a normal elevated
-                #      terminal (verified here: it writes a probe file and returns 0).
-                #      It fails when the parent is inside a job object it cannot escape,
-                #      which is how the desktop host launches this script.
-                #   2. `Start-ProcessRestricted` — creates the token in-process, so the
-                #      child stays in the parent's job. It needs SeImpersonatePrivilege,
-                #      which a normal elevated token has enabled and this agent host's
-                #      token does not (measured: `whoami /priv` shows it enabled, yet
-                #      `AdjustTokenPrivileges` reports ERROR_NOT_ALL_ASSIGNED and
-                #      CreateProcessWithTokenW returns win32=5).
+                #   1. `runas /trustlevel:0x20000` — works from a normal elevated terminal.
+                #      Fails when the parent is inside a job object it cannot escape, which
+                #      is how the desktop host launches this script.
+                #   2. `Start-ProcessRestricted` — creates the token in-process. Needs
+                #      SeImpersonatePrivilege, which this agent host's token does not have
+                #      assignable (AdjustTokenPrivileges → ERROR_NOT_ALL_ASSIGNED,
+                #      CreateProcessWithTokenW → win32=5).
+                #   3. `Start-ProcessLimited` — has the Task Scheduler service do it with
+                #      `RunLevel = Limited`. Needs no privilege and worked here where 1 and
+                #      2 both failed.
                 #
-                # Either one failing is reported with the reason, because "port 5432
-                # never opened" sent the last reader to a log file that took three
-                # attempts to interpret.
+                # Each failure is reported with its own reason, because "port 5432 never
+                # opened" sent the last reader to a log file that took three attempts to
+                # interpret.
                 Write-Warn2 'Elevated shell detected - starting PostgreSQL with a restricted token'
                 $restricted = $false
 
@@ -130,16 +141,6 @@ function Start-Postgres {
 
                 if (-not $restricted) {
                     . "$PSScriptRoot\_restricted-launch.ps1"
-                    # `logging_collector`, because this launch cannot redirect
-                    # stdout/stderr — it has no inherited handles to redirect, and
-                    # postgres.log is the first place anyone looks when it will not start.
-                    $pgArguments = ConvertTo-ProcessArgumentList @(
-                        '-D', $PgData, '-p', "$PgPort",
-                        '-c', 'listen_addresses=127.0.0.1',
-                        '-c', 'logging_collector=on',
-                        '-c', "log_directory=$LogDir",
-                        '-c', 'log_filename=postgres.log'
-                    )
                     $restricted = Start-ProcessRestricted `
                         -FilePath (Join-Path $PgHome 'bin\postgres.exe') `
                         -Arguments $pgArguments `
@@ -147,10 +148,22 @@ function Start-Postgres {
                 }
 
                 if (-not $restricted) {
-                    # Neither worked. Try the direct launch anyway: on a shell that is
+                    # Neither of the in-session ways worked. Hand it to the Task Scheduler
+                    # service, which can start a process with a filtered token without
+                    # needing any privilege from us. It waits for the port itself and
+                    # cleans up its own task definition.
+                    $restricted = Start-ProcessLimited `
+                        -FilePath (Join-Path $PgHome 'bin\postgres.exe') `
+                        -Arguments $pgArguments `
+                        -WorkingDirectory $PgHome `
+                        -Port $PgPort
+                }
+
+                if (-not $restricted) {
+                    # All three failed. Try the direct launch anyway: on a shell that is
                     # only *partly* elevated it succeeds, and on a genuinely elevated one
                     # it fails with postgres's own message rather than with a code.
-                    Write-Warn2 'both restricted launches failed - trying a direct launch'
+                    Write-Warn2 'all restricted launches failed - trying a direct launch'
                     Start-Process -FilePath (Join-Path $PgHome 'bin\postgres.exe') `
                         -ArgumentList (ConvertTo-ProcessArgumentList @('-D', $PgData, '-p', "$PgPort", '-c', 'listen_addresses=127.0.0.1')) `
                         -WorkingDirectory $PgHome -WindowStyle Hidden `
@@ -187,9 +200,15 @@ function Start-Postgres {
             }
         }
         if ($adminRefusal) {
+            # Every workaround has now been tried (see the branch above); reaching here
+            # means the cluster really is refusing because this shell is elevated and none
+            # of the three ways to drop the token worked. Say that, and say what to do —
+            # the previous message here claimed the machine could not create a restricted
+            # token, which stopped being true once the Task Scheduler path was added.
             Write-StartupError ("PostgreSQL 拒绝以管理员身份运行（这层 shell 是提权的），" +
-                "本机也无法创建受限令牌来绕开它。请从普通（非提权）终端启动，" +
-                "或直接双击桌面上的 AI Workbench 快捷方式。详见 $LogDir\postgres.log")
+                "而三种降权启动都没成功（runas / 进程内受限令牌 / 计划任务）。" +
+                "请从普通（非提权）终端启动，或直接双击桌面上的 AI Workbench 快捷方式。" +
+                "详见 $LogDir\startup.log 与 $LogDir\postgres.log")
         }
         else {
             Write-StartupError "PostgreSQL did not bind port $PgPort within 30s - see $LogDir\postgres.err.log"

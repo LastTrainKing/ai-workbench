@@ -12,18 +12,25 @@
 # comes up and every downstream step fails for a reason that looks nothing like the real
 # one.
 #
-# The first attempt at this used `runas /trustlevel:0x20000`. It works from a terminal
-# and **fails from the installed application** with `exit 1` and no output at all — the
-# desktop host gives it an environment it cannot create a process in. Two rounds of
-# guessing at its PATH did not help, and a launcher that fails silently is worse than no
-# launcher.
+# Three ways to get such a token, tried in this order because each one works somewhere the
+# others do not. All three are measured on this machine:
 #
-# So the token is created in-process instead: `CreateRestrictedToken` with
-# `DISABLE_MAX_PRIVILEGE | LUA_TOKEN` produces the same restricted token `runas
-# /trustlevel` would, and `CreateProcessAsUser` starts postgres with it. No external
-# process, no console, no PATH dependency.
+#   1. `runas /trustlevel:0x20000` (called from `infra-start.ps1`, not from here).
+#      Works from a normal elevated terminal. **Fails from the installed application**
+#      with `exit 1` and no output at all — the desktop host gives it an environment it
+#      cannot create a process in. Two rounds of guessing at its PATH did not help, and a
+#      launcher that fails silently is worse than no launcher.
+#   2. `Start-ProcessRestricted` below. Creates the token in-process with
+#      `CreateRestrictedToken(DISABLE_MAX_PRIVILEGE | LUA_TOKEN)` and starts postgres with
+#      it — no external process, no console, no PATH dependency. It needs
+#      `SeImpersonatePrivilege`, which a normal elevated token has enabled and this agent
+#      host's token does not: `AdjustTokenPrivileges` reports ERROR_NOT_ALL_ASSIGNED and
+#      `CreateProcessWithTokenW` returns `win32=5` even with the sandbox disabled.
+#   3. `Start-ProcessLimited` below. Asks the Task Scheduler service to start it with
+#      `RunLevel = Limited`, which needs no privilege at all and works in every context
+#      tried so far — including the one where 1 and 2 both fail.
 #
-# Every failure returns a distinct negative code and the Win32 error, so a failure here
+# Every failure returns a distinct code and the underlying Win32 error, so a failure here
 # says which call failed rather than "exit 1".
 
 Add-Type -TypeDefinition @'
@@ -207,5 +214,99 @@ function Start-ProcessRestricted {
     }
     Write-StartupLog -Service 'PostgreSQL' -State 'FAILED' -Detail "restricted launch $result ($error)"
     Write-Warn2 "restricted launch failed: code=$result $error"
+    return $false
+}
+
+function Start-ProcessLimited {
+    <#
+      Start an executable through Task Scheduler with `RunLevel = Limited`.
+
+      The third way to get a non-elevated token, and the only one that worked on the
+      machine this was written on. `RunLevel Limited` has the Task Scheduler service start
+      the process with the same UAC-filtered token the user gets when they launch something
+      normally — `whoami /groups` inside it shows
+
+          BUILTIN\Administrators   ...   Group used for deny only
+          Mandatory Label\Medium Mandatory Level
+
+      which is exactly what postgres.exe insists on. It needs nothing but the Task
+      Scheduler service: no privilege to enable, no external launcher, no console.
+
+      The task definition is removed once the port is open, and **that does not stop the
+      server** — the process belongs to the service, and removing a running task's
+      definition leaves the process running. Measured: after `Unregister-ScheduledTask`,
+      port 5432 was still listening and the task was gone.
+
+      `logging_collector` is used for the same reason as in the in-process path: the launch
+      has no inherited handles to redirect, so postgres has to write its own log file. That
+      file is where the reason lands when the cluster will not start.
+
+      Returns $true when the port opened. On failure it records the task's last result and
+      the tail of postgres.log, because "port 5432 never opened" is not a diagnosis.
+    #>
+    param(
+        [Parameter(Mandatory = $true)][string]$FilePath,
+        [Parameter(Mandatory = $true)][string]$Arguments,
+        [Parameter(Mandatory = $true)][string]$WorkingDirectory,
+        [Parameter(Mandatory = $true)][int]$Port,
+        [string]$TaskName = 'AIWorkbenchPostgres',
+        [int]$TimeoutSeconds = 30
+    )
+
+    $identity = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
+    if (-not $identity) { $identity = "$env:USERDOMAIN\$env:USERNAME" }
+
+    # `Register-ScheduledTask` and `Unregister-ScheduledTask` draw a progress bar, and in a
+    # non-interactive host it is rendered into the console as a wall of half-drawn frames —
+    # it landed in the middle of `start.bat`'s output, between "PostgreSQL starting" and
+    # "PostgreSQL READY". Suppressed for the duration of this function only.
+    $previousProgress = $ProgressPreference
+    $ProgressPreference = 'SilentlyContinue'
+
+    try {
+        Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction SilentlyContinue
+        $action = New-ScheduledTaskAction -Execute $FilePath -Argument $Arguments `
+            -WorkingDirectory $WorkingDirectory
+        # `Interactive` = run in this logged-on session, with this user's token;
+        # `Limited` is what filters it down from elevated. Both are required: dropping
+        # `Limited` starts the cluster elevated and postgres refuses, which is the problem
+        # this function exists to solve.
+        $principal = New-ScheduledTaskPrincipal -UserId $identity -LogonType Interactive `
+            -RunLevel Limited
+        Register-ScheduledTask -TaskName $TaskName -InputObject (New-ScheduledTask `
+            -Action $action -Principal $principal) -Force | Out-Null
+        Start-ScheduledTask -TaskName $TaskName
+    }
+    catch {
+        $ProgressPreference = $previousProgress
+        Write-StartupLog -Service 'PostgreSQL' -State 'FAILED' `
+            -Detail "scheduled task could not be registered ($($_.Exception.Message))"
+        Write-Warn2 "scheduled-task launch failed: $($_.Exception.Message)"
+        return $false
+    }
+
+    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+    $opened = $false
+    while ((Get-Date) -lt $deadline) {
+        if (Test-PortOpen $Port) { $opened = $true; break }
+        Start-Sleep -Milliseconds 700
+    }
+
+    if ($opened) {
+        Write-StartupLog -Service 'PostgreSQL' -State 'STARTING' `
+            -Detail "started via scheduled task '$TaskName' (RunLevel Limited)"
+        # Removed so nothing of ours is left in the user's Task Scheduler. The server keeps
+        # running — see the note above.
+        Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction SilentlyContinue
+        $ProgressPreference = $previousProgress
+        return $true
+    }
+
+    $info = Get-ScheduledTaskInfo -TaskName $TaskName -ErrorAction SilentlyContinue
+    Write-StartupLog -Service 'PostgreSQL' -State 'FAILED' `
+        -Detail "scheduled-task launch did not open port $Port (last result $($info.LastTaskResult))"
+    Write-Warn2 "scheduled-task launch did not open port $Port"
+    Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction SilentlyContinue
+    $ProgressPreference = $previousProgress
     return $false
 }
