@@ -34,7 +34,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.ai.agent.plan import RunState
 from app.core.logging import get_logger
 from app.models.ai import ToolAuditLog
-from app.models.delivery import BuildRun, BuildStatus, make_verification
+from app.models.delivery import (
+    BuildRun,
+    BuildStatus,
+    describe_run_state,
+    make_verification,
+)
 from app.services.delivery_service import DeliveryService
 
 logger = get_logger(__name__)
@@ -213,7 +218,6 @@ async def _watch(
                     service,
                     build_run_id=build_run_id,
                     ai_run_id=db_run_id,
-                    run_state=state,
                 )
                 if collected:
                     break
@@ -249,12 +253,17 @@ async def _watch(
                 # one and left the deliverables marked `verified=True` — so the
                 # record said the run failed and its output was fine, at the same
                 # time. PARTIAL is that middle case, stated.
+                #
+                # The summary no longer claims the files are unverified. They are
+                # verified on their own terms; what did not finish is the run. The
+                # two statements used to be one, and the one the user read was the
+                # wrong one.
                 await service.set_status(
                     run,
                     BuildStatus.PARTIAL,
                     summary=(
                         f"运行终态是 {state}，但已产出 {collected} 个文件。"
-                        "这些文件真实存在，但运行没有走完，因此未标记为已验证。"
+                        "这些文件真实存在、也能读回；没有走完的是这次运行。"
                     ),
                 )
             else:
@@ -263,6 +272,11 @@ async def _watch(
                     final,
                     summary=f"产出 {collected} 个文件" if collected else "",
                 )
+
+            # Now that the run has its final status, attach it to each deliverable
+            # beside — never inside — the file's own verdict.
+            await _stamp_run_state(session, build_run_id)
+
             logger.info(
                 "build_run_finished",
                 extra={"build_run_id": str(build_run_id), "state": state, "deliverables": collected},
@@ -362,7 +376,6 @@ async def _collect(
     *,
     build_run_id: uuid.UUID,
     ai_run_id: str,
-    run_state: str = "",
 ) -> int:
     """Register every file the run actually wrote, with verification.
 
@@ -370,9 +383,6 @@ async def _collect(
     files this run did not produce — the user's own edits, another run's output —
     and a file the agent *said* it wrote is not evidence that it did. The
     intersection is: a successful call to a writing tool, naming a path that exists.
-
-    `run_state` is carried in so the registration can be honest about it: a file
-    produced by a run that did not succeed is registered, but never as *verified*.
 
     The run is loaded **here**, from its id, rather than being passed in. The caller
     retries this after a `rollback()`, and a `rollback()` expires every instance in
@@ -398,7 +408,6 @@ async def _collect(
         logger.warning("build_run_bad_id", extra={"ai_run_id": ai_run_id})
         return 0
 
-    succeeded = (run_state or "").upper() == "COMPLETED"
     # The preferences that were in play, copied from the plan so the deliverable
     # itself can answer "was my preference applied to this file?".
     plan = run.plan if isinstance(run.plan, dict) else {}
@@ -469,25 +478,20 @@ async def _collect(
                 style=str(arguments.get("style") or ""),
                 applied_preferences=applied,
             )
-            result = await service.verify_deliverable(
-                owner_id=run.user_id, deliverable_id=item.id
-            )
-            if not succeeded:
-                # The file is real; the run that made it is not finished. Recording
-                # that as a *failed check* rather than dropping it keeps both facts:
-                # the artifact is registered so the user can look at it, and it is
-                # not stamped `verified` as though the run had gone through.
-                checks = list(result.get("checks") or [])
-                checks.append(
-                    {
-                        "name": "run_state",
-                        "ok": False,
-                        "detail": f"运行终态是 {run_state}，产出物来自一次没有走完的运行",
-                    }
-                )
-                item.verification = make_verification(checks)
-                item.verified = item.verification["passed"]
-                await session.flush()
+            # File-level verification only. `verify_deliverable` already sets
+            # `item.verified` from the checks it runs — exists, reads back, has the
+            # page count it claims.
+            #
+            # The run's completeness is deliberately *not* mixed in here. It used to
+            # be, as an extra `run_state` check with `ok: False`, which forced
+            # `passed` false and stamped a perfectly readable file as 「未校验」. A
+            # run that ends PARTIAL is a fact about the process, not evidence about
+            # the artifact, so it does not get a vote on the artifact's verdict.
+            #
+            # It is recorded — by `_stamp_run_state`, after the run's final status is
+            # decided. Not here: at this moment the row still says EXECUTING, because
+            # collection runs before the status mapping below.
+            await service.verify_deliverable(owner_id=run.user_id, deliverable_id=item.id)
             registered += 1
         except Exception as exc:
             logger.warning(
@@ -496,6 +500,55 @@ async def _collect(
             )
 
     return registered
+
+
+async def _stamp_run_state(session: AsyncSession, build_run_id: uuid.UUID) -> None:
+    """Record the run's final state on each of its deliverables.
+
+    **Separate from `_collect` on purpose.** Collection happens before the run's
+    final status is decided — at that moment the row still says `EXECUTING`, so a
+    stamp taken there would report "still running" for a run that has already
+    ended. The authoritative value only exists after `set_status`, which is why
+    this runs afterwards.
+
+    The file's own verdict is preserved exactly: `checks` are carried over
+    unchanged and `passed` is recomputed from them alone. The run's state travels
+    in `run_state`, a sibling field. That separation is the whole point — see
+    `make_verification`.
+
+    Best-effort by design: a failure here leaves the deliverables with their
+    file-level verdict intact, which is the part that must not be lost. It is
+    logged rather than swallowed silently.
+    """
+    from app.models.delivery import Deliverable
+
+    try:
+        run = await session.get(BuildRun, build_run_id)
+        if run is None:
+            logger.warning("run_state_stamp_missing_run", extra={"build_run_id": str(build_run_id)})
+            return
+        note = describe_run_state(run.status)
+        rows = list(
+            (
+                await session.execute(
+                    select(Deliverable).where(Deliverable.build_run_id == build_run_id)
+                )
+            ).scalars()
+        )
+        for item in rows:
+            existing = item.verification if isinstance(item.verification, dict) else {}
+            item.verification = make_verification(
+                list(existing.get("checks") or []), run_state=note
+            )
+            # Unchanged rule: only the file-level checks decide this.
+            item.verified = bool(item.verification["passed"])
+        if rows:
+            await session.flush()
+    except Exception as exc:
+        logger.warning(
+            "run_state_stamp_failed",
+            extra={"build_run_id": str(build_run_id), "error": f"{type(exc).__name__}: {exc}"},
+        )
 
 
 __all__ = ["ARTIFACT_TOOLS", "execute_build_run", "kind_for"]

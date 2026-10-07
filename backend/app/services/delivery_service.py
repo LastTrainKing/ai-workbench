@@ -245,11 +245,31 @@ class DeliveryService:
         elif target.is_file():
             checks.append({"name": "readback", "ok": True, "detail": f"{item.kind} (not parsed)"})
 
-        result = make_verification(checks)
+        result = make_verification(checks, run_state=await self._run_state_note(item))
         item.verification = result
         item.verified = result["passed"]
         await self.session.flush()
         return result
+
+    async def _run_state_note(self, item: Deliverable) -> dict[str, Any] | None:
+        """The producing run's state, for the column beside the file's own verdict.
+
+        Recomputed here rather than carried over from whatever was stored, so a
+        re-verify cannot leave a stale run state behind — and so there is exactly
+        one place that decides what a run state means (`describe_run_state`).
+
+        `None` when the file has no run (a deliverable registered by hand). That is
+        not the same as "the run failed": it means the question does not apply, and
+        the UI is told so by the field's absence rather than by a false value.
+        """
+        from app.models.delivery import BuildRun, describe_run_state
+
+        if item.build_run_id is None:
+            return None
+        run = await self.session.get(BuildRun, item.build_run_id)
+        if run is None:
+            return None
+        return describe_run_state(run.status)
 
     # -------------------------------------------------------------- acceptance --
     async def accept(self, *, owner_id: uuid.UUID, deliverable_id: uuid.UUID) -> Deliverable:

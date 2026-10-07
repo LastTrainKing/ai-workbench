@@ -292,11 +292,28 @@ class Deliverable(Base, UUIDPrimaryKeyMixin, TimestampMixin):
         return payload
 
 
-def make_verification(checks: list[dict[str, Any]]) -> dict[str, Any]:
+def make_verification(
+    checks: list[dict[str, Any]], *, run_state: dict[str, Any] | None = None
+) -> dict[str, Any]:
     """Assemble a verification result from individual checks.
 
     `passed` is derived, never passed in: a result that claims to have passed while
     containing a failed check is the exact failure this structure exists to prevent.
+
+    **`run_state` is a sibling of `checks`, not another check.** The two answer
+    different questions and the whole point of this shape is that they cannot be
+    confused:
+
+    * `checks` — *is this file any good?* It exists, it reads back, it has the page
+      count it claims. This is what `passed` is derived from.
+    * `run_state` — *did the run that produced it get all the way through?*
+
+    A file can be perfectly good while the run that made it did not finish; both
+    facts are true at once. Folding the second into the first meant a run that
+    ended `PARTIAL` produced a deliverable the UI labelled 「未校验」 — the system
+    telling the user something false about their artifact because something else,
+    elsewhere, had gone wrong. The user's own words for the resulting confusion
+    were that the file was plainly fine and the screen disagreed.
     """
     normalised = [
         {
@@ -306,12 +323,60 @@ def make_verification(checks: list[dict[str, Any]]) -> dict[str, Any]:
         }
         for check in checks
     ]
-    return {
+    payload: dict[str, Any] = {
         "checks": normalised,
         "passed": bool(normalised) and all(check["ok"] for check in normalised),
         "check_count": len(normalised),
         "failed_count": sum(1 for check in normalised if not check["ok"]),
     }
+    if run_state is not None:
+        payload["run_state"] = {
+            "state": str(run_state.get("state") or ""),
+            #: Whether the *run* finished normally. Deliberately named apart from
+            #: `passed`: one is about the artifact, the other about the process.
+            "ok": bool(run_state.get("ok")),
+            "detail": str(run_state.get("detail") or ""),
+        }
+    return payload
+
+
+def describe_run_state(status: str) -> dict[str, Any]:
+    """The run's terminal state as a sentence, for the column beside the file's own.
+
+    Derived from `BuildStatus` rather than written per call site, so the wording and
+    the `ok` flag cannot drift apart from the enum — and so "the run finished" has
+    exactly one definition in the codebase.
+    """
+    try:
+        state = BuildStatus(status)
+    except ValueError:
+        return {
+            "state": status,
+            "ok": False,
+            "detail": f"这次运行的终态是 {status or '未知'}，不是系统认识的完成状态。",
+        }
+
+    if state is BuildStatus.COMPLETED:
+        return {"state": state.value, "ok": True, "detail": "这次运行走完了全部步骤。"}
+    if state is BuildStatus.PARTIAL:
+        return {
+            "state": state.value,
+            "ok": False,
+            "detail": "这次运行没有走完全部步骤 —— 文件本身是好的，但产出它的过程没有正常结束。",
+        }
+    if state is BuildStatus.FAILED:
+        return {
+            "state": state.value,
+            "ok": False,
+            "detail": "这次运行失败了 —— 文件已经落盘，但这次执行没有走完。",
+        }
+    if state is BuildStatus.CANCELLED:
+        return {"state": state.value, "ok": False, "detail": "这次运行被取消了。"}
+    if state is BuildStatus.LIMIT_REACHED:
+        return {"state": state.value, "ok": False, "detail": "这次运行达到了资源上限而停止。"}
+    if state is BuildStatus.WAITING_USER:
+        return {"state": state.value, "ok": False, "detail": "这次运行在等你确认，还没有结束。"}
+    return {"state": state.value, "ok": False, "detail": f"这次运行还在进行中（{state.value}）。"}
 
 
 __all__ = [
@@ -319,5 +384,6 @@ __all__ = [
     "BuildRun",
     "BuildStatus",
     "Deliverable",
+    "describe_run_state",
     "make_verification",
 ]

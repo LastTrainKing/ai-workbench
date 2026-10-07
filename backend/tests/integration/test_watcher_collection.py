@@ -82,7 +82,6 @@ async def test_collect_works_after_a_rollback_has_expired_the_run():
             service,
             build_run_id=run_id,
             ai_run_id=str(uuid.uuid4()),
-            run_state="COMPLETED",
         )
         assert registered == 0  # no audit rows for that id, but no crash either
 

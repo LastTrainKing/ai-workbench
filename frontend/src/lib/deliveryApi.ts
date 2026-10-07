@@ -41,11 +41,30 @@ export interface VerificationCheck {
   detail: string
 }
 
+/**
+ * The producing run's state, reported *beside* the file's own verdict.
+ *
+ * Two different questions: `VerificationResult.checks` asks "is this file any
+ * good?"; this asks "did the run that made it get all the way through?". A file
+ * can be perfectly good while the run that made it did not finish, so this must
+ * never be folded into `passed` — doing that made a readable 9-slide deck display
+ * as 「未校验」 because an unrelated step had failed.
+ *
+ * Absent when the file has no producing run (registered by hand): that means the
+ * question does not apply, which is not the same as "the run failed".
+ */
+export interface RunStateNote {
+  state: string
+  ok: boolean
+  detail: string
+}
+
 export interface VerificationResult {
   checks: VerificationCheck[]
   passed: boolean
   check_count: number
   failed_count: number
+  run_state?: RunStateNote
 }
 
 export interface BuildRun {

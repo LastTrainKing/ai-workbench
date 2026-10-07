@@ -117,19 +117,40 @@ function VerificationPanel({ item }: { item: Deliverable }) {
       </p>
     )
   }
+  const runState = result.run_state
   return (
-    <div className="space-y-1" data-testid="verification-checks">
-      {result.checks.map((check) => (
-        <div key={check.name} className="flex items-start gap-2 text-[12px]">
-          {check.ok ? (
-            <CheckCircle2 className="mt-0.5 size-3.5 shrink-0 text-success" />
-          ) : (
-            <XCircle className="mt-0.5 size-3.5 shrink-0 text-danger" />
-          )}
-          <span className="font-mono text-faint">{check.name}</span>
-          <span className="text-muted">{check.detail}</span>
+    <div className="space-y-2" data-testid="verification-checks">
+      {/* Column one: the file itself. This is what decides 已机器校验. */}
+      <div className="space-y-1">
+        <p className="text-[11px] uppercase tracking-wide text-faint">文件本身</p>
+        {result.checks.map((check) => (
+          <div key={check.name} className="flex items-start gap-2 text-[12px]">
+            {check.ok ? (
+              <CheckCircle2 className="mt-0.5 size-3.5 shrink-0 text-success" />
+            ) : (
+              <XCircle className="mt-0.5 size-3.5 shrink-0 text-danger" />
+            )}
+            <span className="font-mono text-faint">{check.name}</span>
+            <span className="text-muted">{check.detail}</span>
+          </div>
+        ))}
+      </div>
+
+      {/* Column two: the run that produced it. A separate question, so a separate
+          block — and it never turns the file's verdict red. */}
+      {runState && (
+        <div className="space-y-1 border-t border-border/60 pt-2" data-testid="run-state-note">
+          <p className="text-[11px] uppercase tracking-wide text-faint">这次运行</p>
+          <div className="flex items-start gap-2 text-[12px]">
+            {runState.ok ? (
+              <CheckCircle2 className="mt-0.5 size-3.5 shrink-0 text-success" />
+            ) : (
+              <AlertTriangle className="mt-0.5 size-3.5 shrink-0 text-warn" />
+            )}
+            <span className="text-muted">{runState.detail}</span>
+          </div>
         </div>
-      ))}
+      )}
     </div>
   )
 }
