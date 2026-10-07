@@ -20,9 +20,10 @@ Two rules the tiers enforce rather than merely document:
 
 * **A miss is reported as a miss.** Tier 4 is not a fallback that pretends the first
   three were never asked; the answer carries which tiers were tried and what each said.
-* **Tier 2 is present before it can hit.** The skill layer does not exist yet, so the
-  tier returns a miss with a reason instead of being absent — an absent tier is
-  indistinguishable from a tier that was never consulted.
+* **Tier 2 distinguishes "not built" from "nothing matched".** The skill layer is live
+  (`SKILL_LAYER_BUILT`), but the guard stays: an empty result list means "nothing
+  matched", and "the layer is not built" has to be said in words. A list that is empty
+  for a different reason is a lie told by a list.
 """
 
 from __future__ import annotations

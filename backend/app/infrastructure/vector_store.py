@@ -115,7 +115,9 @@ class VectorStore:
             if current != dimension:
                 raise VectorStoreError(
                     "Embedding dimension changed but the Qdrant collection already exists. "
-                    "Run `python -m app.cli reindex --drop` (or delete the collection) to rebuild.",
+                    "Stop the stack, remove .runtime/qdrant/storage, start it again so the "
+                    "collection is recreated at the new size, then re-queue the vectors with "
+                    "`python -m app.cli reindex --knowledge-base <id>`.",
                     details={"collection_dim": current, "embedding_dim": dimension},
                 )
         else:

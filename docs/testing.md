@@ -206,8 +206,11 @@ Be explicit about the gaps:
 * **Cloud providers are not tested in CI.** The suite forces the offline engine;
   the OpenAI-compatible and Ollama providers have no automated tests. Their
   behaviour was exercised manually only when a key/daemon was available.
-* **No migration tests.** `backend/alembic/versions/` is empty, so no upgrade/downgrade
-  path is tested.
+* **No migration tests.** Five revisions exist under `backend/alembic/versions/`
+  (`368e36738b68` initial schema, `1867e3419108` personal context, `312c9ff3ef28`
+  delivery layer, `f2957e9513b4` build-run rename, `90407e6e4bd7` memory
+  provenance), but nothing tests an upgrade or downgrade path — the suite creates
+  the schema with `create_all`, so the migrations are never exercised.
 * **No multi-worker stress test.** `FOR UPDATE SKIP LOCKED` claiming is exercised
   by the single in-process worker, not by several concurrent worker processes.
 * **No chaos / fault-injection tests.** Degradation paths (Redis down, Qdrant down)
@@ -261,7 +264,10 @@ Unit tests verify logic. They do not verify **wiring**, and in this project ever
 expensive bug has been a wiring bug: a function written correctly and never called, or
 called with the wrong argument. Those need a real process and a real click.
 
-Eleven scripts now run against a live server and assert on observed behaviour:
+Twenty-five scripts now run against a live server, a live install or a live model and
+assert on observed behaviour. The eleven below are the UI and shell ones, kept together
+because they share a harness and their assertion counts are stable; the other fourteen
+follow in the second table.
 
 | Script | Assertions | What it proves |
 |---|---|---|
@@ -277,6 +283,23 @@ Eleven scripts now run against a live server and assert on observed behaviour:
 | `test_memory_loop.py` | 18 | Noodles are not remembered; a contradiction becomes a question |
 | `test_personalisation.py` | 8 | One goal, two profiles, two different plans (similarity 0.298) |
 
+| Script | What it proves |
+|---|---|
+| `verify-onboarding.mjs` | The first-run wizard is reachable for a new account, and a new account cannot see anyone else's data (asserted against the API, not a screenshot) |
+| `verify-delivery-ui.mjs` | The delivery loop: state a goal, watch it run, accept or reject the artifact — and a rejection becomes a belief the system then holds |
+| `verify-knowledge-and-memory-ui.mjs` | A task displays the knowledge it is linked to; a memory shows which delivery taught it |
+| `verify-project-view.mjs` | The project view reaches the delivery layer and lists the artifacts the project produced |
+| `verify-skill-ui.mjs` | The Skill tab opens; a real search renders candidates with their reasons; searching installs nothing |
+| `verify-ai-ui.mjs` | The AI Provider settings screen renders its key labels (read-only; it does not change the configuration) |
+| `verify_cold_start.py` | Ten assertions from "nothing is running" to "the data is still there": close everything, relaunch, the numbers on the home page survive |
+| `verify_installer.py` | Install for real, with the development directory moved aside, then run it, register an account and uninstall — and check that user data survived |
+| `verify_installer_static.py` | Everything about the installer that can be checked without starting a process: PE structure, NSIS source, payload contents |
+| `verify_relocation.py` | A copied tree starts when the original directory is hidden — the experiment the installer depends on |
+| `verify_pgsql_trim.py` | The trimmed PostgreSQL still does initdb, start, connect and stop after 800 MB was removed |
+| `verify_deepseek.py` | The whole chain against the real DeepSeek endpoint: provider → AI service → RAG / planner / agent → tools → trace |
+| `verify_preferences.py` | Four preference criteria run for real: a time constraint plus "more pages" / "more charts" / "more detail", each judged on what came out |
+| `verify_recovery.py` | Three recovery scenarios with the event stream as evidence: no retry on success, a different second attempt on failure, a stop instead of burning the run |
+
 ### Two lessons these encode
 
 **Assert on the request, not on the render.** A button whose `onClick` is empty passes
@@ -287,3 +310,12 @@ because that is the claim being made.
 originally stopped everything before each scenario, so it always exercised the "spawn a
 fresh backend" path — and missed that the job object was only created there. A real user
 reopening the app takes the *other* path. Scenario I-3 was added for exactly that.
+
+---
+
+*Checked against the source at `c6bad76` (2026-10-07): the directory conventions, the
+fixture list, the smoke-test group and assertion counts, the assertion counts of the
+eleven scripts in the first table, and the "not covered" list were each compared with
+the implementation. Two corrections came out of it: `backend/alembic/versions/` is no
+longer empty (five revisions), and the verification-script count had grown from eleven
+to twenty-five. The rest of the document was compared item by item and matched.*

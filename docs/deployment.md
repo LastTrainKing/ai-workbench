@@ -12,13 +12,17 @@ Be aware of the following before you start:
 * The supported and verified way to run the stack is the PowerShell scripts under
   `scripts/`. They download native Windows binaries and start them as
   project-scoped processes.
-* **Docker is deliberately not used** on the development machine: Docker Desktop
-  is absent and the Docker Hub registry is unreachable. Consequently a
-  `docker-compose.yml` is **not included in this repository snapshot**, and
-  containerised deployment has **not been verified**. Treat it as new work.
-* **No one-click `start.bat` / `start.sh` is included.** The one-command entry
-  points are `scripts/infra-start.ps1` (infrastructure) and
-  `scripts/dev.ps1 start` (application).
+* **Docker was never run.** The development machine has no Docker installation and
+  its Docker Hub registry endpoint is unreachable, so no container was built or
+  started. A `docker-compose.yml` **is** included at the repository root, and it
+  says so itself in its header: *provided and reviewed, not executed*. Treat
+  containerised deployment as new work and verify it yourself.
+* **One-command entry points do exist**: `start.bat` / `stop.bat` at the repository
+  root, with the implementation under `scripts/` (the root copies are thin wrappers
+  so there is exactly one copy of the logic). They start the whole native stack and
+  prove readiness rather than assuming it. `scripts/dev.ps1 start` remains the
+  developer entry point. `start.sh` / `stop.sh` are the POSIX counterparts; they are
+  **not verified** — see "Windows-only verification" in [testing.md](testing.md).
 * **The frontend is a separate workstream.** A React 18 + Vite 5 + Tailwind
   project lives under `frontend/` and is developed in parallel with the backend;
   this document set focuses on the backend API and AI subsystem, which is complete
@@ -144,8 +148,12 @@ cd backend
 ```
 
 On first boot the API creates any missing tables
-(`Base.metadata.create_all`), seeds the nine prompt templates and creates the
+(`Base.metadata.create_all`), seeds the ten prompt templates and creates the
 demo account **demo / demo1234** if no user exists. All of this is idempotent.
+
+The ten templates are `rag_answer`, `document_summary`, `knowledge_extraction`,
+`task_planner`, `study_plan`, `interview_generator`, `note_generation`,
+`query_rewrite`, `agent_system` and `agent_planner` (`app/ai/prompts/builtin.py`).
 
 Once running:
 
@@ -209,12 +217,12 @@ Full list with defaults. All are read from `.env` (and `backend/.env`) by
 
 | Variable | Default |
 |---|---|
-| `AI_PROVIDER` | openai_compatible (`openai_compatible` \| `ollama` \| `offline`) |
-| `AI_BASE_URL` | `https://api.deepseek.com/v1` |
+| `AI_PROVIDER` | deepseek (`deepseek` \| `openai_compatible` \| `ollama` \| `offline`) |
+| `AI_BASE_URL` | `https://api.deepseek.com` |
 | `AI_API_KEY` | (empty → offline engine) |
-| `AI_MODEL` | deepseek-chat |
+| `AI_MODEL` | deepseek-flash |
 | `AI_TEMPERATURE` | 0.2 |
-| `AI_MAX_TOKENS` | 2048 |
+| `AI_MAX_TOKENS` | 8192 |
 | `AI_TIMEOUT_SECONDS` | 90 |
 | `AI_MAX_RETRIES` | 3 |
 | `AI_BACKOFF_BASE_SECONDS` | 1.0 |
@@ -224,6 +232,11 @@ Full list with defaults. All are read from `.env` (and `backend/.env`) by
 | `EMBEDDING_MODEL` | text-embedding-3-small |
 | `EMBEDDING_BATCH_SIZE` | 16 |
 | `EMBEDDING_TIMEOUT_SECONDS` | 60 |
+
+A DeepSeek key can also be supplied through its own namespace —
+`DEEPSEEK_API_KEY`, `DEEPSEEK_BASE_URL`, `DEEPSEEK_MODEL` — so a DeepSeek
+credential does not have to go into the generic OpenAI-compatible variables. All
+three default to the same values as the generic pair above.
 
 ### RAG / storage / worker / observability
 
@@ -258,11 +271,28 @@ empty `SECRET_KEY`.
 
 ### Port conflicts
 
-If a port is already in use, `infra-start.ps1` reports "already running" for the
-infrastructure (it treats an open port as success) and `dev.ps1` warns
-"`<name>` is not tracked but port N is already in use — skipping". Find the
-owner with `netstat -ano | findstr :8000` and `Get-Process -Id <pid>`, then stop
-it or change the port in `.env`.
+The scripts distinguish "this port is held by our own service" from "this port is
+held by something else", and they say which:
+
+* **Held by our service and answering its probe** — treated as success and skipped.
+  `infra-start.ps1` logs `SKIPPED` with the evidence (`HTTP /healthz 200`, `PONG`,
+  `already serving on <port>`); `dev.ps1` does the same for the API. This is what
+  makes re-running the scripts safe.
+* **Held by something else** — `infra-start.ps1` refuses rather than starting a
+  second copy, and names the port:
+  `Port 5432 is already in use, but it is not this project's PostgreSQL (no live
+  pid in ...\postmaster.pid). Stop it or change PGPORT.`,
+  `Port 6379 is in use but does not answer PING - it is not this project's Redis.`,
+  `Port 6333 is in use but does not answer HTTP /healthz - it is not this
+  project's Qdrant.`
+* **The API side has no ownership probe.** A foreign process on 8000 does not get
+  a specific message; `dev.ps1` tries to start anyway, the child fails to bind, and
+  after the readiness timeout you get
+  `<name> failed to become ready within <N> seconds` followed by the two log paths.
+  If you see that, check the port before reading the log.
+
+Find the owner with `netstat -ano | findstr :8000` and `Get-Process -Id <pid>`, then
+stop it or change the port in `.env`.
 
 ### Missing runtimes
 
@@ -420,7 +450,63 @@ Twelve assertions across three exit scenarios, printing PASS or FAIL with the ev
 that decided it. The script also prints the lifecycle log, so the close path can be
 checked against the log rather than against the script's own conclusion.
 
+### Building the deliverables
+
+Two artefacts ship, and both are built from the working tree — so both are only as
+current as the last build:
+
+```powershell
+# 1. the frontend bundle the API serves
+cd frontend; npm run build
+
+# 2. the native shell (Rust release build, ~2 min incremental)
+cd ..\desktop; npm run build
+
+# 3. the installer: assembles the payload, then compiles it with NSIS (~6 min)
+cd ..; .venv\Scripts\python.exe scripts\build_installer.py --build
+
+# 4. the source archive, from `git ls-files` (so nothing ignored can leak in)
+.venv\Scripts\python.exe scripts\build_delivery_zip.py --output archive\releases\AI-Workbench-<commit>-final.zip
+```
+
+Step 3 must run *after* step 2: `build_installer_payload.py` copies
+`desktop/src-tauri/target/release/ai-workbench-desktop.exe` in as `AI Workbench.exe`,
+and if it is missing the payload assembles without a launcher — producing an
+installer that installs perfectly and cannot start. `build_installer.py` checks for
+it and says so rather than shipping that.
+
+After a rebuild, re-run the acceptance:
+
+```powershell
+.venv\Scripts\python.exe scripts\verify_installer_static.py
+.venv\Scripts\python.exe scripts\verify_installer.py --apply
+```
+
+### Two version numbers, and why they differ
+
+The installer declares **2.1.0** (`installer/ai-workbench.nsi`, also written into the
+exe's version resource) while the Tauri shell declares **2.0.0**
+(`desktop/src-tauri/tauri.conf.json`). They version different things — the shipped
+product release versus the shell binary — and neither is derived from the other, so
+they are not expected to match.
+
+Note also that `tauri build` emits its *own* bundle at
+`desktop/src-tauri/target/release/bundle/nsis/AI Workbench_2.0.0_x64-setup.exe`.
+That is **not** the shipped installer; it is a by-product of building the shell. The
+shipped installer is `build/installer/AI-Workbench-Setup.exe`, compiled from
+`installer/ai-workbench.nsi` by step 3 above.
+
 ### What the installer is not
 
 It still expects the project directory to exist. It is not a self-contained install, and
 saying otherwise would be the kind of claim that falls apart on someone else's machine.
+
+---
+
+*Checked against the source at `c6bad76` (2026-10-07): every script, path, port and
+default named in this document was checked for existence and for agreement with
+`config.py`, `lib.ps1`, `dev.ps1`, `infra-start.ps1` and the installer sources. Five
+corrections came out of it: `docker-compose.yml` and `start.bat`/`start.sh` **do** exist
+(§1 said they did not), there are ten prompt templates rather than nine, four AI
+defaults were wrong, and the port-conflict messages quoted in §9 existed in no script.
+The rest of the document was compared item by item and matched.*

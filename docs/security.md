@@ -94,8 +94,19 @@ and multi-tenant isolation at the infrastructure level.
 * The `calculator` tool uses `safe_eval`, an AST-restricted evaluator that allows
   only arithmetic operators and rejects everything else. Python `eval` is never
   used on user or model input.
-* The agent cannot execute arbitrary code or reach the database; its only write
-  path is the typed tool registry, and each write operation is capped per run.
+* The agent **can** run commands and interpreters — `powershell_exec`, `cmd_exec`,
+  `python_exec`, `node_exec` and `terminal_exec` all exist — but only through the
+  typed tool registry, and only at the level it was granted. Those five belong to
+  the `terminal` capability, which requires **System** level; at the default
+  **Workspace** level they are not refused at call time, they are never built into
+  the registry, so the model is never shown them. A `terminal_exec` call also has
+  its working directory checked with the same path rules as a write.
+* What holds at every level: the command is classified before it runs (medium and
+  high risk prompt in supervised mode, critical prompts in *every* mode including
+  autonomous), output is capped by `max_output_bytes`, a timeout bounds the run,
+  and the invocation is audited whether it was allowed or refused.
+* It still cannot reach the database: no computer tool opens a session, and the
+  business path is untouched — Service → Repository → Database.
 
 ### 2.7 Secret handling and log hygiene (`app/core/logging.py`)
 
@@ -103,7 +114,9 @@ and multi-tenant isolation at the infrastructure level.
 * The log formatter sanitises `extra` keys whose name contains `api_key`,
   `apikey`, `authorization`, `password`, `secret` or `token`, replacing the value
   with `<redacted>`, and truncates any string longer than 500 characters.
-* `_redact` removes the password from the database URL in logs.
+* The database URL is redacted before it is logged — `_redact` in
+  `app/infrastructure/database.py` (not in `logging.py`, where the rest of the
+  hygiene lives) renders the password as `***`.
 * A central guard (`_safe_make_record`) drops reserved keys passed through
   `extra=`, preventing `KeyError: Attempt to overwrite 'message' in LogRecord`.
   This guard exists because a careless `extra={"message": ...}` in an exception
@@ -143,7 +156,18 @@ exposed. The default allow-list is the local dev origins only.
 * Unexpected errors are logged with a stack trace and returned as
   `internal_error`; when `DEBUG=false` the exception detail is not leaked to the
   client. The same applies to `database_error`.
-* No silent `except: pass` is used; every caught exception is logged or re-raised.
+* No bare `except: pass` is used. Most caught exceptions are logged or re-raised.
+  The fallbacks that do exist are deliberate and are named here rather than
+  implied: a malformed password hash is treated as a failed login
+  (`app/core/security.py`), an unparsable id is `None`
+  (`app/repositories/ai_repo.py`), an unserialisable value becomes its `str`
+  (`app/ai/types.py`), a corrupt cache entry is logged and dropped
+  (`app/core/cache.py`). Three broader ones return a fallback instead of
+  re-raising: an unresolvable AI provider counts as "no key configured"
+  (`app/core/config.py`), and an unserialisable build plan or an unparsable step
+  target falls back to an empty payload / a skipped target
+  (`app/services/build_executor.py`). Those three are the shape worth distrusting
+  — to the caller, a fallback and a genuine empty result look identical.
 
 ## 3. This is not a production SaaS
 
@@ -154,7 +178,7 @@ following gaps are real and are not implemented:
 |---|---|
 | **No rate limiting** | A `RateLimitedError` code exists, but no middleware enforces limits. Login, chat, agent and upload endpoints can be hammered. |
 | **No refresh-token rotation** | Only long-lived access tokens (24 h default) exist; there is no refresh token, no revocation list and no server-side session invalidation. Logout is client-side only. |
-| **No audit log** | There is an activity feed and an AI-run trace, but no tamper-evident security audit log of authentication and authorisation events. |
+| **No security audit log** | The agent's tool calls *are* audited — every invocation, allowed or refused, with decision, risk and target, in `tool_audit_log` — but authentication, authorisation, settings and permission changes are not recorded, and nothing is tamper-evident. |
 | **Single-tenant assumptions** | Data is scoped by `owner_id`, but there is no organisation/team model, no roles beyond `is_superuser`, and no admin surface. |
 | **No antivirus / content scanning on uploads** | Files are validated by extension and MIME only; the content is never scanned. |
 | **No HTTPS in the dev setup** | The API binds to `127.0.0.1` over plain HTTP. TLS termination is not provided. |
@@ -227,3 +251,14 @@ model is consulted at all.
 One real defect found here: the patterns used `\b` around the Chinese alternatives, and
 Python's word boundaries are defined against ASCII word characters — so `\b密码\b` never
 matched "我的密码是…". **A safety rule that silently does not fire is worse than no rule.**
+
+---
+
+*Checked against the source at `c6bad76` (2026-10-07): the threat model, the upload
+path, password storage, tenancy, validation, SQL construction, log hygiene, CORS, the
+DoS controls and the gap table were each compared with the implementation. Four
+corrections came out of it: §2.6 claimed the agent cannot execute arbitrary code (it
+can, at System level), `_redact` lives in `app/infrastructure/database.py` rather than
+`logging.py`, the "No audit log" gap ignored the tool audit trail that does exist, and
+the "every caught exception is logged or re-raised" claim overstated three real
+fallbacks. The rest of the document was compared item by item and matched.*

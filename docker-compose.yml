@@ -12,7 +12,7 @@
 # Docker Hub registry endpoint is unreachable, so containers could not be built
 # or started there. Everything else in this repository *was* executed and
 # verified against native PostgreSQL 16.4 / Redis 5 / Qdrant 1.12.4 processes
-# (see FINAL_CHECKLIST.md and docs/deployment.md).
+# (see docs/archive/FINAL_CHECKLIST.md and docs/deployment.md).
 #
 # Treat the compose path as "provided and reviewed, not executed". If you run
 # it, verify it yourself — and please report what you find.

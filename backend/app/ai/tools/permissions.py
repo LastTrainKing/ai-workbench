@@ -45,7 +45,7 @@ logger = get_logger(__name__)
 class PermissionLevel(IntEnum):
     """How much of the machine the agent may reach."""
 
-    OBSERVE = 0  # read files, search, list processes, read the web
+    OBSERVE = 0  # read files, search, list processes, screenshot
     WORKSPACE = 1  # create/modify files, run tests and dev servers in the workspace
     SYSTEM = 2  # shell commands, install dependencies, manage processes, downloads
     FULL_CONTROL = 3  # broad system access; off by default and user-enabled only

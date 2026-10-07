@@ -82,7 +82,7 @@ Chunks are separated by `\n\n---\n\n`.
 The `rag_answer` prompt is rendered with `context`, `question` and `history`
 (the last four history turns, each truncated to 300 characters) and sent as a
 system message with the question as the user message. `temperature` is
-`AI_TEMPERATURE` (0.2) and `max_tokens` is `AI_MAX_TOKENS` (2048).
+`AI_TEMPERATURE` (0.2) and `max_tokens` is `AI_MAX_TOKENS` (8192).
 
 The prompt's hard rules (from `builtin.py`): use only the supplied fragments; put
 a `[n]` marker after each conclusion; if the material is insufficient, say so and
@@ -286,16 +286,72 @@ are constants in code, not configuration.
 * Collection is created lazily with the **actual** embedding dimension, so
   switching between a 1536-dim cloud model and a 384-dim offline embedder needs no
   code change. HNSW is configured with `m=16`, `ef_construct=128`.
-* If the collection exists with a different dimension, a `VectorStoreError`
-  explains how to rebuild (`python -m app.cli reindex --drop`).
+* If the collection exists with a different dimension, a `VectorStoreError` is
+  raised naming both dimensions and the fix: stop the stack, remove
+  `.runtime/qdrant/storage`, start it again so the collection is recreated at the
+  new size, then re-queue the vectors with
+  `python -m app.cli reindex --knowledge-base <id>`. There is no `--drop` switch —
+  `reindex` only queues a job, it never deletes anything.
 * Payload indexes on `knowledge_base_id`, `document_id`, `owner_id` (KEYWORD).
 * Payload schema per point: `chunk_id`, `document_id`, `knowledge_base_id`,
   `owner_id`, `chunk_index`, `heading`, `document_title`, `content` (first 1200
   chars), `embedding_model`.
 * Delete helpers: `delete_points`, `delete_by_document`, `delete_by_knowledge_base`.
 
-## 9. Related documents
+## 9. The retrieval ladder (four tiers, cheapest first)
+
+`app/ai/rag/tiers.py` is not one of the ten stages above — it decides **whether the
+pipeline runs at all**. A question a stored fact, a known procedure or a document in
+the user's own library can answer never reaches the reasoning path. That, and not a
+faster model, is where "faster than a general assistant" comes from.
+
+| # | Tier | Judged by |
+|---|---|---|
+| 1 | `memory` | term overlap ≥ `MIN_TERM_OVERLAP` (1) against the user's memory entries |
+| 2 | `skill` | `find_matching_skills` over the installed skills (`when_to_use`) |
+| 3 | `knowledge` | hybrid retrieval, top chunk's combined relevance ≥ `RELEVANCE_FLOOR` |
+| 4 | `general` | always hits — reasoning, tools, possibly the network |
+
+`resolve()` walks them in order and **stops at the first hit**. Stopping early *is*
+the optimisation: asking all four every time would make the measurement meaningless.
+
+Tier 3's floor is measured rather than chosen. `RELEVANCE_FLOOR = 1.693` was
+calibrated by `scripts/sample_relevance.py`, which samples two populations — eight
+questions the library genuinely covers, six plausible ones it does not — and prints
+every candidate signal for both. The score that survived is
+`max(vector_score / 0.15, keyword_score / 2.0)`: both terms are *absolute*, and the
+two earlier attempts failed precisely because their signal was normalised against
+the returned set, so its top value stayed high whether or not anything matched. The
+margin is 0.14 on fourteen samples — narrow, and stated rather than smoothed over.
+**If the corpus or the embedding model changes, re-measure before trusting it.**
+
+Two rules the tiers enforce rather than merely document:
+
+* **A miss is reported as a miss.** Tier 4 is not a fallback pretending the first
+  three were never asked: the result carries every attempt and what each said. A
+  retrieval that *failed* is reported as `检索失败：<error>`, never as "no material"
+  — "I could not look" and "I have nothing" are different answers.
+* **Tier 2 distinguishes "not built" from "nothing matched".** `SKILL_LAYER_BUILT`
+  exists so that an empty list cannot mean two things at once.
+
+`scripts/measure_tiers.py` times each tier; `scripts/sample_relevance.py` measures
+the floor. The measured milliseconds, the two failed threshold attempts and the
+per-tier reasoning are in [../RETRIEVAL.md](../RETRIEVAL.md) (Chinese).
+
+## 10. Related documents
 
 * [ai.md](ai.md) — providers, prompts, tracing
 * [database.md](database.md) — `document_chunks`, `ai_run_sources`
+* [../RETRIEVAL.md](../RETRIEVAL.md) — the retrieval ladder in full: timings, the two
+  failed thresholds, and how "did it answer?" is decided
 * [../docs/thesis/07-AI模块设计.md](thesis/07-AI模块设计.md) — the Chinese design chapter
+
+---
+
+*Checked against the source at `c6bad76` (2026-10-07): the ten stages, the chunker
+parameters, the hybrid retrieval weights and ranking window, the reranker, the
+degradation paths, the embedding service and the vector-store schema were each compared
+with the implementation. Three corrections came out of it: `AI_MAX_TOKENS` is 8192, the
+`reindex --drop` flag this document told you to use does not exist, and the four-tier
+retrieval ladder was not documented at all. The rest of the document was compared item
+by item and matched.*
