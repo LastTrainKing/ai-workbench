@@ -6,6 +6,31 @@ Say what you want done. It plans, uses tools on your own machine — files, code
 terminal, documents — verifies the result against real evidence, and fixes what failed.
 Every action is permission-gated, auditable, and reversible.
 
+## The difference
+
+**Other assistants are strong at capability, and hand the same thing to everyone.**
+This one is strong at *not starting from zero when it works for you* — because it carries
+three things about you into every job:
+
+```
+① 记忆      what is true about you    backend/app/ai/memory/     → MEMORY.md
+② 知识库    what you have             backend/app/ai/knowledge/  → RAG.md
+③ Skill     how you work              backend/app/ai/skills/     → SKILL.md
+        ↓ combined
+   your work, done your way — faster, and not generic
+```
+
+It does not wait for you to teach it. **On the first day it goes out to public sources,
+finds ways of working that fit you, verifies them, and asks which to install** — so a new
+account has a library rather than an empty page.
+
+And it does not start reasoning when it does not have to. A question your own memory can
+answer is answered from memory in **1.6 ms** instead of going to the model — **15.5× faster
+at the retrieval layer** than the general path. Measured, not asserted: see
+[RETRIEVAL.md](RETRIEVAL.md).
+
+---
+
 It is not a chat wrapper, and it is not a dashboard. It closes one loop:
 
 ```
