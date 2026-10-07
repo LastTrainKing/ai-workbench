@@ -15,6 +15,8 @@ So these tests assert the properties that make a retry a retry:
 
 from __future__ import annotations
 
+import uuid
+
 import pytest
 
 from app.ai.agent import autonomous as module
@@ -146,7 +148,7 @@ class FakeRegistry:
 
 def build_agent(*, llm, registry, max_retries=3, max_tool_calls=100, tmp_path=None):
     policy = AgentPolicy.from_settings(level=2, max_retries=max_retries, max_tool_calls=max_tool_calls)
-    controller = RunController(run_id="test-run")
+    controller = RunController(run_id="test-run", owner_id=uuid.uuid4())
     agent = AutonomousAgent(
         llm=llm,
         registry=registry,

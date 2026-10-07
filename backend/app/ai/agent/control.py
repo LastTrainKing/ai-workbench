@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+import uuid
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -45,6 +46,11 @@ class RunController:
     """Owns the live state of one autonomous run."""
 
     run_id: str
+    #: Whose run this is. Required, and not defaulted: `GET /agent/runs` used to
+    #: return every run in the process to every authenticated caller, because the
+    #: controller had no idea who started it. A default of None would let that
+    #: bug come back silently, so callers have to say.
+    owner_id: uuid.UUID
     state: RunState = RunState.PLANNING
     plan: ExecutionPlan | None = None
     events: list[RunEvent] = field(default_factory=list)
@@ -187,8 +193,8 @@ class RunRegistry:
     def __init__(self) -> None:
         self._runs: dict[str, RunController] = {}
 
-    def create(self, run_id: str) -> RunController:
-        controller = RunController(run_id=run_id)
+    def create(self, run_id: str, owner_id: uuid.UUID) -> RunController:
+        controller = RunController(run_id=run_id, owner_id=owner_id)
         self._runs[run_id] = controller
         return controller
 
@@ -203,6 +209,14 @@ class RunRegistry:
 
     def all(self) -> list[RunController]:
         return list(self._runs.values())
+
+    def owned_by(self, owner_id: uuid.UUID) -> list[RunController]:
+        """Only this user's runs.
+
+        The registry is process-wide, but a run belongs to the person who started
+        it. Returning `all()` to a caller was how one account saw another's runs.
+        """
+        return [c for c in self._runs.values() if c.owner_id == owner_id]
 
 
 _registry: RunRegistry | None = None

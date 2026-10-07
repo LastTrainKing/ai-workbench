@@ -244,7 +244,7 @@ async def start_run(
     )
     await recorder.attach_agent_run(goal=goal, max_steps=policy.max_tool_calls)
 
-    controller = get_run_registry().create(recorder.run_id)
+    controller = get_run_registry().create(recorder.run_id, owner_id)
     controller.emit("state", message="任务已接收", state=RunState.PLANNING.value)
 
     task = asyncio.create_task(
@@ -357,8 +357,14 @@ async def rollback_run(run_id: str, *, force: bool = False) -> dict[str, Any]:
     return await asyncio.to_thread(manager.restore, snapshot, force=force)
 
 
-def active_runs() -> list[dict[str, Any]]:
-    return [c.as_dict() for c in get_run_registry().all()]
+def active_runs(owner_id: uuid.UUID) -> list[dict[str, Any]]:
+    """The runs this user is currently being driven for them.
+
+    Scoped by owner on purpose. The registry is process-wide, so an unscoped
+    listing handed every user everyone else's active runs — the isolation test
+    caught it (a brand-new account saw 14 runs belonging to `demo`).
+    """
+    return [c.as_dict() for c in get_run_registry().owned_by(owner_id)]
 
 
 __all__ = [

@@ -50,6 +50,28 @@ class SnapshotRequest(BaseModel):
 
 
 # --------------------------------------------------------------------------- #
+# Ownership
+# --------------------------------------------------------------------------- #
+def _owned_controller(run_id: str, user: CurrentUser) -> Any:
+    """The live controller for ``run_id``, but only if it is this user's run.
+
+    The registry is process-wide and in-memory, so every by-id endpoint here was
+    reachable by anyone who knew or guessed a run id: read its plan, stream its
+    events, pause it, cancel it, or roll its workspace back. `user` was already a
+    parameter on all of them and was never used.
+
+    Not-found and not-yours are deliberately the same error. Distinguishing them
+    would confirm that a run id exists to a caller who has no right to know.
+    """
+    from app.services.autonomous_service import get_controller
+
+    controller = get_controller(run_id)
+    if controller is None or controller.owner_id != user.id:
+        raise ValidationError("该运行不在本进程中（可能已结束或服务已重启）")
+    return controller
+
+
+# --------------------------------------------------------------------------- #
 # Runs
 # --------------------------------------------------------------------------- #
 @router.post("/runs", summary="Start an autonomous run and return immediately")
@@ -78,28 +100,23 @@ async def start_autonomous_run(
 async def list_active_runs(user: CurrentUser) -> dict[str, Any]:
     from app.services.autonomous_service import active_runs
 
-    runs = active_runs()
+    # `user` is not decorative here. The registry holds every run in the process,
+    # so an unfiltered listing showed one account the runs another account had
+    # started — a brand-new user saw 14 runs that were not theirs.
+    runs = active_runs(user.id)
     return ok({"runs": runs, "count": len(runs)})
 
 
 @router.get("/runs/{run_id}", summary="Live state, plan and counters")
 async def get_run_state(run_id: str, user: CurrentUser) -> dict[str, Any]:
-    from app.services.autonomous_service import get_controller
-
-    controller = get_controller(run_id)
-    if controller is None:
-        raise ValidationError("该运行不在本进程中（可能已结束或服务已重启）")
+    controller = _owned_controller(run_id, user)
     return ok(controller.as_dict())
 
 
 @router.get("/runs/{run_id}/events", summary="Incremental event stream")
 async def get_run_events(run_id: str, user: CurrentUser, since: int = 0) -> dict[str, Any]:
     """Events after ``since``, so the UI can poll without re-rendering history."""
-    from app.services.autonomous_service import get_controller
-
-    controller = get_controller(run_id)
-    if controller is None:
-        raise ValidationError("该运行不在本进程中")
+    controller = _owned_controller(run_id, user)
     events = controller.events_since(since)
     return ok(
         {
@@ -114,11 +131,7 @@ async def get_run_events(run_id: str, user: CurrentUser, since: int = 0) -> dict
 
 @router.get("/runs/{run_id}/plan", summary="The execution plan")
 async def get_run_plan(run_id: str, user: CurrentUser) -> dict[str, Any]:
-    from app.services.autonomous_service import get_controller
-
-    controller = get_controller(run_id)
-    if controller is None:
-        raise ValidationError("该运行不在本进程中")
+    controller = _owned_controller(run_id, user)
     if controller.plan is None:
         return ok({"available": False, "message": "计划尚未生成"})
     return ok({"available": True, **controller.plan.as_dict()})
@@ -133,6 +146,7 @@ async def pause_run(run_id: str, user: CurrentUser) -> dict[str, Any]:
     """
     from app.services.autonomous_service import control
 
+    _owned_controller(run_id, user)
     result = control(run_id, "pause")
     if not result["ok"]:
         raise ValidationError(result["message"])
@@ -143,6 +157,7 @@ async def pause_run(run_id: str, user: CurrentUser) -> dict[str, Any]:
 async def resume_run(run_id: str, user: CurrentUser) -> dict[str, Any]:
     from app.services.autonomous_service import control
 
+    _owned_controller(run_id, user)
     result = control(run_id, "resume")
     if not result["ok"]:
         raise ValidationError(result["message"])
@@ -159,6 +174,7 @@ async def cancel_run(run_id: str, user: CurrentUser) -> dict[str, Any]:
     """
     from app.services.autonomous_service import control
 
+    _owned_controller(run_id, user)
     result = control(run_id, "cancel")
     if not result["ok"]:
         raise ValidationError(result["message"])
@@ -169,6 +185,7 @@ async def cancel_run(run_id: str, user: CurrentUser) -> dict[str, Any]:
 async def get_run_diff(run_id: str, user: CurrentUser, unified: bool = False) -> dict[str, Any]:
     from app.services.autonomous_service import diff_for_run
 
+    _owned_controller(run_id, user)
     return ok(await diff_for_run(run_id, unified=unified))
 
 
@@ -179,6 +196,7 @@ async def rollback_run_endpoint(
     """Refuses to clobber edits made after the run unless ``force`` is set."""
     from app.services.autonomous_service import rollback_run
 
+    _owned_controller(run_id, user)
     result = await rollback_run(run_id, force=payload.force)
     return ok(result, message=result.get("message", ""))
 
