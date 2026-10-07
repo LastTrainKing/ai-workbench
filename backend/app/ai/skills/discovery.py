@@ -20,6 +20,7 @@ Two things this module is careful about:
 
 from __future__ import annotations
 
+import base64
 import re
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -35,7 +36,6 @@ logger = get_logger(__name__)
 
 GITHUB_SEARCH = "https://api.github.com/search/code"
 GITHUB_REPO = "https://api.github.com/repos"
-GITHUB_RAW = "https://raw.githubusercontent.com"
 
 #: GitHub's code search needs a token and is rate-limited hard without one. Repo search is
 #: open, so discovery starts there and only reaches for file contents when it can.
@@ -200,28 +200,131 @@ async def search_github(
     return candidates
 
 
+async def resolve_commit(repo: str, *, permissions: Any = None, token: str = "") -> str:
+    """The commit SHA at the tip of a repository's default branch.
+
+    `ref="HEAD"` is not a commit hash — it is a moving pointer, and a skill recorded
+    against it cannot be reproduced, because the next fetch may return different content.
+    The product's rule is that the source must be traceable and reproducible, so the SHA
+    is resolved and recorded.
+
+    Returns an empty string when it cannot be resolved. That is deliberate and it is the
+    honest value: a caller that needs the SHA can see it is missing, whereas a fallback to
+    `"HEAD"` would look like a recorded commit and be nothing of the kind.
+    """
+    url = f"{GITHUB_REPO}/{repo}"
+    try:
+        await _authorise(permissions, url)
+    except PermissionDeniedError:
+        return ""
+
+    headers = {"Accept": "application/vnd.github+json", "User-Agent": USER_AGENT}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+
+    try:
+        async with httpx.AsyncClient(timeout=20) as client:
+            # Two calls, because the repository endpoint returns the branch *name*
+            # (`default_branch`), not a commit. The first version read a
+            # `default_branch_sha` field that does not exist, which would have produced an
+            # empty string and been recorded as "no commit" — a missing value that looks
+            # like an honest gap rather than a wrong lookup.
+            repo_response = await client.get(url, headers=headers)
+            if repo_response.status_code >= 400:
+                logger.warning(
+                    "commit_resolve_http", extra={"repo": repo, "status": repo_response.status_code}
+                )
+                return ""
+            branch = repo_response.json().get("default_branch") or "main"
+
+            commit_response = await client.get(
+                f"{GITHUB_REPO}/{repo}/commits/{branch}", headers=headers
+            )
+            if commit_response.status_code >= 400:
+                logger.warning(
+                    "commit_resolve_http",
+                    extra={"repo": repo, "branch": branch, "status": commit_response.status_code},
+                )
+                return ""
+            return str(commit_response.json().get("sha") or "")
+    except httpx.HTTPError as exc:
+        logger.warning("commit_resolve_failed", extra={"repo": repo, "error": _describe(exc, url)})
+        return ""
+
+
+def _describe(exc: Exception, url: str) -> str:
+    """A network error with a message, always.
+
+    `httpx.ConnectError` stringifies to the empty string, so logging `str(exc)` produced a
+    record that said nothing at all — which is nearly as bad as swallowing it. The type and
+    the URL are the two things that make it actionable.
+    """
+    detail = str(exc).strip()
+    return f"{type(exc).__name__} to {url}" + (f": {detail}" if detail else " (no message from httpx)")
+
+
 async def fetch_skill_file(
-    repo: str, path: str, *, ref: str = "HEAD", permissions: Any = None, token: str = ""
+    repo: str, path: str, *, ref: str = "", permissions: Any = None, token: str = ""
 ) -> tuple[Skill, list[str]] | None:
     """Fetch one skill file and parse it.
 
     Returns None when the file is not a skill this system can use, so the caller can count
     it as dropped rather than as an error.
+
+    `ref` defaults to the resolved commit SHA rather than `"HEAD"`. When it cannot be
+    resolved the fetch still runs, and `source_commit` is left empty — visibly missing
+    rather than filled with a pointer that looks like a hash.
     """
-    url = f"{GITHUB_RAW}/{repo}/{ref}/{path}"
+    commit = ref or await resolve_commit(repo, permissions=permissions, token=token)
+
+    # Fetched through the Contents API on `api.github.com`, not from
+    # `raw.githubusercontent.com`.
+    #
+    # Measured, because the first version used the raw host and failed:
+    #
+    #     https://raw.githubusercontent.com/...  -> HTTP 000 (unreachable)
+    #     https://api.github.com/repos/...       -> HTTP 200
+    #
+    # The raw host is not reachable from this environment at all, so every fetch failed
+    # while every search succeeded — a combination that looks like "the files are missing"
+    # rather than "one host is blocked". The API host is the one that works, and it returns
+    # the content base64-encoded with the blob SHA, which is better provenance anyway.
+    url = f"{GITHUB_REPO}/{repo}/contents/{path}"
+    if commit:
+        url += f"?ref={commit}"
     await _authorise(permissions, url)
 
-    headers = {"User-Agent": USER_AGENT}
+    headers = {"Accept": "application/vnd.github+json", "User-Agent": USER_AGENT}
     if token:
         headers["Authorization"] = f"Bearer {token}"
 
-    async with httpx.AsyncClient(timeout=20, follow_redirects=True) as client:
-        response = await client.get(url, headers=headers)
+    try:
+        async with httpx.AsyncClient(timeout=20, follow_redirects=True) as client:
+            response = await client.get(url, headers=headers)
+    except httpx.HTTPError as exc:
+        # Reported, not turned into None. "Could not reach it" and "it is not a skill" are
+        # different facts, and collapsing them is how a network failure becomes invisible.
+        raise ValidationError(f"抓取失败：{_describe(exc, url)}") from exc
+
     if response.status_code >= 400:
         return None
 
+    payload = response.json()
+    if isinstance(payload, list):
+        # A directory, not a file. Not a skill.
+        return None
+    encoded = payload.get("content") or ""
+    try:
+        text = base64.b64decode(encoded).decode("utf-8", errors="replace")
+    except (ValueError, TypeError) as exc:
+        raise ValidationError(f"仓库返回的内容无法解码：{exc}") from exc
+
+    # The blob SHA identifies the exact bytes fetched, which the branch tip does not when
+    # the file has changed since. Recorded when present.
+    blob_sha = str(payload.get("sha") or "")
+
     skill, validation = parse_skill(
-        response.text, source=f"https://github.com/{repo}", source_commit=ref
+        text, source=f"https://github.com/{repo}", source_commit=commit or blob_sha
     )
     return skill, validation.errors + validation.warnings
 
