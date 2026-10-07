@@ -13,8 +13,17 @@
 
 工作区：`C:\Users\user\Desktop\ai-workbench`
 
-**本轮任务书（完整要求在这里，逐条执行）：**
-`docs/prompts/05-第五轮.md`
+**当前状态（`a686fbd`）：** 第 3–6 步完成并验证，第 7 步完成，第 8 步自检与交付重建完成。
+**权威断点在 `PROGRESS.md`**，不是这份文件——它以最新一次会话的实际结果为准。
+
+**三层资产：**
+```
+① 记忆    backend/app/ai/memory/     事实        → MEMORY.md
+② 知识库  backend/app/services/      资料        → RAG.md
+③ Skill   backend/app/ai/skills/     做法        → SKILL.md
+              ↓ 组合
+   按你的方式完成你的事 —— 检索阶梯见 RETRIEVAL.md
+```
 
 ---
 
