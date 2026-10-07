@@ -83,14 +83,55 @@ function Start-Postgres {
             }
 
             Write-StartupLog -Service 'PostgreSQL' -State 'STARTING' -Detail "port $PgPort"
-            # postgres.exe is launched directly instead of `pg_ctl start`: on
-            # Windows pg_ctl keeps a handle on the inherited stdout pipe, which
-            # makes a non-interactive shell block until the server exits.
-            Start-Process -FilePath (Join-Path $PgHome 'bin\postgres.exe') `
-                -ArgumentList (ConvertTo-ProcessArgumentList @('-D', $PgData, '-p', "$PgPort", '-c', 'listen_addresses=127.0.0.1')) `
-                -WorkingDirectory $PgHome -WindowStyle Hidden `
-                -RedirectStandardOutput (Join-Path $LogDir 'postgres.out.log') `
-                -RedirectStandardError (Join-Path $LogDir 'postgres.err.log')
+            if (Test-IsElevated) {
+                # postgres.exe refuses to run with an elevated token, and Start-Process
+                # cannot drop privileges. `runas /trustlevel:0x20000` re-launches it with
+                # a restricted (Basic User) token, no password prompt. The helper
+                # recomputes every path from the same lib.ps1, so there is nothing to
+                # quote through `runas`'s single command string.
+                #
+                # Without this, launching the stack from an elevated shell fails at
+                # PostgreSQL with "port 5432 never opened" and the real reason is only
+                # in postgres.err.log.
+                Write-Warn2 'Elevated shell detected - starting PostgreSQL with a restricted token'
+                $helper = Join-Path $PSScriptRoot '_start-postgres.ps1'
+                # Absolute paths for both executables. The desktop host launches this
+                # script with an environment it controls, and `powershell.exe` and
+                # `runas.exe` are not guaranteed to be on its PATH — a bare name failed
+                # there with `runas exit 1`, which said nothing about the cause.
+                $runas = Join-Path $env:SystemRoot 'System32\runas.exe'
+                if (-not (Test-Path $runas)) { $runas = 'runas.exe' }
+                $shell = Join-Path $PSHOME 'powershell.exe'
+                if (-not (Test-Path $shell)) { $shell = 'powershell.exe' }
+                $payload = "`"$shell`" -NoProfile -ExecutionPolicy Bypass -File `"$helper`""
+
+                $launchOutput = & $runas /trustlevel:0x20000 $payload 2>&1
+                $launchExit = $LASTEXITCODE
+                if ($launchExit -ne 0) {
+                    # Recorded rather than swallowed: `runas` explains itself on stdout,
+                    # and losing that text is how a one-line failure became a mystery.
+                    $detail = ($launchOutput | Out-String).Trim()
+                    Write-StartupLog -Service 'PostgreSQL' -State 'FAILED' `
+                        -Detail "runas exit $launchExit $detail"
+                    Write-Warn2 "restricted-token launch failed ($launchExit): $detail"
+                    Write-Warn2 'falling back to a direct launch - if this shell is genuinely elevated it will fail too, and postgres.err.log will say so'
+                    Start-Process -FilePath (Join-Path $PgHome 'bin\postgres.exe') `
+                        -ArgumentList (ConvertTo-ProcessArgumentList @('-D', $PgData, '-p', "$PgPort", '-c', 'listen_addresses=127.0.0.1')) `
+                        -WorkingDirectory $PgHome -WindowStyle Hidden `
+                        -RedirectStandardOutput (Join-Path $LogDir 'postgres.out.log') `
+                        -RedirectStandardError (Join-Path $LogDir 'postgres.err.log')
+                }
+            }
+            else {
+                # postgres.exe is launched directly instead of `pg_ctl start`: on
+                # Windows pg_ctl keeps a handle on the inherited stdout pipe, which
+                # makes a non-interactive shell block until the server exits.
+                Start-Process -FilePath (Join-Path $PgHome 'bin\postgres.exe') `
+                    -ArgumentList (ConvertTo-ProcessArgumentList @('-D', $PgData, '-p', "$PgPort", '-c', 'listen_addresses=127.0.0.1')) `
+                    -WorkingDirectory $PgHome -WindowStyle Hidden `
+                    -RedirectStandardOutput (Join-Path $LogDir 'postgres.out.log') `
+                    -RedirectStandardError (Join-Path $LogDir 'postgres.err.log')
+            }
         }
     }
 
