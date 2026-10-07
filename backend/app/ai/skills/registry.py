@@ -25,11 +25,13 @@ from __future__ import annotations
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.ai.skills.sandbox import run_in_sandbox, verdict
 from app.ai.skills.scanner import scan_skill
 from app.ai.skills.schema import Skill, SkillParam
 from app.core.logging import get_logger
@@ -166,11 +168,19 @@ async def adopt(
     skill: Skill,
     confirmed: bool,
     param_values: dict[str, str] | None = None,
+    workspace: Path | None = None,
 ) -> InstalledSkill:
-    """Store a skill for this user — but only if a person said yes and the scan passed.
+    """Store a skill for this user — but only if a person said yes and every gate passed.
 
-    Both gates are here, together, because they are the two things that must not be
-    bypassable. Split across call sites is how one of them eventually gets skipped.
+    Three gates now, and they are all here, together, because they are the things that
+    must not be bypassable. Split across call sites is how one of them eventually gets
+    skipped.
+
+    For a **script-type** skill the third gate is the sandbox: the script is run once
+    somewhere disposable and does not become usable unless it exited zero and touched
+    nothing outside its own directory. `workspace` is the directory to protect; when it is
+    not given, a script-type skill is refused rather than admitted untested, because
+    **an unverified skill is worse than no skill** — it will be used.
     """
     if not confirmed:
         # Not a warning. The assess stage exists so a person chooses; a skill that
@@ -183,6 +193,23 @@ async def adopt(
 
     if not skill.source:
         raise AdoptionRefused(["缺少来源，无法追溯，不允许入库"])
+
+    sandbox_record: dict[str, Any] = {}
+    if skill.is_scripted:
+        if workspace is None:
+            raise AdoptionRefused(
+                ["脚本型 skill 必须先过沙箱；没有给出要保护的目录，不能验证，因此不允许入库"]
+            )
+        if not skill.scripts:
+            raise AdoptionRefused(["声明为脚本型但没有脚本内容，无法验证"])
+
+        # Every script is run, not just the first: a skill that ships three and hides the
+        # problem in the third would otherwise be admitted on the strength of the other two.
+        for index, script in enumerate(skill.scripts, start=1):
+            result = await run_in_sandbox(script, workspace=workspace)
+            sandbox_record[f"script_{index}"] = result.as_dict()
+            if not result.clean:
+                raise AdoptionRefused([f"脚本 #{index} 未通过沙箱：{verdict(result)}"])
 
     values = param_values or {}
     rendered = bind_params(skill.body, skill.params, values)
@@ -229,6 +256,9 @@ async def adopt(
         ],
         "summary": scan.summary(),
         "unfilled_params": unfilled_params(skill.body, skill.params, values),
+        # For a script-type skill, the exit code and the escape check. Empty for a
+        # document-type skill, because those are not executed.
+        "sandbox": sandbox_record,
     }
     row.status = "active"
     row.enabled = True

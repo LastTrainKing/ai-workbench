@@ -289,12 +289,121 @@ async def test_adopting_the_same_skill_twice_updates_rather_than_duplicates(
     assert stored[0].version == "2.0.0"
 
 
-async def test_script_skill_keeps_its_type(session: AsyncSession) -> None:
+async def test_script_skill_keeps_its_type(session: AsyncSession, tmp_path) -> None:
     """`is_scripted` is what the rest of the system branches on when deciding whether to
-    sandbox, so the type has to survive storage."""
+    sandbox, so the type has to survive storage.
+
+    This now needs a workspace, because a script-type skill cannot be adopted without
+    being run first — the gate added after this test was written caught it, which is the
+    gate doing its job rather than the test being wrong.
+    """
     skill = make_skill()
-    skill.scripts = ["import csv\nprint('ok')"]
+    skill.scripts = ["print('ok')"]
     skill.skill_type = SkillType.SCRIPT
-    row = await adopt(session, user_id=await make_user(session), skill=skill, confirmed=True)
+    row = await adopt(
+        session, user_id=await make_user(session), skill=skill, confirmed=True, workspace=tmp_path
+    )
     assert row.skill_type == "script"
     assert row.scripts
+
+
+# ------------------------------------------------------------- the sandbox gate --
+
+
+async def test_a_script_skill_without_a_workspace_is_refused(session: AsyncSession) -> None:
+    """`adopt()` without a directory to protect cannot verify a script, so it refuses
+    rather than admitting it untested. An unverified skill is worse than no skill,
+    because it will be used."""
+    skill = make_skill()
+    skill.scripts = ["print('hello')"]
+    skill.skill_type = SkillType.SCRIPT
+
+    with pytest.raises(AdoptionRefused) as excinfo:
+        await adopt(session, user_id=await make_user(session), skill=skill, confirmed=True)
+    assert any("沙箱" in r for r in excinfo.value.reasons)
+
+
+async def test_a_working_script_skill_is_admitted_and_records_its_exit_code(
+    session: AsyncSession, tmp_path
+) -> None:
+    skill = make_skill()
+    skill.scripts = ["print('ok')"]
+    skill.skill_type = SkillType.SCRIPT
+
+    row = await adopt(
+        session,
+        user_id=await make_user(session),
+        skill=skill,
+        confirmed=True,
+        workspace=tmp_path,
+    )
+    record = row.verification["sandbox"]["script_1"]
+    assert record["exit_code"] == 0
+    assert record["ran"] is True
+    assert record["clean"] is True
+    assert record["snapshot_id"], "运行前必须建快照"
+
+
+async def test_a_failing_script_skill_is_refused(session: AsyncSession, tmp_path) -> None:
+    """Exit code is the evidence. A script that does not run cleanly does not become
+    usable, however good its prompt looks."""
+    skill = make_skill()
+    skill.scripts = ["raise SystemExit(1)"]
+    skill.skill_type = SkillType.SCRIPT
+
+    with pytest.raises(AdoptionRefused) as excinfo:
+        await adopt(
+            session,
+            user_id=await make_user(session),
+            skill=skill,
+            confirmed=True,
+            workspace=tmp_path,
+        )
+    assert any("exit code 1" in r for r in excinfo.value.reasons)
+
+
+async def test_an_escaping_script_skill_is_refused(session: AsyncSession, tmp_path) -> None:
+    """The acceptance case at the gate: a script that writes outside is caught, rolled
+    back, and refused."""
+    escaped = tmp_path / "escaped.txt"
+    skill = make_skill()
+    skill.scripts = [
+        f"from pathlib import Path\nPath(r'{escaped}').write_text('x', encoding='utf-8')\n"
+    ]
+    skill.skill_type = SkillType.SCRIPT
+
+    with pytest.raises(AdoptionRefused) as excinfo:
+        await adopt(
+            session,
+            user_id=await make_user(session),
+            skill=skill,
+            confirmed=True,
+            workspace=tmp_path,
+        )
+    assert any("越界" in r for r in excinfo.value.reasons)
+    assert not escaped.exists(), "回滚之后那个文件不能还在"
+
+
+async def test_every_script_is_run_not_only_the_first(session: AsyncSession, tmp_path) -> None:
+    """A skill that ships three scripts and hides the problem in the third would otherwise
+    be admitted on the strength of the other two."""
+    skill = make_skill()
+    skill.scripts = ["print('fine')", "raise SystemExit(2)"]
+    skill.skill_type = SkillType.SCRIPT
+
+    with pytest.raises(AdoptionRefused) as excinfo:
+        await adopt(
+            session,
+            user_id=await make_user(session),
+            skill=skill,
+            confirmed=True,
+            workspace=tmp_path,
+        )
+    assert any("脚本 #2" in r for r in excinfo.value.reasons)
+
+
+async def test_a_document_skill_is_not_sandboxed(session: AsyncSession) -> None:
+    """Document-type skills are not executed, so running them would be theatre. They are
+    admitted with no workspace and no sandbox record."""
+    row = await adopt(session, user_id=await make_user(session), skill=make_skill(), confirmed=True)
+    assert row.verification["sandbox"] == {}

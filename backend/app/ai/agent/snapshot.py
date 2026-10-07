@@ -340,7 +340,13 @@ class WorkspaceSnapshotManager:
                 )
         for path in sorted(current):
             if path not in before:
-                entries.append(DiffEntry(path=path, change="added", after_size=entry.size))
+                # `current[path]`, not the `entry` left over from the loop above. Using
+                # the stale variable reported a newly added file with the size of
+                # whichever file happened to be visited last, which is a wrong number
+                # rather than a missing one — the harder kind to notice.
+                entries.append(
+                    DiffEntry(path=path, change="added", after_size=current[path].size)
+                )
 
         summary = {
             "added": sum(1 for e in entries if e.change == "added"),
