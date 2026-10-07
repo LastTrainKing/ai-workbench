@@ -60,6 +60,40 @@ class ProfileUpdate(BaseModel):
     onboarded: bool | None = None
 
 
+class CleanupGroupRequest(BaseModel):
+    """One duplicate group, as the user was shown it."""
+
+    keep_id: str
+    merge: list[str] = Field(default_factory=list)
+    why: str = ""
+
+
+class CleanupLitterRequest(BaseModel):
+    id: str
+    why: str = ""
+
+
+class CleanupCandidateGroupRequest(BaseModel):
+    """A group of pending candidates that say the same thing."""
+
+    keep_id: str
+    merge: list[str] = Field(default_factory=list)
+    why: str = ""
+
+
+class CleanupApplyRequest(BaseModel):
+    """The plan the user approved, by id.
+
+    Ids rather than whole rows: the client sends back what it was shown, and every id
+    is checked against this user's own rows before anything is touched.
+    """
+
+    duplicate_groups: list[CleanupGroupRequest] = Field(default_factory=list)
+    candidate_groups: list[CleanupCandidateGroupRequest] = Field(default_factory=list)
+    litter: list[CleanupLitterRequest] = Field(default_factory=list)
+    total_before: int = 0
+
+
 class MemoryCreate(BaseModel):
     content: str = Field(min_length=1, max_length=2000)
     kind: str = "fact"
@@ -269,6 +303,74 @@ async def reject_candidate(
     if not await evaluator.reject(candidate_id):
         raise NotFoundError("候选不存在")
     return ok({"rejected": str(candidate_id)}, message="已拒绝")
+
+
+# --------------------------------------------------------------------------- #
+# One-time cleanup
+# --------------------------------------------------------------------------- #
+@router.post("/memory-cleanup/plan", summary="What a cleanup would do — writes nothing")
+async def memory_cleanup_plan(user: CurrentUser, session: DbSession) -> dict[str, Any]:
+    """Compute the cleanup and return it for review.
+
+    **Nothing is changed here**, and that is the point: the plan names every row it
+    would merge or delete, with the reason, so the user reads it before it happens.
+    The rule is 「先给用户看、再删」 — memory is the user's, and a deletion they did not
+    see is not a cleanup, it is the system editing their idea of themselves.
+
+    `POST` rather than `GET` because it costs a model call: which rows are the same
+    fact is decided by the model, not by a threshold. See `similarity.py` for the
+    measurement that ruled the threshold out.
+    """
+    from app.ai.memory.cleanup import plan_cleanup
+    from app.ai.providers.factory import build_llm_provider
+
+    llm, _info = build_llm_provider()
+    plan = await plan_cleanup(session, user_id=user.id, llm=llm)
+    return ok(plan.as_dict(), message=plan.note)
+
+
+@router.post("/memory-cleanup/apply", summary="Execute a cleanup the user has seen")
+async def memory_cleanup_apply(
+    payload: CleanupApplyRequest, user: CurrentUser, session: DbSession
+) -> dict[str, Any]:
+    """Execute the plan, by id.
+
+    The client sends back the ids it was shown rather than a plan it invented, and
+    every id is checked against this user's rows before anything happens — so this
+    endpoint cannot be used to merge or delete something the user was never shown.
+    """
+    from app.ai.memory.cleanup import CandidateGroup, CleanupPlan, DuplicateGroup, apply_cleanup
+
+    plan = CleanupPlan(total_before=payload.total_before)
+    for group in payload.duplicate_groups:
+        plan.duplicates.append(
+            DuplicateGroup(
+                keep_id=group.keep_id,
+                keep_content="",
+                keep_use_count=0,
+                merged=[{"id": row_id, "content": "", "use_count": 0} for row_id in group.merge],
+                why=group.why,
+            )
+        )
+    for group in payload.candidate_groups:
+        plan.candidate_groups.append(
+            CandidateGroup(
+                keep_id=group.keep_id,
+                keep_content="",
+                merged=[{"id": row_id, "content": ""} for row_id in group.merge],
+                why=group.why,
+            )
+        )
+    plan.litter = [{"id": row.id, "content": "", "use_count": 0, "why": row.why} for row in payload.litter]
+
+    result = await apply_cleanup(session, user_id=user.id, plan=plan)
+    return ok(
+        result.as_dict(),
+        message=(
+            f"已合并 {result.merged} 条记忆、{result.candidates_folded} 条待确认，"
+            f"删除 {result.deleted} 条"
+        ),
+    )
 
 
 # --------------------------------------------------------------------------- #

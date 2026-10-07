@@ -60,19 +60,61 @@ async function main() {
     await page.screenshot({ path: join(SHOTS, '10-my-ai-memory.png'), fullPage: true })
 
     // ------------------------------------------------------ add a memory ---
+    // This writes into the **live** library — these scripts drive the real product
+    // against the real database, unlike the pytest suite which has its own. Six copies
+    // of the string below were found sitting in the user's memory list, because this
+    // check added one on every run and never removed it. So it is paired: whatever this
+    // block creates, it deletes, and it asserts that the delete worked. A future edit
+    // that drops the cleanup fails here rather than in the user's memory list.
+    const marker = `这是一条浏览器测试写入的记忆 ${Date.now()}`
     const input = page.locator('input[placeholder*="手动添加"]')
     check('记忆输入框存在', (await input.count()) > 0)
+    let createdMemoryId = null
     if ((await input.count()) > 0) {
       const before = calls.length
-      await input.fill('这是一条浏览器测试写入的记忆')
+      await input.fill(marker)
       await page.getByRole('button', { name: /添加/ }).first().click()
       await page.waitForTimeout(2000)
       const posted = calls.slice(before).some((c) => c.startsWith('POST /memories'))
       check('添加记忆真的调用了 POST /memories', posted, calls.slice(before).slice(0, 2).join(' | '))
 
       const after = await page.locator('body').innerText()
-      check('新记忆出现在列表中', /浏览器测试写入/.test(after))
+      check('新记忆出现在列表中', after.includes(marker.slice(0, 12)))
       await page.screenshot({ path: join(SHOTS, '11-my-ai-added.png'), fullPage: true })
+
+      // Find the row this run created, by its unique marker.
+      const listed = await page.evaluate(async (m) => {
+        const token = localStorage.getItem('aiw.token')
+        const res = await fetch('/api/v1/memories?status=active&limit=200', {
+          headers: token ? { Authorization: `Bearer ${token}` } : {},
+        })
+        const body = await res.json().catch(() => null)
+        return (body?.data?.memories ?? []).find((row) => row.content === m)?.id ?? null
+      }, marker)
+      createdMemoryId = listed
+      check('能按内容找到刚写入的那条记忆', Boolean(listed), listed ?? '(没找到)')
+
+      if (listed) {
+        const deleted = await page.evaluate(async (id) => {
+          const token = localStorage.getItem('aiw.token')
+          const res = await fetch(`/api/v1/memories/${id}`, {
+            method: 'DELETE',
+            headers: token ? { Authorization: `Bearer ${token}` } : {},
+          })
+          return res.status
+        }, listed)
+        check('测试自己写的记忆被删掉', deleted === 200 || deleted === 204, `HTTP ${deleted}`)
+
+        const stillThere = await page.evaluate(async (m) => {
+          const token = localStorage.getItem('aiw.token')
+          const res = await fetch('/api/v1/memories?status=active&limit=200', {
+            headers: token ? { Authorization: `Bearer ${token}` } : {},
+          })
+          const body = await res.json().catch(() => null)
+          return (body?.data?.memories ?? []).some((row) => row.content === m)
+        }, marker)
+        check('清理后记忆库里没有留下测试文本', stillThere === false)
+      }
     }
 
     // ------------------------------------------------------- edit/delete ---
@@ -91,11 +133,40 @@ async function main() {
 
       const before = calls.length
       const identityInput = page.locator('input').nth(1)
+      // Read the current value first, so the test can put it back. Writing a marker
+      // into someone's profile and leaving it there is the same defect as the memory
+      // litter above — the profile is what the agent is told about the user.
+      const originalIdentity = await identityInput.inputValue()
       await identityInput.fill('浏览器测试身份')
       await page.getByRole('button', { name: /保存/ }).first().click()
       await page.waitForTimeout(2000)
       const patched = calls.slice(before).some((c) => c.startsWith('PATCH /profile'))
       check('保存档案真的调用了 PATCH /profile', patched, calls.slice(before).slice(0, 2).join(' | '))
+
+      // Restore, through the API so the assertion can see the result.
+      const restored = await page.evaluate(async (value) => {
+        const token = localStorage.getItem('aiw.token')
+        const res = await fetch('/api/v1/profile', {
+          method: 'PATCH',
+          headers: {
+            'Content-Type': 'application/json',
+            ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          },
+          body: JSON.stringify({ identity: value }),
+        })
+        return res.status
+      }, originalIdentity)
+      check('档案被还原', restored === 200, `HTTP ${restored}`)
+
+      const profileNow = await page.evaluate(async () => {
+        const token = localStorage.getItem('aiw.token')
+        const res = await fetch('/api/v1/profile', {
+          headers: token ? { Authorization: `Bearer ${token}` } : {},
+        })
+        const body = await res.json().catch(() => null)
+        return body?.data?.identity ?? null
+      })
+      check('档案里没有留下测试文本', profileNow === originalIdentity, `${profileNow}`)
     } else {
       check('档案页显示字段', false, '未找到档案标签')
     }

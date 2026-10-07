@@ -40,7 +40,8 @@ import {
   scopeLabel,
   type MemoryStatus,
 } from '@/lib/contextApi'
-import type { Memory, MemoryKind, Profile } from '@/lib/contextApi'
+import type { Memory, MemoryCandidate, MemoryKind, Profile } from '@/lib/contextApi'
+import { CleanupPanel } from '@/features/memory/CleanupPanel'
 import { toApiError } from '@/lib/api'
 import { cn } from '@/lib/utils'
 import SkillPanel from '@/features/skills/SkillPanel'
@@ -327,6 +328,31 @@ function ContextPanel() {
 
 type Tab = 'memory' | 'profile' | 'skills' | 'context'
 
+/* ------------------------------------------------------------- candidates -- */
+
+/**
+ * Why it thinks this, in the user's own terms.
+ *
+ * 「每条候选要说清它为什么这么认为（依据来自哪次交付、你说了什么）」. The origin is
+ * recorded at the moment of learning — a delivery decision carries the file, the
+ * verdict and the reason the user typed — so this is a read of what was stored, not a
+ * reconstruction that could drift from it.
+ */
+function CandidateOrigin({ candidate }: { candidate: MemoryCandidate }) {
+  const origin = candidate.structured?.first_origin ?? candidate.structured?.origin
+  if (!origin) return null
+
+  const rejected = origin.decision === 'rejected'
+  return (
+    <p className="mt-1 text-[11.5px] text-faint" data-testid="candidate-origin">
+      依据：
+      {origin.deliverable_title ? `「${origin.deliverable_title}」那次` : '某次交付'}
+      {rejected ? '你退回了它' : '你接受了它'}
+      {origin.feedback ? `，理由是「${origin.feedback}」` : ''}
+    </p>
+  )
+}
+
 export default function MyAIPage() {
   const queryClient = useQueryClient()
   const [tab, setTab] = useState<Tab>('memory')
@@ -394,6 +420,21 @@ export default function MyAIPage() {
   const pending = candidates.data?.candidates ?? []
   const rows = memories.data?.memories ?? []
 
+  // By kind, in the order the kinds are declared, so the groups do not shuffle
+  // between renders. Empty kinds are dropped rather than shown as headings with
+  // nothing under them.
+  const grouped = useMemo(() => {
+    const byKind = new Map<string, Memory[]>()
+    for (const memory of rows) {
+      const bucket = byKind.get(memory.kind) ?? []
+      bucket.push(memory)
+      byKind.set(memory.kind, bucket)
+    }
+    return [...byKind.entries()].sort(
+      (a, b) => KINDS.indexOf(a[0] as MemoryKind) - KINDS.indexOf(b[0] as MemoryKind),
+    )
+  }, [rows])
+
   const summary = useMemo(
     () => [
       { label: '长期记忆', value: stats.data?.memories_active ?? 0 },
@@ -437,13 +478,24 @@ export default function MyAIPage() {
                 <div className="min-w-0 flex-1">
                   <p className="text-[13px] text-text">{candidate.content}</p>
                   <p className="mt-1 text-[11.5px] text-muted">{candidate.reason}</p>
-                  <div className="mt-1 flex gap-2 text-[11px] text-faint">
+                  <div className="mt-1 flex flex-wrap gap-x-2 gap-y-1 text-[11px] text-faint">
                     <span>{KIND_LABELS[candidate.proposed_kind] ?? candidate.proposed_kind}</span>
                     <span>置信度 {candidate.confidence.toFixed(2)}</span>
+                    {/*
+                      The count, not more rows. Before this, the same fact proposed four
+                      times became four rows and the user pressed 确认 four times for one
+                      decision — 「现在这是啥逻辑啊」.
+                    */}
+                    {(candidate.structured?.evidence_count ?? 1) > 1 && (
+                      <span data-testid="candidate-evidence" className="text-accent">
+                        这条我提过 {candidate.structured?.evidence_count} 次
+                      </span>
+                    )}
                     {candidate.conflicts_with && (
                       <span className="text-warn">与已有记忆冲突</span>
                     )}
                   </div>
+                  <CandidateOrigin candidate={candidate} />
                 </div>
                 <div className="flex shrink-0 gap-1">
                   <Button size="xs" variant="primary" onClick={() => approve.mutate(candidate.id)}>
@@ -486,6 +538,8 @@ export default function MyAIPage() {
 
       {tab === 'memory' && (
         <div className="space-y-4">
+          <CleanupPanel />
+
           <Card>
             <CardBody className="flex gap-2">
               <input
@@ -551,15 +605,26 @@ export default function MyAIPage() {
                 />
               </CardBody>
             ) : (
+              // Grouped by topic when nothing is filtered. A flat list of fourteen
+              // rows is a list nobody reads; grouped, 「它对我有哪些偏好」 is one
+              // glance. The filter chips above still give the flat view for one kind.
               <CardBody className="p-0">
-                {rows.map((memory) => (
-                  <MemoryRow
-                    key={memory.id}
-                    memory={memory}
-                    onDelete={() => remove.mutate(memory.id)}
-                    onArchive={() => update.mutate({ id: memory.id, status: 'archived' })}
-                    onSave={(content) => update.mutate({ id: memory.id, content })}
-                  />
+                {grouped.map(([kind, items]) => (
+                  <div key={kind} data-testid={`memory-group-${kind}`}>
+                    <p className="border-b border-border/40 bg-inset/40 px-4 py-1.5 text-[11px] uppercase tracking-wide text-faint">
+                      {KIND_LABELS[kind as MemoryKind] ?? kind}
+                      <span className="ml-1.5 normal-case tracking-normal">（{items.length}）</span>
+                    </p>
+                    {items.map((memory) => (
+                      <MemoryRow
+                        key={memory.id}
+                        memory={memory}
+                        onDelete={() => remove.mutate(memory.id)}
+                        onArchive={() => update.mutate({ id: memory.id, status: 'archived' })}
+                        onSave={(content) => update.mutate({ id: memory.id, content })}
+                      />
+                    ))}
+                  </div>
                 ))}
               </CardBody>
             )}

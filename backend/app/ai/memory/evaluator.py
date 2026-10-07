@@ -31,6 +31,7 @@ from typing import Any
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.ai.memory.similarity import same_thing, similarity
 from app.ai.providers.budget import reasoning_budget
 from app.ai.types import ChatMessage
 from app.core.logging import get_logger
@@ -124,24 +125,10 @@ def _normalise(text: str) -> str:
     return re.sub(r"[\s，。,.!！?？、；;：:]+", "", (text or "").lower())
 
 
-def _similarity(left: str, right: str) -> float:
-    """Character-level overlap between two normalised statements.
-
-    Deliberately cheap and deterministic. A semantic comparison would need an
-    embedding call per candidate, and the thing being detected here — "the user
-    said the same preference twice in slightly different words" — is mostly a
-    lexical phenomenon.
-    """
-    a, b = _normalise(left), _normalise(right)
-    if not a or not b:
-        return 0.0
-    if a == b:
-        return 1.0
-    shorter, longer = (a, b) if len(a) <= len(b) else (b, a)
-    if shorter in longer:
-        return len(shorter) / len(longer)
-    overlap = len(set(shorter) & set(longer))
-    return overlap / max(len(set(shorter)), len(set(longer)))
+#: The similarity decision now lives in `similarity.py`, in one place, with the
+#: measurement that chose it. Re-exported under the old name because callers and the
+#: sampling script import it from here.
+_similarity = similarity
 
 
 class MemoryEvaluator:
@@ -162,16 +149,69 @@ class MemoryEvaluator:
         )
         return list((await self.session.execute(stmt)).scalars())
 
+    async def _candidates(self, *, status: str, limit: int = 40) -> list[MemoryCandidate]:
+        """Candidates the user has not settled, or has already turned down.
+
+        Both matter, and neither was looked at before this round — which is the whole
+        reason four identical candidates queued up waiting for a person to press 确认
+        four times. The dedup compared a new statement only against `memory_entries`;
+        a restatement of something already *pending* was invisible to it, so every
+        rejection the user made added another row saying the same thing.
+        """
+        stmt = (
+            select(MemoryCandidate)
+            .where(
+                MemoryCandidate.user_id == self.user_id,
+                MemoryCandidate.status == status,
+            )
+            .order_by(MemoryCandidate.created_at.desc())
+            .limit(limit)
+        )
+        return list((await self.session.execute(stmt)).scalars())
+
     async def _judge(
-        self, statement: str, context: str, existing: list[MemoryEntry]
+        self,
+        statement: str,
+        context: str,
+        existing: list[MemoryEntry],
+        pending: list[MemoryCandidate],
+        rejected: list[MemoryCandidate],
     ) -> dict[str, Any]:
         """Ask the model the specific questions, not "is this interesting?".
 
-        The existing memories are included so the model can answer the one
-        question a lexical comparison cannot: does this contradict something we
-        already believe? It replies with the index of the memory it conflicts
-        with, or -1.
+        Three lists go in, and the third question is the one this round added:
+
+        * **existing** — so it can answer the one question a lexical comparison cannot:
+          does this contradict something we already believe?
+        * **pending** — so a restatement of something already waiting for the user does
+          not become a second row. The user pressing 确认 four times for one fact is the
+          complaint this fixes.
+        * **rejected** — because a refusal is a decision, not a vote. The same
+          information coming back must not be proposed again.
+
+        The duplication question goes to the model rather than to a threshold because
+        the measurement in `similarity.py` is unambiguous: 「用户喜欢用 Python 写脚本」
+        and 「用户喜欢用 Java 写脚本」 score 0.778, higher than *every* genuine
+        rephrasing in the sample. No threshold can separate them; the model can.
         """
+        groups: list[str] = []
+        if existing:
+            groups.append(
+                "已有记忆（已生效）：\n"
+                + "\n".join(f"  active:{i}. {e.content}" for i, e in enumerate(existing, start=1))
+            )
+        if pending:
+            groups.append(
+                "待用户确认的候选（还没生效）：\n"
+                + "\n".join(f"  pending:{i}. {c.content}" for i, c in enumerate(pending, start=1))
+            )
+        if rejected:
+            groups.append(
+                "用户已经拒绝过的候选（不要再提）：\n"
+                + "\n".join(f"  rejected:{i}. {c.content}" for i, c in enumerate(rejected, start=1))
+            )
+        listing = "\n\n".join(groups) if groups else "（这个用户还没有任何记忆或候选）"
+
         system = (
             "你在决定一段话是否值得作为「关于用户的长期记忆」保存。\n"
             "标准是：**记错比不记更糟**。宁可漏掉，也不要存进无关内容。\n\n"
@@ -183,7 +223,9 @@ class MemoryEvaluator:
             '  "scope": "global 或 project",\n'
             '  "confidence": 0.0~1.0,\n'
             '  "content": "改写成的、对未来有用的陈述句",\n'
-            '  "contradicts": 已有记忆中与它矛盾的编号（没有则 -1）\n'
+            '  "contradicts": 已有记忆中与它矛盾的编号（没有则 -1），只填数字\n'
+            '  "duplicates": "与下面某一条说的是同一件事就填它的编号，格式 active:3 或 '
+            'pending:1 或 rejected:0；没有同一件事就填空字符串"\n'
             "}\n\n"
             "判定要点：\n"
             "- 长期有效的偏好、身份、技能、约束、决定 → 值得\n"
@@ -191,14 +233,11 @@ class MemoryEvaluator:
             "- 「我正在做毕业设计」属于项目状态，不值得存为记忆\n"
             "- 「我以后所有项目都用 React」是长期偏好，值得\n"
             "- 置信度低于 0.5 就填低分，不要勉强\n"
+            "- **duplicates 比措辞重要**：只要说的是同一件事，哪怕用词完全不同、长短差很多，\n"
+            "  也要填出来。它和 contradicts 互斥：矛盾填 contradicts，重复填 duplicates。\n"
             "- 如果候选内容与下面某条已有记忆**语义相反**（不是补充，是矛盾），"
-            "把那条的编号填进 contradicts；只是相关或更具体，填 -1\n"
-            + (
-                "\n已有记忆：\n"
-                + "\n".join(f"{i}. {entry.content}" for i, entry in enumerate(existing, start=1))
-                if existing
-                else "\n（还没有任何已有记忆）"
-            )
+            "把那条的编号填进 contradicts；只是相关或更具体，填 -1\n\n"
+            f"{listing}"
         )
         messages = [
             ChatMessage(role="system", content=system),
@@ -253,6 +292,8 @@ class MemoryEvaluator:
             return Verdict(Routing.DROP, "寒暄或一次性事务，没有长期价值", content=text)
 
         existing = await self._existing()
+        pending = await self._candidates(status="pending")
+        rejected = await self._candidates(status="rejected")
 
         # Deliberately *not* wrapped in a try/except that returns DROP.
         #
@@ -262,7 +303,7 @@ class MemoryEvaluator:
         # and the only trace was a log line nobody reads. A failure must not be
         # representable as a verdict — the callers already handle exceptions
         # (`_learn_from_decision` logs `delivery_memory_pass_failed`).
-        judged = await self._judge(text, context, existing)
+        judged = await self._judge(text, context, existing, pending, rejected)
 
         if not judged.get("worth_remembering"):
             return Verdict(
@@ -282,20 +323,55 @@ class MemoryEvaluator:
         if confidence < CANDIDATE_FLOOR:
             return Verdict(Routing.DROP, "置信度过低", kind=kind, confidence=confidence, content=content)
 
-        # Dedup: a restatement bumps the existing row rather than adding one.
+        # ---------------------------------------------------------- duplicate --
+        # First, the model's answer. It is asked about the statement it was given, and
+        # it can see all three lists, which is the only thing here that can tell
+        # 「图表充足、页数精简」 from 「图表充足、页数精简」 said three other ways.
+        duplicate = self._resolve_duplicate(judged.get("duplicates"), existing, pending, rejected)
+        if duplicate is not None:
+            bucket, target = duplicate
+            if bucket == "rejected":
+                # A refusal is a decision, not a vote. Re-proposing it is the system
+                # asking the user to make the same decision twice, which is exactly
+                # what they objected to.
+                return Verdict(
+                    Routing.DUPLICATE,
+                    "这条你之前已经拒绝过了，不再提议",
+                    kind=kind,
+                    confidence=confidence,
+                    content=content,
+                )
+            if bucket == "pending":
+                # Bump the candidate that is already waiting instead of queueing a
+                # second copy of it. The evidence count is what the UI shows as
+                # 「这条我提过 N 次」, so the user sees how often it came up rather
+                # than being handed N rows to press 确认 on.
+                await self._bump_candidate(target, confidence, origin)
+                return Verdict(
+                    Routing.DUPLICATE,
+                    f"与一条待确认候选重复，已更新它（提到过 {self._evidence_count(target)} 次）",
+                    kind=kind,
+                    confidence=confidence,
+                    content=content,
+                )
+            # An active memory: it is already in the library. Asking again is wasted
+            # effort, so the use count moves instead.
+            await self._bump_entry(target, confidence, origin)
+            return Verdict(
+                Routing.DUPLICATE,
+                f"与已有记忆重复，已更新其使用次数（{target.use_count}）",
+                kind=kind,
+                confidence=confidence,
+                content=content,
+            )
+
+        # Second, a near-copy guard on the *rewritten* content. The model was shown the
+        # raw statement and may have rephrased it into something that is now almost
+        # literally an existing row; `same_thing` catches that without a second model
+        # call, and refuses to fire when the two name different things.
         for entry in existing:
-            if entry.kind == kind and _similarity(content, entry.content) >= 0.82:
-                entry.use_count += 1
-                entry.last_used_at = datetime.now(UTC)
-                entry.confidence = max(entry.confidence, confidence)
-                if origin and not entry.structured:
-                    # The memory already existed and had no recorded origin; this
-                    # restatement is the evidence of where it came from. Attaching
-                    # it is accurate — it is the same belief — and it is the only
-                    # way an older memory becomes reviewable instead of staying an
-                    # assertion from nowhere forever.
-                    entry.structured = origin
-                await self.session.flush()
+            if entry.kind == kind and same_thing(content, entry.content):
+                await self._bump_entry(entry, confidence, origin)
                 return Verdict(
                     Routing.DUPLICATE,
                     f"与已有记忆重复，已更新其使用次数（{entry.use_count}）",
@@ -385,6 +461,92 @@ class MemoryEvaluator:
             confidence=confidence,
             content=content,
         )
+
+    # --------------------------------------------------------------- duplicate --
+    @staticmethod
+    def _resolve_duplicate(
+        answer: Any,
+        existing: list[MemoryEntry],
+        pending: list[MemoryCandidate],
+        rejected: list[MemoryCandidate],
+    ) -> tuple[str, Any] | None:
+        """Turn the judge's `duplicates` string into the row it points at.
+
+        The answer is `active:3` / `pending:1` / `rejected:0`, or empty. Anything that
+        does not parse, or that points outside the list it names, resolves to `None` —
+        and `None` means "no duplicate", which is the safe direction: the statement
+        becomes a candidate and the user decides. An out-of-range index that was
+        silently accepted would bump an arbitrary row.
+        """
+        text = str(answer or "").strip().lower()
+        if not text or ":" not in text:
+            return None
+        bucket, _, raw = text.partition(":")
+        try:
+            index = int(raw.strip())
+        except ValueError:
+            logger.warning("memory_duplicate_unparsed", extra={"answer": text})
+            return None
+        if bucket == "active":
+            rows: list[Any] = existing
+        elif bucket == "pending":
+            rows = pending
+        elif bucket == "rejected":
+            rows = rejected
+        else:
+            logger.warning("memory_duplicate_unknown_bucket", extra={"answer": text})
+            return None
+        # The prompt numbers from 1.
+        if not 1 <= index <= len(rows):
+            logger.warning(
+                "memory_duplicate_out_of_range",
+                extra={"answer": text, "size": len(rows)},
+            )
+            return None
+        return bucket, rows[index - 1]
+
+    @staticmethod
+    def _evidence_count(candidate: MemoryCandidate) -> int:
+        """How many times this candidate has been proposed. 1 for a fresh one."""
+        structured = candidate.structured if isinstance(candidate.structured, dict) else {}
+        try:
+            return max(1, int(structured.get("evidence_count") or 1))
+        except (TypeError, ValueError):
+            return 1
+
+    async def _bump_candidate(
+        self, candidate: MemoryCandidate, confidence: float, origin: dict[str, Any]
+    ) -> None:
+        """Record that a waiting candidate came up again.
+
+        The count is what lets the UI say 「这条我提过 N 次」 instead of showing N rows.
+        Nothing else about the candidate changes: its wording is the one the user will
+        read, and rewriting it under them would make the thing they are being asked
+        about move while they look at it.
+        """
+        structured = dict(candidate.structured or {})
+        structured["evidence_count"] = self._evidence_count(candidate) + 1
+        structured["last_seen_at"] = datetime.now(UTC).isoformat()
+        if origin and "first_origin" not in structured:
+            structured["first_origin"] = origin
+        candidate.structured = structured
+        candidate.confidence = max(candidate.confidence, confidence)
+        await self.session.flush()
+
+    async def _bump_entry(
+        self, entry: MemoryEntry, confidence: float, origin: dict[str, Any]
+    ) -> None:
+        """Record that an existing memory was stated again."""
+        entry.use_count += 1
+        entry.last_used_at = datetime.now(UTC)
+        entry.confidence = max(entry.confidence, confidence)
+        if origin and not entry.structured:
+            # The memory already existed and had no recorded origin; this restatement
+            # is the evidence of where it came from. Attaching it is accurate — it is
+            # the same belief — and it is the only way an older memory becomes
+            # reviewable instead of staying an assertion from nowhere forever.
+            entry.structured = origin
+        await self.session.flush()
 
     # ---------------------------------------------------------------- confirm --
     async def approve(self, candidate_id: Any) -> MemoryEntry | None:

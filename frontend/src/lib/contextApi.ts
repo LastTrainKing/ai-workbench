@@ -58,6 +58,19 @@ export interface MemoryOrigin {
 
 export interface MemoryStructured {
   origin?: MemoryOrigin
+  /**
+   * How many times a candidate has been proposed.
+   *
+   * Present on candidates only. It is what lets the screen say 「这条我提过 4 次」
+   * instead of showing four rows and asking the user to press 确认 four times for one
+   * decision — which is exactly what the user objected to.
+   */
+  evidence_count?: number
+  /** The first time it came up, when it has come up more than once. */
+  first_origin?: MemoryOrigin
+  last_seen_at?: string
+  /** Set on a row that was folded into another one by the cleanup. */
+  merged_into?: string
 }
 
 export interface Memory {
@@ -86,6 +99,46 @@ export interface MemoryCandidate {
   status: string
   conflicts_with: string
   created_at: string | null
+}
+
+export interface CleanupGroup {
+  keep_id: string
+  keep_content: string
+  keep_use_count: number
+  merged: { id: string; content: string; use_count: number }[]
+  /** The survivor's count once the duplicates' usage is added — the prompt asks for
+   *  「累加的 use_count」 by name, so it is computed server-side and shown as one number. */
+  merged_use_count: number
+  why: string
+}
+
+export interface CleanupCandidateGroup {
+  keep_id: string
+  keep_content: string
+  merged: { id: string; content: string }[]
+  why: string
+}
+
+export interface CleanupPlan {
+  total_before: number
+  total_after: number
+  duplicate_groups: CleanupGroup[]
+  /** Pending candidates that say the same thing — folded so the user answers once. */
+  candidate_groups: CleanupCandidateGroup[]
+  candidates_before: number
+  candidates_after: number
+  litter: { id: string; content: string; use_count: number; why: string }[]
+  ungrouped: number
+  rows_removed_from_retrieval: number
+  note: string
+}
+
+export interface CleanupResult {
+  merged: number
+  deleted: number
+  kept: number
+  candidates_folded: number
+  details: string[]
 }
 
 export interface MemoryStats {
@@ -188,6 +241,23 @@ export const contextApi = {
     requestResult<{ deleted: string }>(`/memories/${id}`, { method: 'DELETE' }),
 
   stats: () => request<MemoryStats>('/memories/stats'),
+
+  /**
+   * What a cleanup would do. Writes nothing.
+   *
+   * A POST because it costs a model call: which rows are the same fact is the model's
+   * judgement, not a threshold's — see `backend/app/ai/memory/similarity.py` for the
+   * measurement that ruled the threshold out.
+   */
+  cleanupPlan: () => request<CleanupPlan>('/memory-cleanup/plan', { method: 'POST' }),
+
+  /** Execute a plan the user has read. Ids only; the server re-checks ownership. */
+  cleanupApply: (payload: {
+    duplicate_groups: { keep_id: string; merge: string[]; why?: string }[]
+    candidate_groups: { keep_id: string; merge: string[]; why?: string }[]
+    litter: { id: string; why?: string }[]
+    total_before: number
+  }) => requestResult<CleanupResult>('/memory-cleanup/apply', { method: 'POST', body: payload }),
 
   /* ---------------------------------------------------------- candidates -- */
   candidates: (status = 'pending') =>

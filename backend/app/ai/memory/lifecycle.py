@@ -26,8 +26,6 @@ testable.
 
 from __future__ import annotations
 
-import re
-import unicodedata
 import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -36,13 +34,24 @@ from typing import Any
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.ai.memory.similarity import (
+    MERGE_THRESHOLD,
+    containment,
+    named_tokens,
+    same_thing,
+    similarity,
+    terms as _terms,
+)
 from app.core.logging import get_logger
 from app.models.context import MemoryCandidate, MemoryEntry
 
 logger = get_logger(__name__)
 
-#: Two memories this similar are the same fact said twice.
-MERGE_THRESHOLD = 0.62
+#: `MERGE_THRESHOLD`, `similarity` and `_terms` now live in `similarity.py` and are
+#: re-exported here because callers and tests already import them from this module.
+#: The *decision* they feed is `same_thing`, which is what `find_merge_groups` uses —
+#: a bare threshold could not refuse 「用户喜欢用 Python」 / 「用户喜欢用 Java」, and the
+#: measurement in that module is why.
 
 #: A memory nobody has used in this long, and that was never very confident, leaves
 #: retrieval. 90 days is long enough that a seasonal fact (a semester, a project) is not
@@ -56,22 +65,6 @@ DECAY_CONFIDENCE_BELOW = 0.75
 
 #: Negation markers. Used to spot two memories that are about the same thing but disagree.
 _NEGATIONS = ("不", "别", "不要", "不用", "no ", "not ", "never ", "don't", "dont")
-
-
-def _terms(text: str) -> set[str]:
-    lowered = unicodedata.normalize("NFKC", (text or "").lower())
-    words = set(re.findall(r"[a-z0-9]{2,}", lowered))
-    cjk = [c for c in lowered if "\u4e00" <= c <= "\u9fff"]
-    words |= {cjk[i] + cjk[i + 1] for i in range(len(cjk) - 1)}
-    return words
-
-
-def similarity(a: str, b: str) -> float:
-    """Jaccard overlap of the two term sets. 0..1."""
-    left, right = _terms(a), _terms(b)
-    if not left or not right:
-        return 0.0
-    return len(left & right) / len(left | right)
 
 
 def has_negation(text: str) -> bool:
@@ -131,6 +124,13 @@ def find_merge_groups(memories: list[MemoryEntry]) -> list[MergeGroup]:
     the survivor is the one with the highest use count — the phrasing that has actually
     been used is the one worth keeping.
 
+    The test is `same_thing`, not a bare threshold, and the difference is measurable:
+    「用户喜欢用 Python 写脚本」 and 「用户喜欢用 Java 写脚本」 score 0.778 — higher than
+    any genuine rephrasing in `scripts/sample_memory_similarity.py` — so a threshold
+    merges them and loses the fact that the user switched languages. `same_thing` also
+    requires the two to name the same things, which refuses that pair and leaves every
+    rephrasing untouched.
+
     Claimed rows are tracked by **object identity**, not by database id. The first version
     used `id`, which is `None` on a row that has not been flushed yet — so every memory in
     a caller's list shared the key `"None"` and the claiming logic collapsed. Rows loaded
@@ -152,15 +152,14 @@ def find_merge_groups(memories: list[MemoryEntry]) -> list[MergeGroup]:
             # same thing, and merging them would lose the distinction the kind carries.
             if other.kind != memory.kind:
                 continue
-            score = similarity(memory.content, other.content)
-            if score >= MERGE_THRESHOLD:
+            if same_thing(memory.content, other.content):
                 group.merged_ids.append(str(other.id))
                 claimed.add(id(other))
 
         if group.merged_ids:
             group.reason = (
                 f"{len(group.merged_ids)} 条与它说的是同一件事"
-                f"（相似度 ≥ {MERGE_THRESHOLD}），保留被用过最多的那条"
+                f"（用词重合 ≥ {MERGE_THRESHOLD}，且没有指向不同的事物），保留被用过最多的那条"
             )
             claimed.add(id(memory))
             groups.append(group)
