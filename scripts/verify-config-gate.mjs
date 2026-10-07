@@ -97,16 +97,19 @@ async function main() {
 
     const before = healthCalls.length
     // The save button is (correctly) disabled until something is dirty, so we
-    // have to make a change before we can save. Type into the API-key field —
-    // the key is a credential, so use the placeholder we already have rather
-    // than inventing one; "unchanged key, pressed save" still exercises the
-    // invalidation path this check is about.
+    // have to make a change before we can save.
+    //
+    // Whatever we type here becomes the *live* key, process-wide, until it is
+    // cleared. The first version left a placeholder key behind and every later
+    // run of verify-onboarding.mjs failed with a 422 from DeepSeek ("Your api key
+    // ... is invalid"), which looked like a product bug and was this test's
+    // litter. So the write is paired with a guaranteed cleanup in `finally`.
     const keyInput = page.locator('input[type="password"]').first()
     const hasKeyInput = (await keyInput.count()) > 0
     check('设置页有 API Key 输入框', hasKeyInput)
+
+    let wroteOverride = false
     if (hasKeyInput) {
-      // A syntactically valid but inert key: the endpoint stores what it is given,
-      // and this test never sends a request to the provider.
       await keyInput.fill('sk-verification-placeholder-0000000000')
       await page.waitForTimeout(500)
     }
@@ -117,6 +120,7 @@ async function main() {
     if (hasSave) {
       check('改动后保存按钮已启用', await saveBtn.isEnabled())
       await saveBtn.click()
+      wroteOverride = true
       // The defect was that no refetch happened at all. Waiting for the call is
       // the assertion; a fixed sleep would pass even when nothing refetched.
       await page
@@ -125,6 +129,25 @@ async function main() {
       await page.waitForTimeout(1500)
       const refetches = healthCalls.length - before
       check('保存配置后 /health/deps 真的重新拉取了（无需刷新页面）', refetches > 0, `${refetches} 次`)
+    }
+
+    // Undo the write. `DELETE /ai-config` clears every override and falls back to
+    // .env, which is the state we found the machine in.
+    if (wroteOverride) {
+      const token = await page.evaluate(() => localStorage.getItem('aiw.token'))
+      const cleared = await page.request.delete(`${BASE}/api/v1/ai-config`, {
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      check('验证结束后清掉了自己写入的 Key（不留污染）', cleared.status() === 200, `HTTP ${cleared.status()}`)
+      const after = await page.request.get(`${BASE}/api/v1/health/deps`)
+      const afterBody = (await after.json())?.data
+      check(
+        '清理后 llm 仍可用（回落到 .env 的配置）',
+        afterBody?.ai?.llm?.degraded === false,
+        `kind=${afterBody?.ai?.llm?.kind} degraded=${afterBody?.ai?.llm?.degraded}`,
+      )
+      await page.reload({ waitUntil: 'networkidle' })
+      await page.waitForTimeout(1500)
     }
 
     const labelAfter = await topbar.innerText()
