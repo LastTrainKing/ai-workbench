@@ -72,20 +72,81 @@ async function main() {
     await page.locator('[data-testid="format-pptx"]').click()
     const before = calls.length
     await page.locator('[data-testid="start-build"]').click()
-    await page.waitForTimeout(4000)
+    // Wait for the execute call rather than a fixed sleep. A timer that is long
+    // enough on an idle machine is short enough on a loaded one, and this check
+    // flaked exactly that way at 4000ms before being made deterministic.
+    await page
+      .waitForRequest((r) => /\/api\/v1\/build-runs\/[^/]+\/execute$/.test(r.url()), { timeout: 20000 })
+      .catch(() => null)
+    await page.waitForTimeout(1500)
 
     const posted = calls.slice(before).some((c) => c === 'POST /build-runs')
     check('点击「开始」真的创建了 BuildRun', posted, calls.slice(before).slice(0, 3).join(' | '))
     check('提交后跳到工作台', page.url().includes('/workbench/'), page.url())
 
+    // create + execute, in that order. Asserting on `POST /build-runs` alone passed
+    // while the product was broken — the run was created and then never started, which
+    // is exactly what the user reported. The execute call is the claim that matters.
+    const seq = calls.slice(before)
+    const createAt = seq.indexOf('POST /build-runs')
+    const executeAt = seq.findIndex((c) => /^POST \/build-runs\/[^/]+\/execute$/.test(c))
+    check(
+      '提交后紧接着调了 execute（创建 ≠ 开始）',
+      createAt !== -1 && executeAt !== -1 && executeAt > createAt,
+      seq.slice(0, 4).join(' | '),
+    )
+    check('execute 带上的是刚创建的那个 run', executeAt !== -1)
+
+    // The real failure the user hit: the row stays DRAFT. Read it back from the API
+    // rather than trusting the UI, because the UI is what lied.
+    const runIdForStatus = page.url().split('/workbench/')[1]
+    const loginEarly = await page.request.post(`${BASE}/api/v1/auth/login`, {
+      data: { identifier: 'demo', password: 'demo1234' },
+    })
+    const tokenEarly = (await loginEarly.json())?.data?.access_token
+    const statusResponse = await page.request.get(`${BASE}/api/v1/build-runs/${runIdForStatus}`, {
+      headers: { Authorization: `Bearer ${tokenEarly}` },
+    })
+    const statusBody = await statusResponse.json().catch(() => null)
+    const runStatus = statusBody?.data?.status
+    check(
+      '提交后的 run 不再是 DRAFT',
+      runStatus && runStatus !== 'DRAFT',
+      `status=${runStatus} started_at=${statusBody?.data?.started_at ?? '(空)'}`,
+    )
+    check(
+      'run 有 started_at（真的开始过）',
+      Boolean(statusBody?.data?.started_at),
+      String(statusBody?.data?.started_at ?? '(空)'),
+    )
+
     // ------------------------------------------------------------ workbench --
     await page.waitForTimeout(2500)
+    const workbenchVisible = await page.locator('body').innerText()
+    // The three panels now live inside a collapsed 「详情」. They are still on the
+    // page and still reachable — that is the requirement — but asserting on visible
+    // text alone would have failed for the wrong reason after the layout change. So
+    // assert on the section being present, then open it and assert on its contents.
+    check('工作台：产出物栏', /产出物/.test(workbenchVisible))
+    check('工作台显示目标原文', /答辩 PPT/.test(workbenchVisible))
+
+    const details = page.locator('[data-testid="workbench-details"]')
+    check('工作台：详情区存在', (await details.count()) > 0)
+    if ((await details.count()) > 0) {
+      // It is open by default while a run is EXECUTING, so clicking unconditionally
+      // would toggle it *shut* and fail the next assertions for the wrong reason.
+      const open = await page
+        .locator('details:has([data-testid="workbench-details"])')
+        .evaluate((el) => el.hasAttribute('open'))
+      if (!open) {
+        await details.click()
+        await page.waitForTimeout(600)
+      }
+    }
     const workbench = await page.locator('body').innerText()
-    check('工作台：执行计划栏', /执行计划/.test(workbench))
-    check('工作台：实时执行栏', /实时执行/.test(workbench))
-    check('工作台：本次上下文栏', /本次上下文/.test(workbench))
-    check('工作台：产出物栏', /产出物/.test(workbench))
-    check('工作台显示目标原文', /答辩 PPT/.test(workbench))
+    check('详情里：执行计划栏', /执行计划/.test(workbench))
+    check('详情里：实时执行栏', /实时执行/.test(workbench))
+    check('详情里：本次上下文栏', /本次上下文/.test(workbench))
     await page.screenshot({ path: join(SHOTS, '61-workbench.png'), fullPage: true })
 
     // ---------------------------------------------- register a deliverable --
