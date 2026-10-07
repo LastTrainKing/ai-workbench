@@ -40,6 +40,7 @@ from app.ai.prompts.registry import get_prompt
 from app.ai.providers.budget import REASONING_TOKENS, reasoning_budget
 from app.ai.tools.executor import ResourceLimits
 from app.ai.tools.permissions import AgentPolicy
+from app.ai.tools.registry import ARTIFACT_TOOLS
 from app.ai.types import ChatMessage
 from app.core.config import settings
 from app.core.logging import get_logger
@@ -403,6 +404,17 @@ class AutonomousAgent:
         )
         self._tool_messages: list[ChatMessage] = []
 
+        #: Files this run actually wrote, in the order they were written.
+        #:
+        #: Collected as the tools run rather than reconstructed afterwards, because
+        #: the final verifier needs to be *told* where the artifacts are. It used to
+        #: be given nothing and had to guess a path from the goal; it guessed
+        #: `Java基础教程_指引目录.pptx` when the file was at
+        #: `deliverables/Java基础教程_指引目录.pptx`, the read failed, and a run
+        #: whose five steps had all passed was reported FAILED. A guess that can
+        #: fail the whole run is not a check, it is a coin toss.
+        self.artifacts: list[str] = []
+
         #: What the task itself requires, and what the user's preferences turned
         #: into once those requirements were taken into account. Filled in by
         #: `_resolve_requirements` before the plan is written, because the plan is
@@ -673,6 +685,19 @@ class AutonomousAgent:
             self.controller.tool_calls += 1
             step.tool_calls += 1
 
+            # Remember what this run produced, so the final verifier can be told
+            # instead of guessing. Prefer the path the tool *resolved* (absolute,
+            # after the workspace prefix was applied) over the one the model passed,
+            # because the resolved one is the one that can be read back.
+            if request.name in ARTIFACT_TOOLS and result.ok:
+                resolved = ""
+                if isinstance(result.data, dict):
+                    resolved = str(result.data.get("path") or "")
+                if not resolved:
+                    resolved = str(request.arguments.get("path") or "")
+                if resolved and resolved not in self.artifacts:
+                    self.artifacts.append(resolved)
+
             observation = {
                 "tool": request.name,
                 # Kept so "the second attempt used a different tool or different
@@ -797,13 +822,18 @@ class AutonomousAgent:
         # pass let the agent "verify" a step that had produced nothing: it called
         # file_exists, got a truthful "missing", and the step was marked done.
         #
-        # So for the tools whose answer *is* the evidence, the answer is read.
+        # So for the tool whose answer *is* the evidence, the answer is read.
+        #
+        # A read that **errored** is deliberately not in this list. `document_read`
+        # on a mistyped path returns `ValidationError: 文件不存在`, which cannot be
+        # told apart from a genuinely missing file — so counting it as a "no" turned
+        # a wrong guess into a negative finding. An errored call is retried like any
+        # other failure: the step's own retry loop is where "the check could not run"
+        # belongs, and it ends in a step failure with the error visible.
         answer = result.data if isinstance(result.data, dict) else {}
         answered_no = False
         if request.name == "file_exists":
             answered_no = not bool(answer.get("exists"))
-        elif request.name in ("file_read", "document_read") and not result.ok:
-            answered_no = True
 
         if answered_no:
             passed = False
@@ -1069,7 +1099,7 @@ class AutonomousAgent:
 
         # ------------------------------------------------------------ final --
         self.controller.set_state(RunState.VERIFYING, "正在核验成功标准")
-        verified, final_evidence = await self._final_verify(plan)
+        verified, conclusive, final_evidence = await self._final_verify(plan)
         all_evidence.extend(final_evidence)
 
         # A run with a failed step is not a success, whatever the criteria check
@@ -1088,9 +1118,27 @@ class AutonomousAgent:
                 + ("，成功标准核验通过" if verified else "，成功标准未通过核验"),
             )
             state = RunState.FAILED
+        elif not conclusive:
+            # Every step passed, and the verifier never managed to obtain evidence
+            # either way — its tool calls all errored, or it would not call one.
+            #
+            # Not COMPLETED: nothing was proven. Not FAILED either, and this is the
+            # point: FAILED asserts "the work did not meet the criteria", and that is
+            # not what happened — no evidence was gathered, so the criteria are
+            # neither met nor unmet. WAITING_USER is the only state that says the
+            # true thing: the work is done and a person should look at it.
+            #
+            # Reporting FAILED here is what turned a five-step run that had produced
+            # the right 11-slide deck into a failed run, and then into a deliverable
+            # labelled 「未校验」.
+            self.controller.set_state(
+                RunState.WAITING_CONFIRMATION,
+                "步骤全部完成，但最终核验没能取得证据，需要你自己看一眼",
+            )
+            state = RunState.WAITING_CONFIRMATION
         else:
-            # Every step passed but the criteria did not. Report that honestly
-            # rather than calling it done.
+            # Every step passed but the evidence says the criteria are not met.
+            # That is a real failure of the work, and it is reported as one.
             self.controller.set_state(RunState.FAILED, "步骤已完成，但成功标准未通过核验")
             state = RunState.FAILED
 
@@ -1110,75 +1158,223 @@ class AutonomousAgent:
         return self._result(state, started, plan, snapshot_id, all_evidence, answer=answer, verified=verified)
 
     # ------------------------------------------------------------- final check --
-    async def _final_verify(self, plan: ExecutionPlan) -> tuple[bool, list[dict[str, Any]]]:
-        """Check the plan's success criteria against real evidence."""
+    #: How many times the final verifier may try to *obtain* evidence.
+    #:
+    #: Not "how many times may it fail the criteria" — a call that returns a
+    #: truthful "no" ends the check on the first attempt. This bounds retries of a
+    #: call that errored, where nothing was learned either way.
+    MAX_FINAL_VERIFY_ATTEMPTS = 3
+
+    async def _final_verify(
+        self, plan: ExecutionPlan
+    ) -> tuple[bool, bool, list[dict[str, Any]]]:
+        """Check the plan's success criteria against real evidence.
+
+        Returns `(passed, conclusive, evidence)`. `conclusive` is False when the
+        verifier never managed to obtain evidence at all — no tool call, or every
+        attempt errored. That is a third outcome on purpose: "the criteria are not
+        met" and "I could not check the criteria" are different facts, and only the
+        first one is a failure of the work.
+
+        Two fixes live here, and the run that produced them needed both:
+
+        * **The verifier is told what the run produced.** It used to be given the
+          goal and nothing else, so it had to guess a path. It guessed
+          `Java基础教程_指引目录.pptx`; the file was at
+          `deliverables/Java基础教程_指引目录.pptx`; the read failed; the run was
+          marked FAILED. Every step had passed. The artifact list removes the guess.
+        * **An errored evidence call is retried.** A tool that could not run is not
+          evidence that the criterion failed — it is evidence that the check did not
+          happen. One attempt meant a mistyped path was indistinguishable from a
+          missing deliverable.
+        """
         evidence: list[dict[str, Any]] = []
         if not plan.success_criteria:
-            return True, evidence
+            return True, True, evidence
 
+        artifact_block = self._artifact_block()
         system = (
             "你是最终验收器。逐条核验成功标准，必须用工具取得客观证据。\n"
             "成功标准：\n"
             + "\n".join(f"{i}. {c}" for i, c in enumerate(plan.success_criteria, start=1))
-            + "\n\n请为**最关键的一条**调用一个工具取得证据。只调用工具，不要解释。"
+            + "\n\n"
+            + artifact_block
+            + "请为**最关键的一条**调用一个工具取得证据。只调用工具，不要解释。"
         )
-        messages = [
+
+        messages: list[ChatMessage] = [
             ChatMessage(role="system", content=system),
             ChatMessage(role="user", content="请核验。"),
         ]
-        try:
-            chat = await asyncio.wait_for(
-                self.llm.chat(
+
+        for attempt in range(1, self.MAX_FINAL_VERIFY_ATTEMPTS + 1):
+            try:
+                chat = await _chat(
+                    self.llm,
                     repair_tool_pairing(messages),
                     temperature=0.0,
-                    max_tokens=_completion_budget(),
                     tools=self.registry.specs(),
-                ),
-                timeout=120,
-            )
-        except (TimeoutError, Exception) as exc:
-            return False, [{"tool": "", "passed": False, "reason": f"核验调用失败：{type(exc).__name__}"}]
+                    timeout=120,
+                )
+            except Exception as exc:
+                evidence.append(
+                    {
+                        "tool": "",
+                        "passed": False,
+                        "attempt": attempt,
+                        "conclusive": False,
+                        "reason": f"核验调用失败：{type(exc).__name__}",
+                    }
+                )
+                continue
 
-        if not chat.tool_calls:
-            return False, [{"tool": "", "passed": False, "reason": "最终核验未产生客观证据"}]
+            if not chat.tool_calls:
+                evidence.append(
+                    {
+                        "tool": "",
+                        "passed": False,
+                        "attempt": attempt,
+                        "conclusive": False,
+                        "reason": "最终核验未产生客观证据",
+                        "claimed": (chat.content or "")[:300],
+                    }
+                )
+                # The model would not call a tool. Asking again with the same prompt
+                # is the same request twice — say why it is needed instead.
+                messages.append(
+                    ChatMessage(
+                        role="user",
+                        content=(
+                            "你刚才没有调用任何工具，因此这次核验没有取得任何证据。"
+                            "请调用一个工具来核验，不要用文字回答。"
+                        ),
+                    )
+                )
+                continue
 
-        request = chat.tool_calls[0]
-        result = await self.registry.execute(self.ctx, request.name, request.arguments)
-        self.controller.tool_calls += 1
-        exit_code = getattr(result, "exit_code", None)
+            request = chat.tool_calls[0]
+            result = await self.registry.execute(self.ctx, request.name, request.arguments)
+            self.controller.tool_calls += 1
+            exit_code = getattr(result, "exit_code", None)
 
-        # The same rule `_verify_step` already applies, and for the same reason:
-        # some tools succeed at answering "no". `file_exists` returning `ok=True`
-        # with `exists: false` is a truthful report that the artifact is missing —
-        # reading only `ok` here made the final gate pass on evidence that proved
-        # the opposite of what it was checking.
-        answer = result.data if isinstance(result.data, dict) else {}
-        answered_no = False
-        if request.name == "file_exists":
-            answered_no = not bool(answer.get("exists"))
-        elif request.name in ("file_read", "document_read") and not result.ok:
-            answered_no = True
+            # The same rule `_verify_step` already applies, and for the same reason:
+            # some tools succeed at answering "no". `file_exists` returning `ok=True`
+            # with `exists: false` is a truthful report that the artifact is missing —
+            # reading only `ok` here made the final gate pass on evidence that proved
+            # the opposite of what it was checking.
+            #
+            # Note what is *not* here: a read that errored is not a "no". That rule
+            # used to exist and it is the bug this file fixes. `document_read` on a
+            # mistyped path returns `ValidationError: 文件不存在`, which is
+            # indistinguishable from a genuinely missing file — so a wrong guess
+            # became a negative finding, and a run whose five steps had all passed
+            # was reported FAILED. An error means the check did not run; only the
+            # tool's own explicit answer is an answer.
+            answer = result.data if isinstance(result.data, dict) else {}
+            answered_no = False
+            if request.name == "file_exists":
+                answered_no = not bool(answer.get("exists"))
 
-        passed = result.ok and (exit_code in (None, 0)) and not answered_no
+            passed = result.ok and (exit_code in (None, 0)) and not answered_no
+            # False only when the call errored: nothing was established, in either
+            # direction, so there is nothing to report as a verdict.
+            conclusive = result.ok or answered_no
 
-        evidence.append(
-            {
+            record: dict[str, Any] = {
                 "tool": request.name,
                 "arguments": _trim(request.arguments),
                 "ok": result.ok,
                 "exit_code": exit_code,
                 "summary": result.summary,
+                "error": result.error,
                 "passed": passed,
                 "answered_no": answered_no,
+                "conclusive": conclusive,
+                "attempt": attempt,
                 "final": True,
             }
-        )
+            evidence.append(record)
+            self.controller.emit(
+                "verification",
+                message=(
+                    f"最终核验{'通过' if passed else '未通过'}"
+                    + ("" if conclusive else f"（第 {attempt} 次取证失败，重试）")
+                ),
+                data=record,
+            )
+
+            if conclusive:
+                return passed, True, evidence
+
+            # Nothing was learned. Feed the failure back so the next attempt is a
+            # different attempt rather than the same one again.
+            messages.append(
+                ChatMessage(
+                    role="assistant",
+                    content=chat.content or "",
+                    reasoning_content=chat.reasoning_content or None,
+                    tool_calls=[
+                        {
+                            "id": request.id,
+                            "type": "function",
+                            "function": {
+                                "name": request.name,
+                                "arguments": json.dumps(
+                                    request.arguments, ensure_ascii=False, default=str
+                                ),
+                            },
+                        }
+                    ],
+                )
+            )
+            messages.append(
+                ChatMessage(
+                    role="tool",
+                    name=request.name,
+                    tool_call_id=request.id,
+                    content=json.dumps(result.to_payload(limit=2000), ensure_ascii=False, default=str),
+                )
+            )
+            messages.append(
+                ChatMessage(
+                    role="user",
+                    content=(
+                        f"上一个工具调用本身失败了（{result.error or result.summary}），"
+                        "这不是「答案是否」，而是这次核验没有取到证据。"
+                        "请根据上面的实际文件列表换一个路径或换一个工具，重新取证。"
+                    ),
+                )
+            )
+
+        # Every attempt errored. Nothing was established, in either direction.
+        #
+        # Emitted explicitly rather than left implicit in the evidence list: this is
+        # the outcome that used to be indistinguishable from "the criteria were not
+        # met", and the trace is where someone looks to find out which one happened.
         self.controller.emit(
             "verification",
-            message=f"最终核验{'通过' if passed else '未通过'}",
-            data=evidence[-1],
+            message=(
+                f"最终核验没能取得证据：{self.MAX_FINAL_VERIFY_ATTEMPTS} 次取证都失败了。"
+                "这次运行不能算已验证，但也没有任何一条成功标准被证伪。"
+            ),
+            data={"tool": "", "passed": False, "conclusive": False, "final": True},
         )
-        return passed, evidence
+        return False, False, evidence
+
+    def _artifact_block(self) -> str:
+        """What this run wrote, as a prompt block. Empty when it wrote nothing.
+
+        Paths are given verbatim. The verifier is told not to invent one, because
+        inventing one is exactly how it failed before — and a wrong path produces a
+        tool error, which reads like a missing artifact.
+        """
+        if not self.artifacts:
+            return ""
+        lines = "\n".join(f"- {path}" for path in self.artifacts)
+        return (
+            "本次运行实际写出的文件（下面是真实路径，请直接使用，不要自己拼路径、不要加或减目录）：\n"
+            f"{lines}\n\n"
+        )
 
     async def _final_report(
         self, plan: ExecutionPlan, state: RunState, evidence: list[dict[str, Any]]

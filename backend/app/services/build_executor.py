@@ -32,6 +32,9 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai.agent.plan import RunState
+# The set lives with the registry that knows which capabilities exist — see the
+# note there. Re-exported below so existing importers keep working.
+from app.ai.tools.registry import ARTIFACT_TOOLS
 from app.core.logging import get_logger
 from app.models.ai import ToolAuditLog
 from app.models.delivery import (
@@ -43,9 +46,6 @@ from app.models.delivery import (
 from app.services.delivery_service import DeliveryService
 
 logger = get_logger(__name__)
-
-#: Tools whose successful invocation means a file now exists at a known path.
-ARTIFACT_TOOLS = {"document_write", "file_write"}
 
 #: States in which there is nothing left to watch.
 #:
@@ -246,6 +246,24 @@ async def _watch(
                     run,
                     final,
                     summary="运行结束，但没有检测到产出文件。可能它只是回答了问题，或写到了别的位置。",
+                )
+            elif final is BuildStatus.WAITING_USER:
+                # The agent finished every step but could not establish that the
+                # success criteria hold. Deliberately **not** folded into PARTIAL:
+                # PARTIAL means "a step failed and files came out anyway", and saying
+                # that here would put a failure in the record that never happened.
+                #
+                # Not COMPLETED either — nothing was proven. This state says the one
+                # true thing: the work is done, the verdict is not, and a person
+                # should look. Reporting FAILED instead is what turned a five-step run
+                # that had produced the right 11-slide deck into a failed run.
+                await service.set_status(
+                    run,
+                    BuildStatus.WAITING_USER,
+                    summary=(
+                        "步骤全部完成，但最终核验没能取得客观证据，所以这次运行没有得出"
+                        "可验证的结论。产出文件都在，需要你自己看一眼。"
+                    ),
                 )
             elif final is not BuildStatus.COMPLETED and collected:
                 # Files exist but the run did not succeed. Neither "failed" nor

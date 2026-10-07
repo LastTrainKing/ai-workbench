@@ -31,6 +31,19 @@ from app.core.logging import get_logger
 
 logger = get_logger(__name__)
 
+#: Tools whose successful call means a file now exists at a known path.
+#:
+#: Defined here, next to the registry that knows which capabilities exist, because
+#: two callers need the same answer and they must not be allowed to drift: the
+#: build executor, deciding which files a run produced, and the agent's final
+#: verifier, telling the model where those files are so it does not have to guess.
+#:
+#: That second caller is the reason this moved. The verifier used to be handed no
+#: information about the run's own output, guessed a path, missed the
+#: `deliverables/` prefix, and the resulting "file does not exist" failed an
+#: otherwise perfect run.
+ARTIFACT_TOOLS: frozenset[str] = frozenset({"document_write", "file_write"})
+
 
 @dataclass(slots=True)
 class CapabilityGroup:
@@ -188,4 +201,10 @@ def build_computer_registry(
     return ComputerToolRegistry(policy, enabled=enabled)
 
 
-__all__ = ["CAPABILITIES", "CapabilityGroup", "ComputerToolRegistry", "build_computer_registry"]
+__all__ = [
+    "ARTIFACT_TOOLS",
+    "CAPABILITIES",
+    "CapabilityGroup",
+    "ComputerToolRegistry",
+    "build_computer_registry",
+]

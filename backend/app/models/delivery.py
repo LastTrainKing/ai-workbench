@@ -375,7 +375,15 @@ def describe_run_state(status: str) -> dict[str, Any]:
     if state is BuildStatus.LIMIT_REACHED:
         return {"state": state.value, "ok": False, "detail": "这次运行达到了资源上限而停止。"}
     if state is BuildStatus.WAITING_USER:
-        return {"state": state.value, "ok": False, "detail": "这次运行在等你确认，还没有结束。"}
+        return {
+            "state": state.value,
+            "ok": False,
+            # True for both ways this state arises — the agent finished every step
+            # but could not verify the criteria, or it finished without producing a
+            # file the collector could see. In neither case did the run reach
+            # "verified complete", and in neither case did anything fail.
+            "detail": "这次运行没有走到「已验证完成」，需要你自己看一眼。",
+        }
     return {"state": state.value, "ok": False, "detail": f"这次运行还在进行中（{state.value}）。"}
 
 
