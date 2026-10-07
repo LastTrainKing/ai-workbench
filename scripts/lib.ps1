@@ -140,6 +140,37 @@ function Repair-ProcessEnvironment {
 
 Repair-ProcessEnvironment
 
+function Test-IsElevated {
+    <#
+      True when this process holds an elevated (administrator) token.
+
+      It matters for exactly one thing here: Windows PostgreSQL refuses to start
+      from an elevated process —
+
+          Execution of PostgreSQL by a user with administrative permissions is
+          not permitted.
+
+      — and `Start-Process` cannot drop privileges. So a stack launched from an
+      elevated shell (an elevated terminal, or an agent host that runs elevated)
+      dies at step one, with a message that points at the log rather than at the
+      cause. `Start-Postgres` uses this to route around it.
+
+      `CheckTokenMembership` semantics matter: a UAC-filtered token has the
+      Administrators SID present but disabled, so `IsInRole` is False there and
+      PostgreSQL starts normally. This returns True only for a genuinely
+      elevated token, which is the case that needs the workaround.
+    #>
+    try {
+        $principal = New-Object Security.Principal.WindowsPrincipal(
+            [Security.Principal.WindowsIdentity]::GetCurrent()
+        )
+        return $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+    }
+    catch {
+        return $false
+    }
+}
+
 function Write-Step($msg)  { Write-Host "[*] $msg" -ForegroundColor Cyan }
 function Write-Ok($msg)    { Write-Host "[+] $msg" -ForegroundColor Green }
 function Write-Warn2($msg) { Write-Host "[!] $msg" -ForegroundColor Yellow }

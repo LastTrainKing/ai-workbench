@@ -85,36 +85,72 @@ function Start-Postgres {
             Write-StartupLog -Service 'PostgreSQL' -State 'STARTING' -Detail "port $PgPort"
             if (Test-IsElevated) {
                 # postgres.exe refuses to run with an elevated token, and Start-Process
-                # cannot drop privileges. `runas /trustlevel:0x20000` re-launches it with
-                # a restricted (Basic User) token, no password prompt. The helper
-                # recomputes every path from the same lib.ps1, so there is nothing to
-                # quote through `runas`'s single command string.
+                # cannot drop privileges. Two ways to get a restricted token, tried in
+                # this order because each works where the other does not:
                 #
-                # Without this, launching the stack from an elevated shell fails at
-                # PostgreSQL with "port 5432 never opened" and the real reason is only
-                # in postgres.err.log.
+                #   1. `runas /trustlevel:0x20000` — works from a normal elevated
+                #      terminal (verified here: it writes a probe file and returns 0).
+                #      It fails when the parent is inside a job object it cannot escape,
+                #      which is how the desktop host launches this script.
+                #   2. `Start-ProcessRestricted` — creates the token in-process, so the
+                #      child stays in the parent's job. It needs SeImpersonatePrivilege,
+                #      which a normal elevated token has enabled and this agent host's
+                #      token does not (measured: `whoami /priv` shows it enabled, yet
+                #      `AdjustTokenPrivileges` reports ERROR_NOT_ALL_ASSIGNED and
+                #      CreateProcessWithTokenW returns win32=5).
+                #
+                # Either one failing is reported with the reason, because "port 5432
+                # never opened" sent the last reader to a log file that took three
+                # attempts to interpret.
                 Write-Warn2 'Elevated shell detected - starting PostgreSQL with a restricted token'
-                $helper = Join-Path $PSScriptRoot '_start-postgres.ps1'
-                # Absolute paths for both executables. The desktop host launches this
-                # script with an environment it controls, and `powershell.exe` and
-                # `runas.exe` are not guaranteed to be on its PATH — a bare name failed
-                # there with `runas exit 1`, which said nothing about the cause.
+                $restricted = $false
+
                 $runas = Join-Path $env:SystemRoot 'System32\runas.exe'
                 if (-not (Test-Path $runas)) { $runas = 'runas.exe' }
                 $shell = Join-Path $PSHOME 'powershell.exe'
                 if (-not (Test-Path $shell)) { $shell = 'powershell.exe' }
-                $payload = "`"$shell`" -NoProfile -ExecutionPolicy Bypass -File `"$helper`""
+                $helper = Join-Path $PSScriptRoot '_start-postgres.ps1'
+                if (Test-Path $helper) {
+                    $payload = "`"$shell`" -NoProfile -ExecutionPolicy Bypass -File `"$helper`""
+                    $launchOutput = & $runas /trustlevel:0x20000 $payload 2>&1
+                    $launchExit = $LASTEXITCODE
+                    if ($launchExit -eq 0) {
+                        $restricted = $true
+                    }
+                    else {
+                        # Recorded rather than swallowed: `runas` explains itself on
+                        # stdout, and piping it to Out-Null threw away the only line
+                        # that could have said why.
+                        $detail = ($launchOutput | Out-String).Trim()
+                        Write-StartupLog -Service 'PostgreSQL' -State 'STARTING' `
+                            -Detail "runas exit $launchExit $detail"
+                        Write-Warn2 "runas failed ($launchExit): $detail"
+                    }
+                }
 
-                $launchOutput = & $runas /trustlevel:0x20000 $payload 2>&1
-                $launchExit = $LASTEXITCODE
-                if ($launchExit -ne 0) {
-                    # Recorded rather than swallowed: `runas` explains itself on stdout,
-                    # and losing that text is how a one-line failure became a mystery.
-                    $detail = ($launchOutput | Out-String).Trim()
-                    Write-StartupLog -Service 'PostgreSQL' -State 'FAILED' `
-                        -Detail "runas exit $launchExit $detail"
-                    Write-Warn2 "restricted-token launch failed ($launchExit): $detail"
-                    Write-Warn2 'falling back to a direct launch - if this shell is genuinely elevated it will fail too, and postgres.err.log will say so'
+                if (-not $restricted) {
+                    . "$PSScriptRoot\_restricted-launch.ps1"
+                    # `logging_collector`, because this launch cannot redirect
+                    # stdout/stderr — it has no inherited handles to redirect, and
+                    # postgres.log is the first place anyone looks when it will not start.
+                    $pgArguments = ConvertTo-ProcessArgumentList @(
+                        '-D', $PgData, '-p', "$PgPort",
+                        '-c', 'listen_addresses=127.0.0.1',
+                        '-c', 'logging_collector=on',
+                        '-c', "log_directory=$LogDir",
+                        '-c', 'log_filename=postgres.log'
+                    )
+                    $restricted = Start-ProcessRestricted `
+                        -FilePath (Join-Path $PgHome 'bin\postgres.exe') `
+                        -Arguments $pgArguments `
+                        -WorkingDirectory $PgHome
+                }
+
+                if (-not $restricted) {
+                    # Neither worked. Try the direct launch anyway: on a shell that is
+                    # only *partly* elevated it succeeds, and on a genuinely elevated one
+                    # it fails with postgres's own message rather than with a code.
+                    Write-Warn2 'both restricted launches failed - trying a direct launch'
                     Start-Process -FilePath (Join-Path $PgHome 'bin\postgres.exe') `
                         -ArgumentList (ConvertTo-ProcessArgumentList @('-D', $PgData, '-p', "$PgPort", '-c', 'listen_addresses=127.0.0.1')) `
                         -WorkingDirectory $PgHome -WindowStyle Hidden `
@@ -138,7 +174,26 @@ function Start-Postgres {
     # --- 1. the port must appear (fast, not sufficient) -----------------------
     if (-not (Wait-Until -Condition { Test-PortOpen $PgPort } -TimeoutSeconds 30)) {
         Write-StartupLog -Service 'PostgreSQL' -State 'FAILED' -Detail "port $PgPort never opened"
-        Write-StartupError "PostgreSQL did not bind port $PgPort within 30s - see $LogDir\postgres.err.log"
+        # Say *why* when the reason is knowable. "port 5432 never opened" sends the
+        # reader to a log file; the log file says "Execution of PostgreSQL by a user with
+        # administrative permissions is not permitted", which names the actual problem
+        # and the actual fix (start it from a normal, non-elevated shell).
+        $adminRefusal = $false
+        foreach ($candidate in @('postgres.err.log', 'postgres.log')) {
+            $path = Join-Path $LogDir $candidate
+            if (Test-Path $path) {
+                $text = Get-Content -LiteralPath $path -Raw -ErrorAction SilentlyContinue
+                if ($text -and $text -match 'administrative permissions') { $adminRefusal = $true }
+            }
+        }
+        if ($adminRefusal) {
+            Write-StartupError ("PostgreSQL 拒绝以管理员身份运行（这层 shell 是提权的），" +
+                "本机也无法创建受限令牌来绕开它。请从普通（非提权）终端启动，" +
+                "或直接双击桌面上的 AI Workbench 快捷方式。详见 $LogDir\postgres.log")
+        }
+        else {
+            Write-StartupError "PostgreSQL did not bind port $PgPort within 30s - see $LogDir\postgres.err.log"
+        }
         return $false
     }
 
