@@ -169,3 +169,54 @@ is a query.
 - [docs/agent.md](docs/agent.md) — the tool contract and the catalogue
 - [docs/autonomous-agent.md](docs/autonomous-agent.md) — states, snapshots, rollback
 - [docs/permissions.md](docs/permissions.md) — the policy model
+
+---
+
+## Where the agent gets what it works with
+
+Before it reasons, the agent walks a ladder and stops at the first tier that can answer.
+**A question the user's own memory can answer never reaches the model at all** — which is
+the whole of the "faster than starting from scratch" claim, and it is measured rather than
+asserted.
+
+```
+① memory      one indexed lookup            median 1.6 ms
+② skill       a known way of doing the work
+③ knowledge   one hybrid search             median 35.8 ms
+④ general     reasoning + tools             median 25.1 ms (retrieval only)
+```
+
+**Memory answers 15.5× faster than the general path at the retrieval layer.** The numbers,
+the method, and the two failed attempts at choosing the relevance cut-off are in
+[RETRIEVAL.md](RETRIEVAL.md) — including the rule that came out of them:
+**measure the distribution before picking a threshold.**
+
+### Failure is visible, always
+
+Three outcomes, reported differently because they are different facts:
+
+```
+知识库里没有相关资料                                    <- there is nothing
+检索到 5 段，最相关的一段相关度 0.72，低于 1.693        <- there is something, it is not an answer
+检索失败：<the real exception>                          <- the search broke
+```
+
+**"Found nothing" and "the search failed" are not the same thing**, and collapsing them
+into an empty list is how a failure becomes invisible. `SKILL_LAYER_BUILT` exists for the
+same reason: an empty list and a tier that was never consulted look identical in a report,
+and only one of them is true.
+
+### It goes and finds what it needs
+
+The agent does not wait for behaviour to accumulate. It searches public sources for ways
+of working that fit, assesses them, and installs the ones the user picks — see
+[SKILL.md](SKILL.md). Nothing installs without an explicit confirmation, and nothing
+installs without passing the security scan; both gates are in one function on purpose.
+
+### Recovery
+
+A run that fails is recorded with what failed. `verify_deepseek.py` asserts that no run
+claims a provider it did not use — a check that found half of every run history naming a
+*permission level* (`autonomous`) where a provider should have been. Runs whose provider
+was never recorded now say `unknown`, which claims nothing, rather than a guess that would
+replace one false claim with another.
