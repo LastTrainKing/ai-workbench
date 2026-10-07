@@ -12,7 +12,13 @@ export function ProviderBadge({ className }: { className?: string }) {
   const { data, isError } = useQuery({
     queryKey: ['health', 'deps'],
     queryFn: ({ signal }) => api.health.deps(signal),
-    staleTime: 60_000,
+    // This label answers "what is it running on right now", so it is fetched
+    // fresh rather than cached: a 60s staleTime meant saving a key left the bar
+    // contradicting the page the user was standing on. Settings invalidates
+    // ['health'] on save; this makes the readable window short either way.
+    staleTime: 5_000,
+    refetchInterval: 30_000,
+    refetchOnWindowFocus: true,
     retry: 1,
   })
 

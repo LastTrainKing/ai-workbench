@@ -23,6 +23,7 @@ import {
   ArrowRight,
   Check,
   FileText,
+  KeyRound,
   Loader2,
   Package,
   Sparkles,
@@ -36,7 +37,7 @@ import { EmptyState, ErrorState, InlineAlert, LoadingBlock } from '@/components/
 import { deliveryApi, KIND_LABELS, STATUS_LABELS, STATUS_TONES, acceptanceLabel, formatSize, formatWhen } from '@/lib/deliveryApi'
 import type { BuildRun, DeliverableKind } from '@/lib/deliveryApi'
 import { contextApi } from '@/lib/contextApi'
-import { toApiError } from '@/lib/api'
+import { api, toApiError } from '@/lib/api'
 import { cn } from '@/lib/utils'
 
 const FORMATS: { value: DeliverableKind; label: string }[] = [
@@ -53,6 +54,57 @@ const EXAMPLES = [
   '把这批文档整理成一份课程报告',
   '分析这些数据并做一张汇总表',
 ]
+
+/**
+ * Thrown when the run was created but would not start.
+ *
+ * This is a distinct failure on purpose. "It could not be created" and "it was
+ * created but could not start" need different words and different recovery, and
+ * collapsing them into one message is how the original DRAFT-forever bug stayed
+ * invisible: the create succeeded, nothing arrived, and the screen looked calm.
+ */
+class StartFailedError extends Error {
+  readonly buildRunId: string
+  constructor(buildRunId: string, message: string) {
+    super(message)
+    this.name = 'StartFailedError'
+    this.buildRunId = buildRunId
+  }
+}
+
+/* ------------------------------------------------------- ⓿ needs a model -- */
+
+/**
+ * The first thing a fresh install needs is a model, and it needs to be told that
+ * once, in a size it cannot miss. A pill in the corner is not a first-class
+ * surface — the user's own words for this were "应该让 api 配置很显眼吧".
+ *
+ * Stated as a step to take, not an error to clear.
+ */
+function ModelSetupNotice({ reason }: { reason: string }) {
+  return (
+    <div
+      data-testid="model-setup-notice"
+      className="rounded-xl border border-warn/40 bg-warn-soft/60 p-3.5"
+    >
+      <div className="flex items-start gap-2.5">
+        <KeyRound className="mt-0.5 size-4 shrink-0 text-warn" />
+        <div className="min-w-0 flex-1">
+          <p className="text-[13.5px] font-medium text-text">先给它一个模型，它才能干活</p>
+          <p className="mt-1 text-[12.5px] leading-relaxed text-muted">
+            {reason}
+            填一个 API Key 就好，一分钟的事；配好之后这里会自动消失。
+          </p>
+        </div>
+        <Link to="/settings" className="shrink-0">
+          <Button size="sm" variant="primary" data-testid="goto-model-settings">
+            去配置
+          </Button>
+        </Link>
+      </div>
+    </div>
+  )
+}
 
 /* ------------------------------------------------------- ① hand it a goal -- */
 
@@ -73,24 +125,59 @@ function GoalComposer() {
     retry: false,
   })
 
+  // Can it actually work? Only the llm matters. Embeddings falling back to the
+  // offline engine is deliberate — DeepSeek has no embedding endpoint — so
+  // treating that as "unconfigured" would block a perfectly working setup.
+  const health = useQuery({
+    queryKey: ['health', 'deps'],
+    queryFn: ({ signal }) => api.health.deps(signal),
+    retry: false,
+  })
+
   const create = useMutation({
-    mutationFn: () =>
-      deliveryApi.createBuildRun({
+    mutationFn: async () => {
+      const created = await deliveryApi.createBuildRun({
         goal: goal.trim(),
         deliverable_kind: kind,
         // The scope is explicit: "which of my documents may it read" is a question
         // the user is entitled to answer, so all bases are selected by default and
         // the selection is visible rather than implied.
         knowledge_base_ids: (knowledge.data ?? []).map((kb: { id: string }) => kb.id),
-      }),
-    onSuccess: (result) => {
-      void queryClient.invalidateQueries({ queryKey: ['delivery'] })
-      navigate(`/workbench/${result.data.id}`)
+      })
+
+      // A run that was created but never started is the exact bug this replaced.
+      // The two steps are kept visibly separate so a start failure is a start
+      // failure — it can never be reported as "nothing happened".
+      try {
+        const started = await deliveryApi.executeBuildRun(created.data.id)
+        return { run: created.data, started: started.data }
+      } catch (exc) {
+        const error = toApiError(exc)
+        throw new StartFailedError(created.data.id, error.message)
+      }
     },
-    onError: (exc) => setNotice(toApiError(exc).message),
+    onSuccess: ({ run }) => {
+      void queryClient.invalidateQueries({ queryKey: ['delivery'] })
+      void queryClient.invalidateQueries({ queryKey: ['health', 'deps'] })
+      navigate(`/workbench/${run.id}`)
+    },
+    onError: (exc) => {
+      // The run exists and the user can start it from the workbench — send them
+      // there and say why, rather than leaving a silent DRAFT behind.
+      if (exc instanceof StartFailedError) {
+        setNotice(`任务已创建，但没能开始：${exc.message}。到工作台点「开始」可以重试。`)
+        navigate(`/workbench/${exc.buildRunId}`)
+        return
+      }
+      setNotice(toApiError(exc).message)
+    },
   })
 
   const baseCount = knowledge.data?.length ?? 0
+  const llm = health.data?.ai?.llm
+  const blockedReason = llm?.degraded
+    ? llm.reason || '还没有配置可用的模型，它现在做不了需要推理的活。'
+    : null
 
   return (
     <Card className="border-accent/25">
@@ -100,6 +187,11 @@ function GoalComposer() {
           <h2 className="text-[15px] font-medium text-text">你想让我完成什么？</h2>
         </div>
 
+        {/* The gate is stated before the input, not after the click, because
+            discovering it by being refused is how the user learns the product
+            does not work — which is the wrong lesson. */}
+        {blockedReason && <ModelSetupNotice reason={blockedReason} />}
+
         {notice && <InlineAlert tone="danger" title="没能开始">{notice}</InlineAlert>}
 
         <textarea
@@ -107,13 +199,19 @@ function GoalComposer() {
           onChange={(event) => setGoal(event.target.value)}
           onKeyDown={(event) => {
             if (event.key === 'Enter' && (event.metaKey || event.ctrlKey) && goal.trim().length >= 4) {
+              if (blockedReason) return
               create.mutate()
             }
           }}
           rows={2}
           data-testid="goal-input"
-          placeholder="例如：用我的毕业设计资料做一份 15 分钟的答辩 PPT"
-          className="w-full resize-none rounded-xl border border-border bg-inset px-3.5 py-3 text-[14px] text-text outline-none transition-colors placeholder:text-faint focus:border-accent/60"
+          disabled={Boolean(blockedReason)}
+          placeholder={
+            blockedReason
+              ? '先配置模型，这里就能用了'
+              : '例如：用我的毕业设计资料做一份 15 分钟的答辩 PPT'
+          }
+          className="w-full resize-none rounded-xl border border-border bg-inset px-3.5 py-3 text-[14px] text-text outline-none transition-colors placeholder:text-faint focus:border-accent/60 disabled:opacity-60"
         />
 
         <div className="flex flex-wrap gap-1.5">
@@ -121,8 +219,9 @@ function GoalComposer() {
             <button
               key={example}
               type="button"
+              disabled={Boolean(blockedReason)}
               onClick={() => setGoal(example)}
-              className="rounded-full border border-border px-2.5 py-1 text-[11.5px] text-muted transition-colors hover:border-accent/40 hover:text-text"
+              className="rounded-full border border-border px-2.5 py-1 text-[11.5px] text-muted transition-colors hover:border-accent/40 hover:text-text disabled:opacity-50"
             >
               {example}
             </button>
@@ -147,9 +246,10 @@ function GoalComposer() {
                 key={format.value}
                 type="button"
                 data-testid={`format-${format.value}`}
+                disabled={Boolean(blockedReason)}
                 onClick={() => setKind(format.value)}
                 className={cn(
-                  'rounded-lg border px-2.5 py-1 text-[11.5px] transition-colors',
+                  'rounded-lg border px-2.5 py-1 text-[11.5px] transition-colors disabled:opacity-50',
                   kind === format.value
                     ? 'border-accent/60 bg-accent/10 text-text'
                     : 'border-border text-muted hover:text-text',
@@ -165,11 +265,11 @@ function GoalComposer() {
             size="sm"
             className="ml-auto"
             data-testid="start-build"
-            disabled={goal.trim().length < 4 || create.isPending}
+            disabled={goal.trim().length < 4 || create.isPending || Boolean(blockedReason)}
             onClick={() => create.mutate()}
           >
             {create.isPending ? <Loader2 className="size-3.5 animate-spin" /> : <ArrowRight className="size-3.5" />}
-            开始
+            {blockedReason ? '先配置模型' : '开始'}
           </Button>
         </div>
       </CardBody>
@@ -202,6 +302,10 @@ function ActiveBuilds({ runs }: { runs: BuildRun[] }) {
       <CardBody className="divide-y divide-border/50 p-0">
         {runs.map((run) => {
           const percent = Math.round(run.progress * 100)
+          // A DRAFT run is not being processed, it is waiting. Saying so here means
+          // the user finds out on the home screen rather than after opening the run
+          // and staring at three empty panels.
+          const waiting = run.status === 'DRAFT' || run.status === 'READY'
           return (
             <Link
               key={run.id}
@@ -217,12 +321,15 @@ function ActiveBuilds({ runs }: { runs: BuildRun[] }) {
               </div>
               <div className="mt-2 h-1 overflow-hidden rounded-full bg-inset">
                 <div
-                  className="h-full rounded-full bg-accent transition-all"
+                  className={cn('h-full rounded-full transition-all', waiting ? 'bg-warn/60' : 'bg-accent')}
                   style={{ width: `${percent}%` }}
                 />
               </div>
               <p className="mt-1.5 text-[11.5px] text-faint">
-                {run.steps_done}/{run.steps_total || '—'} 步 · {KIND_LABELS[run.deliverable_kind] ?? run.deliverable_kind}
+                {waiting
+                  ? '还没开始 —— 打开它点一下「开始」'
+                  : `${run.steps_done}/${run.steps_total || '—'} 步`}{' '}
+                · {KIND_LABELS[run.deliverable_kind] ?? run.deliverable_kind}
                 {run.started_at && ` · 开始于 ${formatWhen(run.started_at)}`}
               </p>
             </Link>

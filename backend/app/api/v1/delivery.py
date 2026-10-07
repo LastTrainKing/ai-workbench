@@ -77,7 +77,11 @@ async def create_build_run(
         project_id=payload.project_id,
         title=payload.title,
     )
-    return ok(run.as_dict(include_plan=True), message="已开始处理")
+    # The message is literally true. Creating a run does not start it — that is
+    # `POST /build-runs/{id}/execute`. Saying "已开始处理" here was a lie that cost a
+    # user a whole session: the run sat in DRAFT, the UI read like work in progress,
+    # and nothing was ever executed.
+    return ok(run.as_dict(include_plan=True), message="已创建，尚未开始")
 
 
 @router.get("/build-runs", summary="List build runs")

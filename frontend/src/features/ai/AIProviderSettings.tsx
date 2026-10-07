@@ -150,7 +150,11 @@ export function AIProviderSettings() {
       setTestResult(null)
       void queryClient.invalidateQueries({ queryKey: ['ai-config'] })
       void queryClient.invalidateQueries({ queryKey: ['ai-config-health'] })
-      void queryClient.invalidateQueries({ queryKey: ['health-deps'] })
+      // The key the TopBar actually uses is ['health', 'deps']. This used to
+      // invalidate ['health-deps'], which matches no query anywhere — so saving a
+      // key left the top bar saying "离线启发式引擎（未配置云端 Key）" until a reload.
+      // Prefix matching on ['health'] covers both the bar and the settings page.
+      void queryClient.invalidateQueries({ queryKey: ['health'] })
       void queryClient.invalidateQueries({ queryKey: ['dashboard'] })
       pushToast({
         kind: 'success',
@@ -169,6 +173,7 @@ export function AIProviderSettings() {
       setTestResult(null)
       void queryClient.invalidateQueries({ queryKey: ['ai-config'] })
       void queryClient.invalidateQueries({ queryKey: ['ai-config-health'] })
+      void queryClient.invalidateQueries({ queryKey: ['health'] })
       pushToast({ kind: 'info', title: '已恢复为 .env 中的配置' })
     },
     onError: (error) => toastApiError(error, '恢复默认配置失败'),

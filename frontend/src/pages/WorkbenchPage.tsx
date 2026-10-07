@@ -24,11 +24,13 @@ import {
   ArrowLeft,
   Check,
   CheckCircle2,
+  ChevronRight,
   CircleDashed,
   Download,
   ExternalLink,
   Loader2,
   Package,
+  Play,
   X,
   XCircle,
 } from 'lucide-react'
@@ -41,6 +43,68 @@ import type { Deliverable } from '@/lib/deliveryApi'
 import { toApiError } from '@/lib/api'
 import { cn } from '@/lib/utils'
 import { contextApi } from '@/lib/contextApi'
+
+/* ---------------------------------------------------------- not started -- */
+
+/**
+ * Shown while a run is created but not started.
+ *
+ * This panel exists because its absence was a real defect. `DRAFT` used to look
+ * identical to a run that was thinking — an empty plan, an empty execution panel,
+ * an empty context panel — and the user waited for work that had never been
+ * asked to begin. The status is now something the screen says out loud.
+ */
+function StartPanel({ runId, retryable }: { runId: string; retryable: boolean }) {
+  const queryClient = useQueryClient()
+  const [notice, setNotice] = useState<string | null>(null)
+
+  const start = useMutation({
+    mutationFn: () => deliveryApi.executeBuildRun(runId),
+    onSuccess: () => {
+      setNotice(null)
+      void queryClient.invalidateQueries({ queryKey: ['delivery'] })
+      void queryClient.invalidateQueries({ queryKey: ['health', 'deps'] })
+    },
+    // Not swallowed. If it will not start, that is the whole message.
+    onError: (exc) => setNotice(toApiError(exc).message),
+  })
+
+  return (
+    <div
+      data-testid="not-started"
+      className="rounded-xl border border-warn/40 bg-warn-soft/50 p-4"
+    >
+      <div className="flex flex-wrap items-center gap-3">
+        <div className="min-w-0 flex-1">
+          <p className="text-[14px] font-medium text-text">
+            它还没有开始{retryable ? ' —— 上次没能启动成功' : ''}
+          </p>
+          <p className="mt-1 text-[12.5px] text-muted">
+            这次任务已经记下来了，但还没有交给它做。点「开始」它就会去规划并执行。
+          </p>
+        </div>
+        <Button
+          variant="primary"
+          size="sm"
+          data-testid="start-run"
+          disabled={start.isPending}
+          onClick={() => start.mutate()}
+        >
+          {start.isPending ? <Loader2 className="size-3.5 animate-spin" /> : <Play className="size-3.5" />}
+          {start.isPending ? '正在开始…' : '开始'}
+        </Button>
+      </div>
+
+      {notice && (
+        <div className="mt-3">
+          <InlineAlert tone="danger" title="没能开始">
+            {notice}
+          </InlineAlert>
+        </div>
+      )}
+    </div>
+  )
+}
 
 /* ------------------------------------------------------- verification view -- */
 
@@ -387,43 +451,100 @@ export default function WorkbenchPage() {
         <InlineAlert tone="danger" title="运行出错">{data.error}</InlineAlert>
       )}
 
-      {/* three columns */}
-      <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)_minmax(0,0.9fr)]">
-        {/* plan */}
-        <Card>
-          <CardHeader title="执行计划" description={`${data.steps_done}/${data.steps_total || '—'} 步`} />
-          <CardBody>
-            {steps.length === 0 ? (
-              <p className="text-[12.5px] text-faint">还没有生成计划。</p>
-            ) : (
-              <ol className="space-y-1.5">
-                {steps.map((step, index) => {
-                  const done = index < data.steps_done
-                  const current = index === data.steps_done && data.status === 'EXECUTING'
-                  return (
-                    <li key={step.id ?? index} className="flex items-start gap-2">
-                      {done ? (
-                        <CheckCircle2 className="mt-0.5 size-3.5 shrink-0 text-success" />
-                      ) : current ? (
-                        <Loader2 className="mt-0.5 size-3.5 shrink-0 animate-spin text-accent" />
-                      ) : (
-                        <CircleDashed className="mt-0.5 size-3.5 shrink-0 text-faint" />
-                      )}
-                      <div className="min-w-0">
-                        <p className={cn('text-[12.5px]', done ? 'text-muted' : 'text-text')}>
-                          {step.description ?? `第 ${index + 1} 步`}
-                        </p>
-                        {step.verification && (
-                          <p className="text-[11px] text-faint">验收：{step.verification}</p>
+      {/* A run in DRAFT has been created and nothing more. It must not read like
+          work in progress — three empty panels saying "还没有…" is exactly how the
+          original bug hid for a session. Say it, and offer the one action that
+          resolves it. */}
+      {(data.status === 'DRAFT' || data.status === 'READY') && (
+        <StartPanel
+          runId={data.id}
+          retryable={data.status === 'READY'}
+        />
+      )}
+
+      {/* What it made comes first. The question a person opens this page with is
+          "did it make my thing?", not "which step is it on" — so the deliverables
+          hold the top of the page and the machinery lives in 「详情」 below.
+          Nothing was removed; the三个 panels are one click away. */}
+      <Card>
+        <CardHeader
+          title="产出物"
+          description="生成不等于完成 —— 每一份都要能读回，并且由你决定它是不是你要的"
+          actions={deliverables.length > 0 ? <Badge tone="neutral">{deliverables.length}</Badge> : null}
+        />
+        <CardBody className="space-y-2.5">
+          {deliverables.length === 0 ? (
+            <EmptyState
+              icon={<Package className="size-5" />}
+              title="还没有产出"
+              description={
+                data.status === 'DRAFT' || data.status === 'READY'
+                  ? '这次任务还没开始。开始之后，它做出来的文件会出现在这里。'
+                  : '任务执行完成后，它做出来的文件会出现在这里。'
+              }
+              compact
+            />
+          ) : (
+            deliverables.map((item) => <DeliverableCard key={item.id} item={item} />)
+          )}
+        </CardBody>
+      </Card>
+
+      {/* the machinery, folded away by default */}
+      <details
+        className="group rounded-xl border border-border bg-surface"
+        open={data.status === 'EXECUTING'}
+      >
+        <summary
+          data-testid="workbench-details"
+          className="flex cursor-pointer list-none items-center gap-2 px-4 py-3 text-[13px] text-muted transition-colors hover:text-text"
+        >
+          <ChevronRight className="size-3.5 transition-transform group-open:rotate-90" />
+          <span className="font-medium">详情</span>
+          <span className="text-[11.5px] text-faint">
+            它准备怎么做、现在做到哪、这次依据了什么
+          </span>
+          <span className="ml-auto text-[11.5px] text-faint">
+            {data.steps_done}/{data.steps_total || '—'} 步
+          </span>
+        </summary>
+
+        <div className="grid gap-3 border-t border-border p-3 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)_minmax(0,0.9fr)]">
+          {/* plan */}
+          <Card>
+            <CardHeader title="执行计划" description={`${data.steps_done}/${data.steps_total || '—'} 步`} />
+            <CardBody>
+              {steps.length === 0 ? (
+                <p className="text-[12.5px] text-faint">还没有生成计划。</p>
+              ) : (
+                <ol className="space-y-1.5">
+                  {steps.map((step, index) => {
+                    const done = index < data.steps_done
+                    const current = index === data.steps_done && data.status === 'EXECUTING'
+                    return (
+                      <li key={step.id ?? index} className="flex items-start gap-2">
+                        {done ? (
+                          <CheckCircle2 className="mt-0.5 size-3.5 shrink-0 text-success" />
+                        ) : current ? (
+                          <Loader2 className="mt-0.5 size-3.5 shrink-0 animate-spin text-accent" />
+                        ) : (
+                          <CircleDashed className="mt-0.5 size-3.5 shrink-0 text-faint" />
                         )}
-                      </div>
-                    </li>
-                  )
-                })}
-              </ol>
-            )}
-          </CardBody>
-        </Card>
+                        <div className="min-w-0">
+                          <p className={cn('text-[12.5px]', done ? 'text-muted' : 'text-text')}>
+                            {step.description ?? `第 ${index + 1} 步`}
+                          </p>
+                          {step.verification && (
+                            <p className="text-[11px] text-faint">验收：{step.verification}</p>
+                          )}
+                        </div>
+                      </li>
+                    )
+                  })}
+                </ol>
+              )}
+            </CardBody>
+          </Card>
 
         {/* execution */}
         <Card>
@@ -485,28 +606,8 @@ export default function WorkbenchPage() {
             )}
           </CardBody>
         </Card>
-      </div>
-
-      {/* deliverables */}
-      <Card>
-        <CardHeader
-          title="产出物"
-          description="生成不等于完成 —— 每一份都要能读回，并且由你决定它是不是你要的"
-          actions={deliverables.length > 0 ? <Badge tone="neutral">{deliverables.length}</Badge> : null}
-        />
-        <CardBody className="space-y-2.5">
-          {deliverables.length === 0 ? (
-            <EmptyState
-              icon={<Package className="size-5" />}
-              title="还没有产出"
-              description="任务执行完成后，它做出来的文件会出现在这里。"
-              compact
-            />
-          ) : (
-            deliverables.map((item) => <DeliverableCard key={item.id} item={item} />)
-          )}
-        </CardBody>
-      </Card>
+        </div>
+      </details>
 
       {data.status === 'FAILED' && (
         <div className="flex items-center gap-2 text-[12px] text-danger">

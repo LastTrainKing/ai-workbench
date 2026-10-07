@@ -122,6 +122,23 @@ export const deliveryApi = {
     document_ids?: string[]
   }) => requestResult<BuildRun>('/build-runs', { method: 'POST', body: payload }),
 
+  /**
+   * Start it.
+   *
+   * Creating and starting are one action from the user's point of view — "hand it
+   * a job" — even though the API splits them. Callers must therefore call create
+   * and execute together; `startBuildRun` below is the composed form and is what
+   * screens should use. Creating without executing leaves a run in DRAFT forever,
+   * which is a real bug this codebase shipped once already.
+   */
+  executeBuildRun: (id: string) =>
+    requestResult<{
+      build_run_id: string
+      run_id: string
+      /** The controller's state at the moment it was handed the goal. */
+      state: string
+    }>(`/build-runs/${id}/execute`, { method: 'POST' }),
+
   buildRuns: (params: { status?: string; active_only?: boolean; limit?: number } = {}) =>
     request<{ build_runs: BuildRun[]; count: number }>('/build-runs', { query: params }),
 
