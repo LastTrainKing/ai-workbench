@@ -7,7 +7,7 @@
  * boolean, and a rejection carries the reason the user gave.
  */
 
-import { request, requestResult } from './api'
+import { request, requestBlob, requestResult } from './api'
 
 /* ------------------------------------------------------------------ types -- */
 
@@ -194,7 +194,31 @@ export const deliveryApi = {
       body: { feedback },
     }),
 
-  downloadUrl: (id: string) => `/api/v1/deliverables/${id}/download`,
+  /**
+   * Fetch the file's bytes, authenticated.
+   *
+   * There is deliberately no `downloadUrl(id)` returning a string. It used to
+   * exist and was used as `<a href={downloadUrl(id)} download>`, which cannot
+   * work: a navigation sends no `Authorization` header, so the endpoint answered
+   * 401 and the button did nothing. Fetching with the token attached is the same
+   * audited path every other call takes, and a refusal becomes an error the UI
+   * can show instead of a silent no-op.
+   */
+  downloadDeliverable: (id: string) =>
+    requestBlob(`/deliverables/${id}/download`, { signal: undefined }),
+
+  /**
+   * Open the file with the system's default program.
+   *
+   * An **id**, not a path — the backend resolves the path from its own record, so
+   * the client cannot ask it to open an arbitrary file. The previous
+   * implementation passed `file:///…` to `window.open`, which a WebView refuses.
+   */
+  openDeliverable: (id: string) =>
+    requestResult<{ path: string; name: string; opened: boolean; method: string }>(
+      `/deliverables/${id}/open`,
+      { method: 'POST' },
+    ),
 
   summary: () => request<DeliverySummary>('/delivery/summary'),
 }

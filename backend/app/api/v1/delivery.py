@@ -289,6 +289,31 @@ async def download_deliverable(
     )
 
 
+@router.post(
+    "/deliverables/{deliverable_id}/open",
+    summary="Open the file with the system's default program",
+)
+async def open_deliverable(
+    deliverable_id: uuid.UUID, user: CurrentUser, session: DbSession
+) -> dict[str, Any]:
+    """Open a produced file on the machine the backend is running on.
+
+    The client sends an **id**, never a path. The path is resolved here, from the
+    caller's own record, so this endpoint cannot be used to open an arbitrary file
+    — see `app/services/os_open.py` for why the two obvious alternatives (a
+    `file://` link, a Tauri command taking a path) are both wrong.
+
+    A failure is a real answer, not an empty one: the file being gone and the
+    extension having no handler both produce a message naming the reason. The
+    button this replaces did nothing at all in either case.
+    """
+    from app.services.os_open import open_path
+
+    service = DeliveryService(session)
+    item = await service.get_deliverable(owner_id=user.id, deliverable_id=deliverable_id)
+    return ok(await open_path(Path(item.path)), message="已用系统默认程序打开")
+
+
 @router.post("/build-runs/{build_run_id}/deliverables", status_code=201, summary="Register a produced file")
 async def register_deliverable(
     build_run_id: uuid.UUID,

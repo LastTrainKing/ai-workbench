@@ -271,6 +271,98 @@ export async function request<T>(path: string, options: RequestOptions = {}): Pr
   return (await requestResult<T>(path, options)).data
 }
 
+/* ------------------------------------------------------------------- blobs */
+
+export interface BlobResult {
+  blob: Blob
+  /** What the server says the file is called, for the save dialog. */
+  filename: string
+}
+
+/**
+ * The filename out of a `Content-Disposition` header, or null.
+ *
+ * Handles both forms, and prefers the RFC 5987 one. Starlette sends
+ * `filename*=utf-8''…` for a non-ASCII name and a stripped `filename="…"` beside
+ * it — reading only the latter is how a Chinese filename arrives as mojibake or
+ * as the raw percent-encoding.
+ */
+export function filenameFromDisposition(header: string | null): string | null {
+  if (!header) return null
+  const extended = /filename\*=\s*([^']*)'([^']*)'([^;]+)/i.exec(header)
+  if (extended) {
+    try {
+      return decodeURIComponent(extended[3].trim())
+    } catch {
+      // A malformed escape is not a reason to lose the name entirely; fall
+      // through to the plain form below.
+    }
+  }
+  const plain = /filename\s*=\s*"([^"]*)"/i.exec(header) ?? /filename\s*=\s*([^;]+)/i.exec(header)
+  return plain ? plain[1].trim() : null
+}
+
+/**
+ * Fetch a file as a blob, with the bearer token attached.
+ *
+ * A plain `<a href download>` cannot be used against an authenticated endpoint:
+ * the browser sends **no** `Authorization` header on a navigation, so the request
+ * arrives unauthenticated and the button appears to do nothing. That is exactly
+ * what "下载点了没反应" was.
+ *
+ * Fetching it here keeps the token in the header — the same audited path every
+ * other call uses — and turns a refusal into an error the caller can display
+ * rather than a silent no-op.
+ */
+export async function requestBlob(path: string, options: RequestOptions = {}): Promise<BlobResult> {
+  const { method = 'GET', query, body, signal } = options
+
+  const headers: Record<string, string> = {}
+  if (accessToken) headers.Authorization = `Bearer ${accessToken}`
+  let payload: BodyInit | undefined
+  if (body !== undefined) {
+    headers['Content-Type'] = 'application/json'
+    payload = JSON.stringify(body)
+  }
+
+  let response: Response
+  try {
+    response = await fetch(buildUrl(path, query), { method, headers, body: payload, signal })
+  } catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError') throw toApiError(error)
+    throw new ApiError({
+      code: 'network_error',
+      message: '下载失败：AI Workbench 的后台服务暂时没有响应。',
+      status: 0,
+    })
+  }
+
+  if (response.status === 401) {
+    accessToken = null
+    unauthorizedHandler?.()
+  }
+
+  if (!response.ok) {
+    // A refusal carries a JSON envelope with the reason in it. Read it, so the
+    // message shown is the backend's ("文件已不在磁盘上") and not "HTTP 404".
+    const parsed = await parseBody(response)
+    const errorBody = (parsed as { error?: { code?: string; message?: string } } | null)?.error
+    throw new ApiError({
+      code: errorBody?.code || 'download_failed',
+      message: errorBody?.message || `下载失败（HTTP ${response.status}）`,
+      status: response.status,
+      requestId: response.headers.get('X-Request-ID') ?? undefined,
+    })
+  }
+
+  const filename =
+    filenameFromDisposition(response.headers.get('Content-Disposition')) ??
+    path.split('/').filter(Boolean).pop() ??
+    'download'
+
+  return { blob: await response.blob(), filename }
+}
+
 /* ---------------------------------------------------------------- endpoints */
 
 export const api = {

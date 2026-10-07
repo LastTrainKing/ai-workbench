@@ -41,6 +41,7 @@ import { EmptyState, ErrorState, InlineAlert, LoadingBlock } from '@/components/
 import { deliveryApi, KIND_LABELS, STATUS_LABELS, STATUS_TONES, formatSize, formatWhen } from '@/lib/deliveryApi'
 import type { Deliverable } from '@/lib/deliveryApi'
 import { toApiError } from '@/lib/api'
+import { saveBlob } from '@/lib/download'
 import { cn } from '@/lib/utils'
 import { contextApi } from '@/lib/contextApi'
 
@@ -161,7 +162,10 @@ function DeliverableCard({ item }: { item: Deliverable }) {
   const queryClient = useQueryClient()
   const [rejecting, setRejecting] = useState(false)
   const [reason, setReason] = useState('')
-  const [notice, setNotice] = useState<string | null>(null)
+  // Carries a tone as well as text: "已验收" and "下载失败：文件已不在磁盘上" must not
+  // look the same, and a download that silently does nothing is the defect this
+  // whole path was rewritten to remove.
+  const [notice, setNotice] = useState<{ text: string; tone: 'info' | 'danger' } | null>(null)
 
   const invalidate = () => {
     void queryClient.invalidateQueries({ queryKey: ['delivery'] })
@@ -171,20 +175,40 @@ function DeliverableCard({ item }: { item: Deliverable }) {
   const accept = useMutation({
     mutationFn: () => deliveryApi.accept(item.id),
     onSuccess: () => {
-      setNotice('已验收。它会记住这个标准。')
+      setNotice({ text: '已验收。它会记住这个标准。', tone: 'info' })
       invalidate()
     },
-    onError: (exc) => setNotice(toApiError(exc).message),
+    onError: (exc) => setNotice({ text: toApiError(exc).message, tone: 'danger' }),
   })
   const reject = useMutation({
     mutationFn: () => deliveryApi.reject(item.id, reason.trim()),
     onSuccess: () => {
-      setNotice('已退回。这个原因会变成一条待确认的偏好。')
+      setNotice({ text: '已退回。这个原因会变成一条待确认的偏好。', tone: 'info' })
       setRejecting(false)
       setReason('')
       invalidate()
     },
-    onError: (exc) => setNotice(toApiError(exc).message),
+    onError: (exc) => setNotice({ text: toApiError(exc).message, tone: 'danger' }),
+  })
+
+  // Fetch the bytes with the token, then hand them to the browser. A plain
+  // `<a href>` cannot do this — a navigation sends no Authorization header, which
+  // is why the button used to do nothing at all.
+  const download = useMutation({
+    mutationFn: () => deliveryApi.downloadDeliverable(item.id),
+    onSuccess: ({ blob, filename }) => {
+      setNotice(null)
+      saveBlob(blob, filename)
+    },
+    onError: (exc) => setNotice({ text: `下载失败：${toApiError(exc).message}`, tone: 'danger' }),
+  })
+
+  // No `file://` — a WebView refuses it. The backend resolves the path from this
+  // deliverable's own record, so no path crosses the wire from the page.
+  const open = useMutation({
+    mutationFn: () => deliveryApi.openDeliverable(item.id),
+    onSuccess: () => setNotice(null),
+    onError: (exc) => setNotice({ text: `打开失败：${toApiError(exc).message}`, tone: 'danger' }),
   })
 
   return (
@@ -208,8 +232,10 @@ function DeliverableCard({ item }: { item: Deliverable }) {
       </div>
 
       {notice && (
-        <div className="mt-2">
-          <InlineAlert tone="info" title="已更新">{notice}</InlineAlert>
+        <div className="mt-2" data-testid="deliverable-notice">
+          <InlineAlert tone={notice.tone} title={notice.tone === 'danger' ? '没能完成' : '已更新'}>
+            {notice.text}
+          </InlineAlert>
         </div>
       )}
 
@@ -225,17 +251,33 @@ function DeliverableCard({ item }: { item: Deliverable }) {
       </div>
 
       <div className="mt-3 flex flex-wrap items-center gap-2">
-        <a href={deliveryApi.downloadUrl(item.id)} download>
-          <Button size="xs" variant="secondary">
-            <Download className="size-3" /> 下载
-          </Button>
-        </a>
+        <Button
+          size="xs"
+          variant="secondary"
+          data-testid="download-deliverable"
+          disabled={download.isPending}
+          onClick={() => download.mutate()}
+        >
+          {download.isPending ? (
+            <Loader2 className="size-3 animate-spin" />
+          ) : (
+            <Download className="size-3" />
+          )}
+          {download.isPending ? '正在取回…' : '下载'}
+        </Button>
         <Button
           size="xs"
           variant="ghost"
-          onClick={() => window.open(`file:///${item.path.replace(/\\/g, '/')}`, '_blank')}
+          data-testid="open-deliverable"
+          disabled={open.isPending}
+          onClick={() => open.mutate()}
         >
-          <ExternalLink className="size-3" /> 打开
+          {open.isPending ? (
+            <Loader2 className="size-3 animate-spin" />
+          ) : (
+            <ExternalLink className="size-3" />
+          )}
+          打开
         </Button>
 
         {item.accepted === null && !rejecting && (
