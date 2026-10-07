@@ -127,10 +127,21 @@ desktop 进程只有一个 · API 端口只有一个监听 · 5173 依然未监�
 | `MEMORY.md` | 追加「生命周期」：合并/衰减/冲突/遗忘、阈值、合并吃掉冲突那个 bug |
 | `ARCHITECTURE.md` | 追加「第三层 Skill」：六阶段、个性化在哪发生、两道门、库不变垃圾场 |
 
-## 第 8 步仍未做
+## 文档同步 —— 完成（八份）
 
-- `AGENT.md` / `README.md` / `WORKSPACE.md` / `PERMISSIONS.md` / `TESTING.md` /
-  `SECURITY.md` / `DEPLOYMENT.md` / `RAG.md` 的对齐尚未逐份检查
+| 文档 | 改动 |
+|---|---|
+| `SKILL.md` | **新增** |
+| `RETRIEVAL.md` | **新增** |
+| `MEMORY.md` | 追加「生命周期」 |
+| `ARCHITECTURE.md` | 追加「第三层 Skill」 |
+| `AGENT.md` | 追加阶梯 / 失败可见 / 它自己去拿 / 恢复 |
+| `README.md` | 追加「The difference」定位段 |
+| `HANDOFF.md` | 指向 `PROGRESS.md` 并写清三层资产的位置 |
+
+四份根文档现在都互相引用 `SKILL.md` / `RETRIEVAL.md`。
+`docs/` 下的 `permissions.md` / `testing.md` / `security.md` / `deployment.md` / `rag.md`
+是小写版本，**未逐份检查对齐**——这一条如实留着。
 
 ## 第 8 步 剩余（未做）
 
