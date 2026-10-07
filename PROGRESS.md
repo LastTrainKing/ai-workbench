@@ -1,8 +1,8 @@
 # PROGRESS — 断点
 
 工作区：`C:\Users\user\Desktop\ai-workbench`
-交付物对应 commit：安装包 `ec77e0c` · 源码包 `37360ac`
-（本文件在 `37360ac` 之后单独提交，那次提交只改这一份文件）
+交付物对应 commit：安装包 `ec77e0c` · 源码包 `d4642ca`
+（本文件在 `d4642ca` 之后单独提交，那次提交只改这一份文件）
 
 > **读完这一页就能开工。** 已完成的阶段不再写"下一步"——下面只有当前真实状态。
 
@@ -113,17 +113,17 @@ verify-shell-behaviour.mjs        21/21
 | | 路径 | 体积 | 条目数 | SHA256 |
 |---|---|---|---|---|
 | 安装包 | `build/installer/AI-Workbench-Setup.exe` | 97,128,573 B | payload 8,689 文件 / 443.3 MB | `e0c0222229a7bfc635ceaab47ff3586daf3af5769ada50138e78fc12c18992d2` |
-| 源码包 | `archive/releases/AI-Workbench-37360ac-final.zip` | 8,457,736 B | 496 条目 | `16b81e2cdf72ddde109baee4ed8ff0760a67cf62ae391629a971b9ccdbfa2b8d` |
+| 源码包 | `archive/releases/AI-Workbench-d4642ca-final.zip` | 8,458,063 B | 496 条目 | `50c9bc13c9f4e91c5a8921f2ca073e1c273497fe1c7abc18bcd44891a8237dd0` |
 
-安装包对应 `ec77e0c`（其后再没有改动过会进 payload 的源码）；源码包对应 `37360ac`，
+安装包对应 `ec77e0c`（其后再没有改动过会进 payload 的源码）；源码包对应 `d4642ca`，
 由 `git ls-files` 生成 —— 496 个跟踪文件全部纳入、0 个被策略排除，自带的凭据扫描 PASS。
 
-**关于这一格 commit 差**：源码包由 `git ls-files` 生成，所以它**装的是构建它那个
-commit 的 PROGRESS.md**。`37360ac` 里的 PROGRESS.md 已经是本文件的当前版本
-（已实测：包内 `PROGRESS.md` 与工作区逐字节相同），只有「源码包自身的 SHA256」
-这一格是上一次构建留下的数字 —— 文档要写下自己所在归档的哈希，这个错位无法消除，
-所以在这里写明而不是假装没有。判断包新不新，看 `entries`/`tracked files` 与
-`git ls-files | wc -l` 是否一致（现在都是 496）。
+**关于这一格 commit 差（无法消除，所以写在这里）**：源码包由 `git ls-files` 生成，
+所以包内那份 `PROGRESS.md` 永远是**构建它时**的版本 —— 一份文档没法写下自己所在
+归档的哈希，写进去哈希就变了。因此包内那一格指向的是**上一次构建**的源码包
+（`AI-Workbench-37360ac-final.zip`，它仍在 `archive/releases/` 里，没有删）。
+判断包新不新，别读包内的哈希，读 `entries` 与 `git ls-files | wc -l` 是否一致
+（现在都是 496），以及 `build_delivery_zip.py` 构建时打印的那行结果。
 
 **重建链**（顺序不能变，第 3 步必须在第 2 步之后）：
 
