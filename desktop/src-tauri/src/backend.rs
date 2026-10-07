@@ -406,6 +406,11 @@ pub fn spawn_startup(app: AppHandle, state: Arc<BackendState>) {
             if let Some(root) = lifecycle::locate_project_root() {
                 lifecycle::set_log_root(&root);
                 lifecycle::log("startup: log root set on the early-return path");
+                // A backend that was already running was started by an *earlier* shell, and
+                // if that shell was elevated its PostgreSQL belongs to the Task Scheduler
+                // rather than to any job. Adopt it here too, or this instance's force-kill
+                // would leave the database behind even though it never started it.
+                lifecycle::adopt_escaped_services(state.job.lock().unwrap().as_ref(), &root);
             }
             state.set_status(StartupStatus {
                 phase: "ready".into(),
@@ -495,6 +500,10 @@ pub fn spawn_startup(app: AppHandle, state: Arc<BackendState>) {
             }
             if backend_is_healthy() {
                 state.ready.store(true, Ordering::SeqCst);
+                // The backend is answering, so the database is up and its pid file exists.
+                // This is the first moment PostgreSQL can be adopted into the job — see
+                // `lifecycle::adopt_escaped_services` for why it might not have inherited it.
+                lifecycle::adopt_escaped_services(state.job.lock().unwrap().as_ref(), &root);
                 state.set_status(StartupStatus {
                     phase: "ready".into(),
                     message: "Ready".into(),
