@@ -339,7 +339,7 @@ DisplayIcon / NoModify / NoRepair / EstimatedSize 九个值）。
 
 | | 路径 | 体积 | 条目数 | SHA256 |
 |---|---|---|---|---|
-| 安装包 | `build/installer/AI-Workbench-Setup.exe` | 97,236,168 B | payload 8,722 文件 / 443.7 MB | `fcde3a8e3d76530fad213fe4217851b156c81176ddf643385fddafa55f0476cb` |
+| 安装包 | `build/installer/AI-Workbench-Setup.exe` | 97,226,799 B | payload 8,723 文件 / 443.7 MB | `f3b6c66a7b50bb09f27181efed643dbc94f724173885734178cfef1119c693d3` |
 
 **安装包是本轮重建的**（源码包见下面「源码包」一行，本轮未重建 —— 这一轮改的东西
 都在已跟踪文件里，`git ls-files` 的条目数不变，重建只是重新打一次同样的东西）。
