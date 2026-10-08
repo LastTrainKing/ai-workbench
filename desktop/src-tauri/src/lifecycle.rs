@@ -205,22 +205,37 @@ mod job {
 
         /// Put a process that was started *outside* the job into it, by pid.
         ///
-        /// Membership is normally inherited: the launcher is assigned to the job, so
-        /// everything it spawns is in the job too. One service escapes that. When the
-        /// shell runs elevated, PostgreSQL cannot be started from an elevated process at
-        /// all, and `infra-start.ps1` hands it to the Task Scheduler service instead —
-        /// which makes postgres a child of the *service*, not of the launcher, and so
-        /// outside the job.
+        /// **This cannot work for the one case it is called for, and the reason is now
+        /// measured rather than guessed.** Kept because it is the only runtime signal that
+        /// the safety net does not cover PostgreSQL — see `adopt_escaped_services`.
         ///
-        /// The consequence was measured, not guessed: the installer acceptance reported
+        /// When the shell runs elevated, PostgreSQL cannot be started from an elevated
+        /// process at all, so `infra-start.ps1` hands it to the Task Scheduler service. The
+        /// Task Scheduler runs its tasks inside **its own job object**, so postgres ends up
+        /// in a job — just not this one:
         ///
-        ///     === 7. force-kill the window; everything must go ===
-        ///     [FAIL] PostgreSQL port 5432 released
+        ///     pid 2460  session=2  inAnyJob=YES  (postgres)
+        ///     pid 20804 session=2  inAnyJob=YES  (redis-server)
         ///
-        /// while every other port was released. This call is what closes that gap. It
-        /// checks membership first so that adopting a process that inherited the job —
-        /// the ordinary, non-elevated launch — is reported as such rather than as a
-        /// failed assignment.
+        /// (`IsProcessInJob(handle, NULL, &result)` — a NULL job handle asks "in any job at
+        /// all".) And a process that is already in a job can only be added to a **nested**
+        /// one; the Task Scheduler's job and this one are siblings, not parent and child.
+        /// So this call is refused:
+        ///
+        ///     adopt: postgres 15764 is NOT in the job - a force-kill will leave it running
+        ///            (AssignProcessToJobObject(15764) win32=5)
+        ///
+        /// `win32=5` is ACCESS_DENIED, and it is not fixable from here: the DACL and the
+        /// mandatory integrity label were both checked first, and neither is the cause.
+        ///
+        /// **The two paths are mutually exclusive.** Starting PostgreSQL through the Task
+        /// Scheduler means it cannot be in this job. The alternative is not "the job wins"
+        /// but "the application does not start at all from an elevated shell", because on
+        /// that path `runas` and the in-process token both fail. A working application with
+        /// one documented limitation was chosen over an application that refuses to start.
+        /// On the path a user actually takes — double-click, not elevated — postgres is
+        /// started by the launcher itself, inherits this job, and a force-kill takes it
+        /// down. That is the `33/33` run.
         pub fn adopt(&self, pid: u32) -> AdoptOutcome {
             unsafe {
                 // `PROCESS_SET_QUOTA` is what `AssignProcessToJobObject` requires on the
@@ -296,13 +311,15 @@ pub fn postgres_pid(root: &Path) -> Option<u32> {
 /// Put any service that escaped the job back into it.
 ///
 /// Only PostgreSQL can escape, and only on one path: an elevated shell cannot start it,
-/// so `infra-start.ps1` asks the Task Scheduler to, and the Task Scheduler's child is not
-/// a descendant of the launcher. Redis, Qdrant and the API are always started by the
-/// launcher and inherit the job.
+/// so `infra-start.ps1` asks the Task Scheduler to, and the Task Scheduler runs its tasks
+/// in a job of its own — which is not this one, and which cannot be joined from here. See
+/// `JobGuard::adopt` for the measurement.
 ///
-/// Called once the backend is answering, because that is the first moment the pid file is
-/// guaranteed to exist. Without it a force-killed window leaves a database behind holding
-/// port 5432 and the data directory.
+/// So this does not fix anything, and it is not pretending to. It is kept because it is
+/// the **only runtime signal** that the safety net does not cover PostgreSQL on that path:
+/// every elevated launch writes one line saying so, with the Win32 error. "Failure must be
+/// visible" is a rule this project has already been bitten by ignoring, and a limitation
+/// nobody can see at runtime is one that gets rediscovered as a mystery.
 pub fn adopt_escaped_services(job: Option<&JobGuard>, root: &Path) {
     let Some(job) = job else {
         return;
@@ -318,7 +335,10 @@ pub fn adopt_escaped_services(job: Option<&JobGuard>, root: &Path) {
             log(&format!("adopt: postgres {pid} already in the job (inherited)"))
         }
         AdoptOutcome::Failed(why) => {
-            log(&format!("adopt: postgres {pid} is NOT in the job - a force-kill will leave it running ({why})"))
+            log(&format!(
+                "adopt: postgres {pid} is NOT in the job - a force-kill will leave it running \
+                 ({why}); it is in the Task Scheduler's job, which cannot be joined from here"
+            ))
         }
     }
 }
