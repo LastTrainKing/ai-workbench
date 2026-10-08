@@ -1,8 +1,7 @@
 # PROGRESS — 断点
 
 工作区：`C:\Users\user\Desktop\ai-workbench`
-交付物对应 commit：安装包 `ba60d5a` · 源码包 `0c9ed34`
-（本文件在 `0c9ed34` 之后单独提交，那次提交只改这一份文件）
+交付物对应 commit：安装包 `b617372` · 源码包 `b617372`
 
 > **读完这一页就能开工。** 已完成的阶段不再写"下一步"——下面只有当前真实状态。
 
@@ -28,28 +27,34 @@
 
 ---
 
-## 二、状态：第 1–8 步全部完成，交付物已按当前 commit 重建
+## 二、状态：第 1–8 步完成，之后又修了三轮用户实测问题
 
-| 步骤 | 状态 | 证据 |
+| 轮次 | 内容 | 状态 |
 |---|---|---|
-| 第 1 步 安装程序 | **完成** | `verify_installer.py --apply` 33/33 · 静态 41/41（**均为 ba60d5a 的新安装包**） |
-| 第 2 步 开局对话 + 空账号隔离 | **完成** | `verify-onboarding.mjs` 25/25；隔离断言 7/7 |
-| 第 3 步 分级检索 | **完成** | 见下「真实数字」 |
-| 第 4 步 Skill 层 | **完成** | 后端 + API + Skill 页 + 沙箱；`verify-skill-ui.mjs` 14/14 |
-| 第 5 步 知识库自动补充 | **完成** | 11 测试，真实文件夹 |
-| 第 6 步 记忆生命周期 | **完成** | 20 测试 |
-| 第 7 步 界面 | **完成** | 首页四区（+ 模型引导）· 工作台产出优先、详情折叠 · 我的（含 Skill 页） |
-| 第 8 步 自检 / 交付 / 文档 | **完成** | 见下 |
+| 第 1–8 步 | 安装程序 / 开局对话 / 分级检索 / Skill / 知识库 / 记忆 / 界面 / 自检 | **完成** |
+| 第 9 轮 | 提交后不开始 · 没配模型能提交 · 顶栏标签旧 · 界面太专业（+ 跨用户 run 泄漏） | **完成** |
+| 第 10 轮 | 下载/打开点了没反应 · 任务做不全（PARTIAL）· 界面改对话式 | **完成** |
+| 第 11 轮 | 记忆让用户做质检员（候选不去重 · 测试垃圾进库 · 没有清理） | **完成** |
+| 第 11 轮附带 | 让应用在提权 shell 里也能起来（安装验收 30/33 → 32/33；非提权 33/33） | **完成**，一条已知缺口见第九节 |
 
-**本轮（用户装上软件实际使用后）修了四个问题 + 一个顺带发现的隔离漏洞：**
+### 第 10 轮（用户装上软件实测）
 
-| # | 问题 | 状态 |
-|---|---|---|
-| 1 | 提交任务后不开始（`create` 后从没调 `execute`，永远停在 DRAFT） | **完成** |
-| 2 | 没配模型也能提交，做不了才知道 | **完成** |
-| 3 | 顶栏标签是旧的（失效的 queryKey 写错，保存后从不重拉） | **完成** |
-| 4 | 工作台三栏工程面板占首屏，产出被压在下面 | **完成** |
-| 附 | `GET /agent/runs` 把进程里**所有人**的运行返回给任何登录用户 | **完成** |
+| # | 问题 | 根因 | 状态 |
+|---|---|---|---|
+| 1 | 下载点了没反应 | `<a href>` 不带 `Authorization`，端点 401 | **完成** |
+| 1 | 打开点了没反应 | `window.open('file:///…')`，WebView 拦 | **完成** |
+| 2a | 好文件被标「未校验」 | `run_state` 被塞进文件级 checks，`passed` 被拉黑 | **完成** |
+| 2b | 简单任务 PARTIAL | `_final_verify` 只给一次工具调用，猜错路径即判 FAILED | **完成** |
+| 3 | 界面太专业 | 首页是四张卡片堆叠的控制台 | **完成** |
+
+### 第 11 轮（用户看到记忆页）
+
+| # | 问题 | 根因 | 状态 |
+|---|---|---|---|
+| 1 | 4 条待确认说同一件事 | 去重只比 `status='active'` 的记忆，从不比待确认/已拒绝 | **完成** |
+| 2 | 6 条测试垃圾进正式库 | `verify-context-ui.mjs` 往真库写、从不删 | **完成** |
+| 3 | 没有清理手段 | 修产生机制 ≠ 清掉历史 | **完成** |
+| 4 | 界面像"请你验收我的作业" | 待确认列 N 条、已生效一长串 | **完成** |
 
 ---
 
@@ -66,81 +71,86 @@
 
 判定方式：`RELEVANCE_FLOOR = 1.693`（两组分布间隙 0.14、样本 14 个）。
 **余量不宽 —— 语料或嵌入一变就要重跑 `scripts/sample_relevance.py` 重测。**
-skill 层（第 2 级）建起来之后**尚未单独计时**。
 
-> 两次猜阈值的失败记录在 `RETRIEVAL.md`。规则：**先测分布，再选阈值。**
+### 记忆去重的判据是**测出来的**，不是猜的
 
-### 权限分级（本次实测，`AgentPolicy(mode=SUPERVISED, level=N)`）
-
-```
-level        0    1    2    3
-supervised  16   34   44   44
-assist      15   15   15   15   ← 全部非改动类
-autonomous  32   36   44   44
-```
-
-旧的 15/32/42/42 是 `document_read` + `document_write` 加入之前的数字。
-
-### Skill 发现（真实调 api.github.com）
+`scripts/sample_memory_similarity.py` 打 49 对（真实库 + 手写已知答案）的分布：
 
 ```
-3 个搜索词 → 7 个候选 → 保留 5 个
-筛掉 anthropics/skills → 没有声明 license
+                                   jaccard   contain
+同一件事  毕业设计「需要写」vs「要写」      0.647     0.786
+不同的事  「用 Python」vs「用 Java」       0.778     0.875   ← 更高
 ```
 
-`fetch_skill_file` 实测：`addyosmani/agent-skills/README.md` → HTTP 200、
-blob sha `c6039f4d…`、**24,729 字符**、`source_commit` = 40 位 SHA。
+**不是同一件事的那对，在两个指标上都比是同一件事的那对更高。** 所以没有阈值能分开
+——任何阈值不是把 Python 并进 Java，就是漏掉同义改写。
 
-> **注意**：`raw.githubusercontent.com` 在本环境**不可达**（HTTP 000），
-> `api.github.com` 可达（HTTP 200）。抓取走 Contents API。
+结论：**「是不是同一件事」交给模型**（`evaluator._judge` 本来每次就要调一次，
+把待确认和已拒绝一起给它，零额外成本）。词法指标只保留它能做的：**近重复**
+（`same_thing`，阈值 0.60 + 「指向的事物必须相同」的护栏 —— 护栏是唯一能分开
+Python/Java 的信号）。
 
-### 自检（本轮在 `0c9ed34` 上全部重跑）
+### 记忆清理（真实库，跑之前 / 之后）
+
+```
+清理前  13 条已生效 / 4 条待确认
+清理后   3 条已生效 / 2 条待确认
+         ├─ 7 条测试垃圾        删除
+         ├─ 4 条同义 → 1 条       use_count 278 → 1648（累加，不是从头）
+         └─ 2 条真正不同的       封面信息 / 报告完整性 —— 一条都没被合并
+```
+
+### 自检（本轮全部重跑）
 
 ```
 verify_installer_static.py        41/41
-verify_installer.py --apply       33/33
-verify_pgsql_trim.py              13/13
-verify_deepseek.py                62/62   （历史值，本轮未重跑）
-verify-onboarding.mjs             25/25   隔离断言 7/7
-verify-skill-ui.mjs               14/14
-verify-context-ui.mjs             22/22
-verify-delivery-ui.mjs            40/40   （本轮加了 4 条断言）
-verify-knowledge-and-memory-ui    13 通过 / 0 失败
-verify-agent-ui.mjs               26/26
+verify_installer.py --apply       33/33  ← 非提权运行（用户真实路径，见下方说明）
+                                  32/33  ← 提权运行：唯一失败是强杀后 5432 未释放
+verify-conversation-ui.mjs        22/22   ← 本轮新增
+verify-delivery-ui.mjs            44/44
+verify-sidebar.mjs                12/12
+verify-workbench-layout.mjs        9/9
+verify-deliverable-actions.mjs    15/15   ← 本轮新增
+verify-config-gate.mjs            12/12
 verify-shell-behaviour.mjs        21/21
-verify-sidebar.mjs                10/10
-verify-config-gate.mjs            12/12   ← 本轮新增
-verify-workbench-layout.mjs       19/19   ← 本轮新增
-后端测试                          548 收集，548 通过，exit 0
-旧路由                            18/18（verify-delivery-ui 内）· 16/16（verify-sidebar 内）
-冷启动 + 二次启动                  36/36   （历史值，本轮未重跑）
+verify-focus-grid.mjs             17/17
+verify-skill-ui.mjs               14/14
+verify-knowledge-and-memory-ui    13 通过 / 0 失败
+verify-onboarding.mjs             25/25   隔离断言 7/7
+verify-context-ui.mjs             27/27
+verify-agent-ui.mjs               26/26
+verify-memory-cleanup-ui.mjs      19/19   ← 本轮新增
+verify-no-test-litter.py          PASS    ← 本轮新增
+verify-run-completes.py           PASS（终态 COMPLETED，2 份产出物全过）
+后端测试                          588 收集，588 通过，exit 0
+前端单测                          121 通过 / 10 跳过 · tsc 0 · lint 0 error
+旧路由                            18/18（verify-conversation-ui 内）
 ```
 
-> **注意：`verify-config-gate.mjs` 会写一个占位 Key 到 `/ai-config`，也会自己清掉。**
-> 它必须先让设置页"脏"才能按保存。第一版没清，占位 Key 成了活动 Key、
-> 覆盖了 `.env` 的真 Key，之后每次 `verify-onboarding.mjs` 都以
-> DeepSeek 的 422 `Your api key: ****0000 is invalid` 失败 —— 看起来像产品坏了，
-> 其实是这个测试留下的垃圾。现在写入和 `DELETE /ai-config` 成对出现，
-> 并有两条断言检查清理成功。
+> **安装验收要按用户的方式跑。** 用户是双击快捷方式启动的，shell **不提权**。
+> 本 agent 宿主是提权的，那是一条不同的路径（PostgreSQL 必须以受限令牌启动），
+> 所以在本机直接跑会得到 32/33。按用户的方式跑：
+>
+> ```powershell
+> # 先 scripts\stop.bat，再用受限令牌启动验收
+> runas /trustlevel:0x20000 "powershell.exe -NoProfile -ExecutionPolicy Bypass -File <项目>\.runtime\_run_acceptance_unelevated.ps1"
+> # 结果在 .runtime\logs\acceptance-unelevated.log
+> ```
+>
+> 实测 `elevated=False` → **33/33**，含 `[PASS] PostgreSQL port 5432 released`。
 
 ---
 
-## 四、交付物（已重建，**不再是过期的**）
+## 四、交付物（已重建）
 
 | | 路径 | 体积 | 条目数 | SHA256 |
 |---|---|---|---|---|
-| 安装包 | `build/installer/AI-Workbench-Setup.exe` | 97,144,496 B | payload 8,692 文件 / 443.3 MB | `cdc8dfdb244a59e3e3e009bd8e01c999cd5b12acfc1407d028b886411ff6804a` |
-| 源码包 | `archive/releases/AI-Workbench-0c9ed34-final.zip` | 9,702,947 B | 508 条目 | `d4b8417f7dbc5fd5cb36cd6ce99cf13e364ab958cc89d19ebb412067aecf5469` |
+| 安装包 | `build/installer/AI-Workbench-Setup.exe` | 97,176,954 B | payload 8,707 文件 / 443.5 MB | `eb2f025bc7bdfab2291fbf1149e4084713c2a9306e57f000e81fce5b5975d8d4` |
+| 源码包 | `archive/releases/AI-Workbench-b617372-final.zip` | 9,957,900 B | 540 条目 | `1b0d0c4ffdab6f644431307bb0eb37d037da42fef011eeecde28926e8b03156b` |
 
-安装包对应 `ba60d5a`，源码包对应 `0c9ed34`。两者之间的差别**只有 `screenshots/` 的图像内容**
-（回归跑动时重新生成），已验证：`git diff --name-only ba60d5a HEAD` 去掉 `screenshots/` 后为 0 个文件，
-所以安装包对发布而言是当前的。
-
-`archive/releases/AI-Workbench-ba60d5a-final.zip` 已删除 —— 它和 `0c9ed34` 那份**字节完全相同**
-（两个构建都读同一份工作区，PNG 在 `ba60d5a` 构建前就已经是新的），留着只会让人以为有两个版本。
-
-源码包由 `git ls-files` 生成 —— 508 个跟踪文件全部纳入、0 个被策略排除，自带的凭据扫描 PASS。
-判断包新不新，别读包内的哈希，读 `entries` 与 `git ls-files | wc -l` 是否一致（现在都是 508）。
+两者都对应 `b617372`。源码包由 `git ls-files` 生成 —— 540 个跟踪文件全部纳入、
+0 个被策略排除，自带的凭据扫描 PASS。判断包新不新，读 `entries` 与
+`git ls-files | wc -l` 是否一致（现在都是 540）。
 
 **重建链**（顺序不能变，第 3 步必须在第 2 步之后）：
 
@@ -151,44 +161,40 @@ cd .. && .venv/Scripts/python.exe scripts/build_installer.py --build
 .venv/Scripts/python.exe scripts/build_delivery_zip.py --output archive/releases/AI-Workbench-<hash>-final.zip
 ```
 
-第 3 步会把 `desktop/src-tauri/target/release/ai-workbench-desktop.exe` 复制成
-payload 根目录的 `AI Workbench.exe`；少了它，装出来的东西装得上、起不来。
-
-重建后必须重跑：
-
-```bash
-.venv/Scripts/python.exe scripts/verify_installer_static.py       # 41/41
-.venv/Scripts/python.exe scripts/verify_installer.py --apply      # 33/33
-```
-
 > 验收会真的装一遍、启动、注册账号、强杀、卸载。**跑之前必须先把开发环境的
-> 5432/6379/6333/8000 停掉**（`scripts\stop.bat`）——否则它测的是开发环境的服务，
-> 第 7 步的「端口释放」会假失败。
+> 5432/6379/6333/8000/5173 停掉**（`scripts\stop.bat`）——否则它测的是开发环境的服务。
 
 ---
 
 ## 五、不可谈判的设计（改了就是产品坏了）
 
 1. **三道门都在 `adopt()` 里，故意不拆**：用户确认 + 安全扫描 + 脚本沙箱。
-   **确认了也不够** —— 恶意 skill 即使用户说"是"也会被拒；
-   **脚本型 skill 没跑过沙箱不允许入库**。
-2. **个性化槽位空着保留 `{{param}}` 占位符，不留空。**
-   空槽记进 `verification.unfilled_params`，**用来问，不是用来猜**。
-3. **搜索本身不导入任何东西**（测试数过 API 调用：adopt 0 → 0）。
-4. **矛盾记忆永远不被合并** —— 它们相似度高达 0.75，会被合并步骤先吃掉，
-   那是系统在悄悄删掉用户的一个信念。
+2. **个性化槽位空着保留 `{{param}}` 占位符**，空槽记进 `verification.unfilled_params`。
+3. **搜索本身不导入任何东西。**
+4. **矛盾记忆永远不被合并** —— 它们相似度高，会被合并步骤先吃掉。
 5. **失败可见**：`None` / 空列表 / 空串不许同时表示"没有"和"出错了"。
-   `SKILL_LAYER_BUILT` 就是为此存在。
-6. **一个决定只能有一个实现者** —— `autonomous_service.py` 曾用权限等级
-   `autonomous` 冒充 provider，那是同一个决定的第二个实现者。
-7. **"创建"和"开始"必须是同一个动作**（本轮加的）。用户做的是"交给它一件事"，
-   代码里拆成两个接口又只调其中一个，就是问题 1。组合动作
-   （`executeBuildRun` 必须跟在 `createBuildRun` 后面）写进调用方，
-   不留下"能创建但不会开始"的入口。
-8. **`DRAFT` 必须读起来就是"还没开始"**，不能像"进行中"。
-   三栏空面板 + 一句「还没有…」＝ 读起来像在准备中，这是问题 1 藏了一整轮的原因。
-9. **归属必须显式**（本轮加的）。`RunController.owner_id` 不给默认值：
-   进程级注册表 + 无 owner = 任何人看到所有人的东西。默认 `None` 会让它悄悄回来。
+6. **一个决定只能有一个实现者。** 本轮把「是不是同一件事」从两份实现
+   （`evaluator._similarity` 0.82 与 `lifecycle.similarity` 0.62，且互相矛盾）
+   收敛成 `memory/similarity.py` 一份；把「哪些工具产出文件」从两处收敛成
+   `ai/tools/registry.py` 一份。
+7. **"创建"和"开始"必须是同一个动作。**
+8. **`DRAFT` 必须读起来就是"还没开始"。**
+9. **归属必须显式。**
+10. **文件好不好 ≠ 这次运行走完没有**（本轮加的）。`checks` 回答前者、决定
+    `verified`；`run_state` 回答后者，是并列字段、永远不参与 `passed`。
+    两者塌缩成一个，好文件就会被标成「未校验」。
+11. **"核验没通过" ≠ "核验没跑成"**（本轮加的）。工具报错是「检查没发生」，
+    不是「答案是否」。`_final_verify` 因此返回 `(passed, conclusive, evidence)`。
+12. **记忆的删除必须让用户看见**（本轮加的）。`plan()` 只算不写、`apply()` 只执行
+    用户看过的计划。重复的**只标记 `merged`**（"他用四种说法讲过"本身是信息）；
+    垃圾才真删，且逐条列出来。
+13. **`superseded` 不是 `rejected`**（本轮加的）。把重复候选折进更完整的一条，
+    不是用户说了不。记成拒绝会让「拒绝过的不再提」把这条事实永久静音。
+14. **进程的清理只能靠 job 对象，不能靠父子关系**（本轮加的）。桌面壳建一个
+    `KILL_ON_JOB_CLOSE` 的 job、把启动器放进去，所有后代自动继承 —— 强杀时由操作系统
+    收尾。**任何绕开启动器去启动的进程都会漏出这个安全网**：PG 走计划任务降权那条路
+    时就是这样（验收里唯一一条红的）。**已知未修**，见第九节；但那条路只在 shell
+    提权时才走，用户双击启动的路径不受影响。
 
 ---
 
@@ -201,171 +207,135 @@ payload 根目录的 `AI Workbench.exe`；少了它，装出来的东西装得�
 | `.nsi` | 含中文必须带 **UTF-8 BOM** |
 
 - 提交信息用 **`git commit -F <文件>`**（PowerShell 会吃掉反引号）
-- 长文本、含反引号的内容用 **Write 工具写文件**，不要走 bash heredoc
-- **模型字段靠猜必错** —— 写之前先 grep 一遍（`Mapped[Any]` 不可解析、
-  `MemoryCandidate` 用 `proposed_kind`、`DocumentChunk` 没有 `owner_id`）
-- 浏览器测试的 `:runId` 是 **BuildRun 的 id**，不是 AI 运行 id
-- **Edit 工具会把整份文件的 CRLF 归一成 LF。** `installer/ai-workbench.nsi` 里
-  有一段本来是 CRLF，被归一后 git 里多出 5 行"内容相同"的改动。NSIS 注释不进
-  编译产物（实测：带注释与不带注释的两个最小脚本，MD5 都是
-  `c22a22814f99a12361cf4abb139b4878`），所以无影响 —— 但下次改这个文件要知道。
-- **失效一个 key 前先 grep 它到底存不存在。** `invalidateQueries({queryKey:['health-deps']})`
-  看起来完全正常，且永远不报错，只是什么都不做（问题 3 的根因）。
-- **测试写进系统的状态必须自己清掉。** 占位 API Key 让三个套件红了，
-  而报告的失败原因（DeepSeek 422）指向的是产品。（见第三节末尾的注意事项。）
-- **`<details>` 折叠后内容仍在 DOM 里** —— 用 `innerText` 判断"用户看得到吗"必然错。
-  用 Playwright 的 `isVisible()`。
-- **浏览器测试要等事件，不要等时长。** `waitForTimeout(4000)` 在空闲机上够、
-  在负载下不够，会让同一次回归时绿时红；改成 `waitForRequest(...)` 之后稳定。
-- **改后端要重启进程才生效。** 这台机器上 Playwright 打的是 API 在 8000 端口
-  托管的 `frontend/dist`，所以改完前端必须 `npm run build` 才看得到效果 ——
-  第一次跑验证时 40 条里有 5 条失败，就是因为浏览器加载的还是旧 bundle。
+- **Edit 工具会把整份文件的 CRLF 归一成 LF。**
+- **失效一个 key 前先 grep 它到底存不存在。**
+- **测试写进系统的状态必须自己清掉。** 本轮又踩一次：清理测试第一版在模型调用
+  失败时留下 3 条记忆，而它自己正是来抱怨垃圾的。现在失败路径也收尾。
+- **`<details>` 折叠后内容仍在 DOM 里** —— 用 Playwright 的 `isVisible()`。
+- **浏览器测试要等事件，不要等时长。** 退回接口会同步跑记忆判定（一次真模型调用），
+  6 秒的固定等待读到的还是 textarea 里的字，断言"通过"在了错的东西上。
+- **改后端要重启进程才生效；改前端要 `npm run build`** —— API 托管的是 `frontend/dist`。
+- **推理模型 + 小 `max_tokens` = 没有回答，不是被截断。** 本轮清理接口硬编码 2000，
+  实测思考用了 6,212 字符 → 502。用 `reasoning_budget()`。
+- **`str.format` 会把提示词里的 JSON 花括号当占位符。** 用 `replace()`。
+- **Playwright/脚本里不要调用 `powershell`/`cmd`** —— 在本环境被安全策略拦，
+  而且失败得很安静（`stdout=None` 会被读成"没有新进程"）。枚举进程用 `ctypes`。
+- **从提权的 shell 启动 PostgreSQL 会失败**（`Execution of PostgreSQL by a user with
+  administrative permissions is not permitted`）。`scripts/infra-start.ps1` 检测到提权后
+  会依次试三种降权启动，每一种都在别的场合失败过，实测记录在
+  `scripts/_restricted-launch.ps1` 的文件头：
+  ① `runas /trustlevel:0x20000`（普通提权终端可用，桌面宿主里 `exit 1` 且无输出）；
+  ② 进程内受限令牌（需要 `SeImpersonatePrivilege`，本机令牌拿不到，`win32=5`）；
+  ③ **计划任务 `RunLevel = Limited`** —— 不需要任何特权，在本机唯一可用。
+  任务在端口起来后立刻注销，**进程不会被杀掉**（实测：端口仍在听，任务已消失）。
+  **但这也让 PG 离开了 job 对象** —— 它成了计划任务服务的子进程，不再是启动器的后代，
+  于是强杀应用时它活了下来（验收报 `[FAIL] PostgreSQL port 5432 released`，其余端口都释放了）。
+  试过三种修法，**都失败**，别重复走：
+  ① 桌面壳按 `postmaster.pid` 收养 —— `AssignProcessToJobObject` 报 `win32=5`（提权进程
+     给受限令牌进程赋值需要 `SeAssignPrimaryTokenPrivilege`/`SeIncreaseQuotaPrivilege`，
+     本机一个都拿不到）。**这条留在代码里**（`lifecycle::adopt_escaped_services`），
+     每次提权启动都会写一行 `adopt: postgres N is NOT in the job ... win32=5` ——
+     保留它是因为它是这条缺口唯一的运行时信号（"失败可见"）；
+  ② 把 job 命名、由受限令牌的 `_start-postgres.ps1` 先加入 job 再启动 PG —— 同一句话
+     还是 `OpenJobObjectW win32=5`；
+  ③ 换 DACL（`OW` / `AU`）并降强制完整性标签到 Medium —— 仍然是 `win32=5`。
+  结论：**提权进程建的 job，受限令牌就是打不开**，原因未定位。只在提权那条路出现。
 
 ---
 
 ## 七、环境备忘
 
-- **不要打开 Smart App Control** —— 从「评估中」变成「正式开启」就锁死，只能重装系统
-- 启动整套：`scripts\start.bat --hidden`（PG 5432 / Redis 6379 / Qdrant 6333 / API 8000）
-- 停止整套：`scripts\stop.bat`
+- **不要打开 Smart App Control**
+- 启动整套：`scripts\start.bat --hidden`（PG 5432 / Redis 6379 / Qdrant 6333 / API 8000 / Web 5173）
+- 停止整套：`scripts\stop.bat` · 只重启应用：`scripts\restart.bat --hidden`
 - 后端测试需要 PG 在跑；不需要 DB 的测试放 `backend/tests/unit/`
-  （`integration/` 会拉起数据库夹具）
 - git 不在 PATH，PortableGit 在
   `C:\Users\user\.workbuddy-ai\binaries\PortableGit\versions\1.2.0\cmd`
-- `pytest` 的 `addopts` 已经带了 `-q`，所以 `pytest -q` 是**双 -q**，
-  **不会打印 "N passed" 汇总行**。看 exit code，或数进度行的点。
+- `pytest` 的 `addopts` 已带 `-q`，所以 `pytest -q` 是**双 -q**，不打印汇总行。看 exit code。
+- **`restart.bat` 的退出码不会传回调用方**，看到 `failed` 先查端口再下结论。
 
 ---
 
-## 八、本轮做了什么
+## 八、这三轮做了什么
 
-用户装上软件实际使用，报了四个问题。逐条核实（看代码 + 实际运行），四条全部成立。
+### 第 10 轮
 
-### 问题 1 —— 提交任务后它不开始（真 bug）
+**问题 1 —— 下载 / 打开点了没反应。** `deliveryApi.downloadUrl` 返回一个字符串，
+被用在 `<a href download>` 上：导航不带 `Authorization`，端点 401，按钮什么都不做。
+`打开` 用 `window.open('file:///…')`，WebView 拦掉。改成 `requestBlob` 取字节 + `saveBlob`
+（`filename*=utf-8''` 解析中文名），以及 `POST /deliverables/{id}/open` ——
+**客户端只发 id，路径由后端从自己的记录里解析**，Tauri 那层「不接受页面传来的路径」
+的规矩因此没被破。
 
-`deliveryApi` 里**根本没有** `executeBuildRun`。`HomePage` 只调 `createBuildRun`
-然后跳转，`POST /build-runs/{id}/execute` 从前端任何地方都没被调用过。
-`DeliveryService.create_build_run` 不设置 `started_at`，所以行永远是 `DRAFT`。
-而 `delivery.py` 的创建接口返回 `message="已开始处理"` —— 假话。
-三个面板写着「还没有生成计划」「还没有开始执行」「本次被告诉了它什么」，
-读起来像在准备中，用户就等着一个永远不会来的结果。
+**问题 2a —— 好文件被标「未校验」。** `_collect` 把 `run_state` 当成一条 `ok: False`
+的检查塞进 `checks`，`passed` 因此为假。现在 `make_verification(checks, run_state=…)`
+把运行级信息做成**并列字段**，界面分「文件本身 / 这次运行」两栏。
 
-改：`deliveryApi.executeBuildRun(id)`；`HomePage` 一次 mutation 里 create → execute → 跳转；
-`StartFailedError` 把"创建失败"和"创建成功但没启动"分开（前者留在首页报错，后者带着原因
-送到工作台，因为运行记录存在、可以从那儿点开始）；`delivery.py` 改
-`message="已创建，尚未开始"`；工作台 `DRAFT`/`READY` 渲染一个显眼的「开始」面板。
+**问题 2b —— 简单任务 PARTIAL。** 从库里读出来：5 步全 DONE，文件 35,700 B / 11 页
+在盘上、能读回，而 `_final_verify` 只让模型调**一次**工具，它猜的路径少了
+`deliverables/` 前缀，`document_read` 报「文件不存在」，整次运行判 FAILED。
+修法：把本次真实产出的路径列表喂给核验器（`artifacts` / `_artifact_block`），
+取证失败可重试（区别于「答案是 no」），并把「没跑成」与「没通过」分开
+（`conclusive`）。**同一个任务重跑：终态 COMPLETED，6/6 步，2 份产出物 verified=True。**
 
-**证据**（浏览器实测，`verify-delivery-ui.mjs`）：
-```
-POST /build-runs | POST /build-runs/{id}/execute | GET /build-runs
-status=EXECUTING  started_at=2026-10-07T14:54:07.964095+00:00
-```
-旧断言只检查了 `POST /build-runs` —— 产品坏着它也是绿的，这正是它没被发现的原因。
+**问题 3 —— 界面改对话式。** `/` 现在是对话时间线：一轮 = 一次 build run，
+用户说的话在右边、它的动作和产出在同一条线上、输入框固定在底部。状态是**一句话**
+（`runSentence`）不是状态码。执行计划 / 实时执行 / 本次上下文收进「详情」（默认收起，
+运行中自动展开）。侧栏降到四项 + 高级（18 条旧路由仍可达）。上一版四区首页
+**没删**，搬到了 `/home`。右侧「AI 助手」面板只在对话页隐藏。
 
-### 问题 2 —— 没配模型也能提交
+### 第 11 轮
 
-首页现在读 `/health/deps`，`llm.degraded` 为真时在**输入框之前**就把话说清楚：
-一块带边框的引导（原因 + 「去配置」直达设置页），输入框/格式/「开始」全部禁用，
-按钮文案变「先配置模型」。配好后什么都不出现。
+**去重写在产生之前。** `evaluate()` 现在把 active / pending / rejected 三份清单一起给
+判定器，它回 `duplicates`，然后：命中 active → 累加那条记忆；命中 pending → 累加那条
+候选的 `evidence_count`（界面显示「这条我提过 N 次」，而不是列 N 条）；命中 rejected
+→ 不再提议。
 
-**判断只看 `ai.llm.degraded`。** `ai.embedding.degraded` 在本机是 `true` ——
-DeepSeek 没有 embedding 接口，走离线哈希 n-gram 是**故意的**，
-拿它来拦人会把能正常干活的配置判成不可用。
+**测试垃圾不再进库。** `verify-context-ui.mjs` 写完自己删、并断言删掉了；档案字段也还原。
+`verify-no-test-litter.py` 是回归断言：跑完全量测试后记忆表里不许有测试特征文本。
 
-**证据**（`verify-config-gate.mjs`）：`llm.degraded=false embedding.degraded=true`
-→ 不出现引导块、输入框可用、「开始」可用。
+**一次性清理，先给用户看再删。** `POST /memory-cleanup/plan` 只算不写、
+`/apply` 只执行用户看过的计划。界面上「检查一下记忆库」→ 列清单 →「就按这个来」。
 
-### 问题 3 —— 顶栏标签是旧的
+**界面跟着改。** 待确认合并后只出现一条、每条写清依据来自哪次交付；
+已生效按主题分组；候选显示提过几次。
 
-`AIProviderSettings` 保存后 `invalidateQueries({ queryKey: ['health-deps'] })` ——
-**没有任何查询用这个 key**。`TopBar` 用的是 `['health', 'deps']`，
-所以保存 Key 之后顶栏那个标签从来没被失效过，一直显示旧值。
-后端 `/health/deps` 返回 `"kind":"deepseek","degraded":false`，顶栏却写「离线启发式引擎」。
+### 第 11 轮附带：让应用在提权 shell 里也能起来（`088e0f5` / `6170b4f` / `b617372`）
 
-改：改成失效 `['health']` 前缀（同时覆盖顶栏和设置页），reset 路径同样的问题一起修；
-`TopBar` 的 `staleTime` 60s → 5s，并加 30s `refetchInterval` + 聚焦重拉 ——
-一个回答"它现在跑在什么上"的标签不该躺在 1 分钟的缓存里。
+安装验收本来跑不过，不是产品坏了，是**本 agent 宿主是提权的**，而 PostgreSQL 拒绝以
+管理员身份运行。这条链修了三步，每一步都是被实测逼出来的：
 
-**证据**：`保存配置后 /health/deps 真的重新拉取了（无需刷新页面） — 1 次`，
-顶栏 `deepseek · deepseek-flash`。
-
-**这条检查被反向验证过**：把 `['health']` 改回 `['health-deps']`、`staleTime` 改回 60s，
-重新构建后它报 `0 次` 并失败。不会失败的检查等于没检查。
-
-### 问题 4 —— 界面太专业
-
-**左侧菜单的前提已经不成立**：现在是 `首页 / 我的 / 工作 / 高级`，`高级` 默认折叠，
-16 条旧路由全部可达 —— `verify-sidebar.mjs` 在本轮之前就是 10/10。
-提示词里"左侧 16 个平铺"是旧状态。**这一处没有改动**，记在这里是因为
-"改前 16 项平铺"如果写进报告就是假的前后对比。
-
-真正改的是工作台：**产出物提到第一张卡**，三栏（执行计划 / 实时执行 / 本次上下文）
-原样收进一个 `<details>` 叫「详情」，默认收起；跑的时候（`EXECUTING`）自动展开，
-因为那正是有人在盯的时候。三个面板都还在、还在轮询、点一下就出来 ——
-**没有为了好看删功能**。
-
-**证据**（`verify-workbench-layout.mjs`）：已结束的任务上 `详情默认收起`、
-`产出物可见`、`执行计划不可见`；展开后三栏都在。
-反向验证：强制 `open={true}` → 17/19，失败的正是这两条。
-
-> 断言用 Playwright 的可见性而不是 `innerText`：折叠的 `<details>` 内容仍在 DOM 里，
-> 用文本存在性检查会在页面看起来毫无变化时依然通过。
-
-### 顺带发现（不是用户报的）—— 运行列表跨用户泄漏
-
-跑回归时 `verify-onboarding.mjs` 报"新账号看到了 14 个 BuildRun"。**那个数字是真的。**
-
-`RunController` **没有 owner 字段**。注册表是进程级的（这本身没问题，一个进程驱动所有运行），
-但 `GET /agent/runs` 把 `registry.all()` 返回给任何登录用户，按 id 的那批接口
-（读计划、拉事件流、暂停、取消、diff、回滚）完全不检查归属。
-`user: CurrentUser` 一直是这些接口的参数，**从来没被用过** —— 看起来像在校验。
-
-改：`RunController.owner_id` 做成**必填不给默认值**（给 `None` 默认会让这个 bug 悄悄回来；
-必填让它当场炸：6 个既有测试立刻以 `missing 1 required positional argument` 失败，
-这正是这个改动在起作用）；`RunRegistry.owned_by()`；API 层一个 `_owned_controller(run_id, user)`
-被全部 8 个按 id 的路由使用；"不存在"和"不是你的"返回**同一个错误**（区分开等于
-向没有权限的人确认这个 id 存在）。
-
-**证据**：
-```
-demo 启动一个 run → demo 看到 1（修复前是 14）
-新账号           → GET /agent/runs = 0
-未认证           → 401
-新账号读 demo 的 id → 422，与一个已失效的 run 同样的消息
-```
-
-新增 `backend/tests/unit/test_run_isolation.py`（4/4）。其中一条**断言模块源码**：
-每个按 id 的路由必须调用归属检查 —— 这个失败模式是"漏写"，
-行为测试只有在正好走到那条路由时才会发现。反向验证：删掉一个检查，
-它直接报 `cancel_run does not verify run ownership`。
-
-### 测试卫生（自己造的坑，已填）
-
-`verify-config-gate.mjs` 要让设置页变脏才能按保存，于是写了一个占位 Key。
-那是一次**真实**写入，进程级生效，覆盖了 `.env` 里的真 Key，
-之后每个 `verify-onboarding.mjs` 都以 DeepSeek 的 422
-`Your api key: ****0000 is invalid` 失败。当时看起来像产品坏了。
-现在写入和 `DELETE /ai-config` 成对，并有两条断言验证清理成功。
+1. **`runas /trustlevel` 在桌面宿主里不可用**（`exit 1`、无输出）。改成进程内受限令牌，
+   本机拿不到 `SeImpersonatePrivilege`，`win32=5`。
+2. **改用计划任务 `RunLevel = Limited`** —— 不需要任何特权，本机唯一可用。
+   这一步把验收从 30/33 拉到 32/33：`API healthy`、`serves the UI`、
+   `registered a fresh account` 三条由红转绿。
+3. **代价是 PG 离开了 job 对象**，强杀后 5432 不释放 —— 见第六节，三种修法都失败，
+   已知未修。**但用户双击启动的路径不受影响**：非提权跑验收是 33/33。
 
 ---
 
 ## 九、仍然 NOT VERIFIED
 
-- **问题 2 的"拦住"分支没有在浏览器里跑过** —— 本机 `llm.degraded=false`（Key 配好了），
-  所以只验证了**不拦**的那一侧（而且重点验证了 embedding 走离线时不会被误拦）。
-  要验证真正拦住的那一侧，需要一个 llm 不可用的状态（清掉 Key 或指向一个坏端点）。
-  `verify-config-gate.mjs` 里那两条断言已经写好，条件满足时会自动改跑那一侧。
+- **提权启动时，强杀窗口不会带走 PostgreSQL**（验收唯一一条红的：
+  `[FAIL] PostgreSQL port 5432 released`）。原因未定位（见第六节，DACL/完整性标签/
+  访问掩码都排除过了）。**只在提权那条路出现**：非提权跑同一个验收是 **33/33**，
+  含这一条。**不许当成通过。**
+- **「点打开之后真的弹出了程序窗口」没有验证。** 唯一能证明它的方法是真去启动那个
+  程序，而那样每跑一次测试就往用户桌面上扔一个 PowerPoint 窗口——用户明确说过不要。
+  现在验证到的是：接口返回 200、解析出的路径就是这个产出物的路径、`os.startfile`
+  在 OS 边界被以该路径调用一次、文件不存在时明确报错。**窗口本身没有验证，不许当成通过。**
+- **问题 2 的"拦住"分支（没配模型时不让提交）仍未在浏览器里跑过** —— 本机
+  `llm.degraded=false`。
 - **`verify_deepseek.py` 62/62 与冷启动 36/36 是历史值，本轮未重跑。**
-- **skill 层（第 2 级）的毫秒数未测** —— 它建起来了，但还没有用同一套方法证明它比
-  通用路径快。`scripts/measure_tiers.py` 可以测，需要 PG 在跑。
-- `docs/` 之外还有别的文档（`docs/thesis/` 中文各章、`docs/archive/` 历史文件）**未逐份核对**。
+- **skill 层（第 2 级）的毫秒数未测。**
 - **`start.sh` / `stop.sh` 未验证** —— POSIX 路径从未在本机跑过。
-- 沙箱是**进程级隔离 + 检测 + 回滚**，不是内核沙箱 ——
-  它能发现并撤销越界写入，**不能阻止它发生**。
-- 未配置 `GITHUB_TOKEN` 时用仓库搜索（开放），候选池更小；代码搜索需要 token。
+- 沙箱是**进程级隔离 + 检测 + 回滚**，不是内核沙箱。
+- 未配置 `GITHUB_TOKEN` 时用仓库搜索（开放），候选池更小。
 - Embedding 仍是离线哈希 n-gram（DeepSeek 无 embedding 接口）。
 - Ollama / OpenAI 端点未实测 · Docker 路径未验证。
-- **安装包版本 2.1.0 与壳版本 2.0.0 不一致** —— 这是有意的（两者版本不同的东西），
-  已在 `docs/deployment.md` 写明；但**没有做版本号的统一策略**。
-- **`archive/releases/` 里还留着 8 个历史源码包**（`e62ed31` / `d4642ca` / `37360ac` 等）。
-  没删是因为无法判断哪些还有用；但它们会让"哪个是最新的"变得不清楚。
+- **安装包版本 2.1.0 与壳版本 2.0.0 不一致** —— 有意的，见 `docs/deployment.md`。
+- **清理计划的稳定性依赖模型**：同一次请求可能返回 502（`ai_reasoning_budget_exhausted`
+  在把预算提到 6000 之前），也可能返回空计划。计划里带编号校验，越界一律忽略，
+  但**没有**对「模型说没什么可清理、而库里明显有重复」做二次核对。
+- **`archive/releases/` 里还留着 8 个历史源码包**，会让"哪个是最新的"变得不清楚。
