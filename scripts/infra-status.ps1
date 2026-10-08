@@ -22,7 +22,7 @@ $pgDetail = ''
 if ($pgReady) {
     Get-PgEnv
     $version = Invoke-Native -FilePath (Join-Path $PgHome 'bin\psql.exe') `
-        -Arguments @('-U', $PgUser, '-p', "$PgPort", '-d', $DbName, '-tAc', 'select version()')
+        -Arguments ((Get-PgClientArgs) + @('-U', $PgUser, '-d', $DbName, '-tAc', 'select version()'))
     if ($version.ExitCode -eq 0) {
         $pgDetail = ($version.Output -split ',')[0].Trim()
     } else {

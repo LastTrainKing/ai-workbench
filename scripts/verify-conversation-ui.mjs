@@ -166,14 +166,19 @@ async function main() {
       }
       // innerText on a collapsed <details> still returns the content — it is in the DOM,
       // just not laid out. Assert on what Playwright says is visible.
-      check('「详情」里有执行计划', await page.locator('[data-testid="panel-plan"]').first().isVisible().catch(() => false))
+      // 执行计划这一栏现在只在真的有计划时渲染。空状态「还没有生成计划」占了地方
+      // 却不告诉用户任何事，用户明确要求删掉 —— 所以这里检查的是「有内容就显示，
+      // 没内容就整栏不出现」，而不是「这一栏永远在」。
+      const planVisible = await page.locator('[data-testid="panel-plan"]').first().isVisible().catch(() => false)
+      const emptyPlan = (await page.locator('[data-testid="message-stream"]').innerText()).includes('还没有生成计划')
+      check('「详情」里执行计划要么有步骤、要么整栏不出现', planVisible || !emptyPlan, `plan=${planVisible} 空占位=${emptyPlan}`)
       check('「详情」里有实时执行', await page.locator('[data-testid="panel-execution"]').first().isVisible().catch(() => false))
-      check('「详情」里有本次上下文', await page.locator('[data-testid="panel-context"]').first().isVisible().catch(() => false))
+      check('「详情」里有「这次依据了什么」', await page.locator('[data-testid="panel-context"]').first().isVisible().catch(() => false))
       await page.screenshot({ path: join(SHOTS, '82-conversation-details.png'), fullPage: true })
     } else {
-      check('「详情」里有执行计划', false, '没有找到详情折叠')
+      check('「详情」里执行计划要么有步骤、要么整栏不出现', false, '没有找到详情折叠')
       check('「详情」里有实时执行', false, '没有找到详情折叠')
-      check('「详情」里有本次上下文', false, '没有找到详情折叠')
+      check('「详情」里有「这次依据了什么」', false, '没有找到详情折叠')
     }
 
     // ----------------------------------------------------------- old routes ---

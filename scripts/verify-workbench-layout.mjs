@@ -83,7 +83,7 @@ async function main() {
     await page.waitForTimeout(900)
     check('展开后：执行计划仍在', await page.locator('text=执行计划').first().isVisible().catch(() => false))
     check('展开后：实时执行仍在', await page.locator('text=实时执行').first().isVisible().catch(() => false))
-    check('展开后：本次上下文仍在', await page.locator('text=本次上下文').first().isVisible().catch(() => false))
+    check('展开后：这次依据了什么仍在', await page.locator('text=这次依据了什么').first().isVisible().catch(() => false))
     await page.screenshot({ path: join(SHOTS, '74-workbench-details.png'), fullPage: true })
 
     // A running run opens the fold by design — that is the moment somebody is

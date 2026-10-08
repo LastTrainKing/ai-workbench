@@ -32,7 +32,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "backend"))
 
 from app.ai.rag.retriever import Retriever
-from app.ai.rag.tiers import _terms
+from app.ai.memory.relevance import terms as _terms
 from app.infrastructure.database import get_session_factory
 from app.models.knowledge import DocumentChunk
 from sqlalchemy import select

@@ -218,7 +218,7 @@ function ConvertTo-ProcessArgumentList {
 function Write-StartupLog {
     <#
       Append one line to logs/startup.log and echo a matching console line.
-      States: STARTING | READY | FAILED | SKIPPED | STOPPED
+      States: STARTING | READY | SKIPPED | STOPPING | STOPPED | FAILED
     #>
     param(
         [Parameter(Mandatory)][string]$Service,
@@ -235,6 +235,7 @@ function Write-StartupLog {
         'READY'    { Write-Host "  [+] $Service READY$suffix" -ForegroundColor Green }
         'SKIPPED'  { Write-Host "  [+] $Service already running$suffix" -ForegroundColor Green }
         'STARTING' { Write-Host "  [*] $Service starting..." -ForegroundColor Cyan }
+        'STOPPING' { Write-Host "  [*] $Service stopping..." -ForegroundColor Cyan }
         'STOPPED'  { Write-Host "  [+] $Service stopped$suffix" -ForegroundColor Green }
         'FAILED'   { Write-Host "  [ERROR] $Service FAILED$suffix" -ForegroundColor Red }
         default    { Write-Host "  $Service $State$suffix" }
@@ -338,7 +339,7 @@ function Test-PgReady {
     param([int]$Port = $PgPort)
     $pgIsReady = Join-Path $PgHome 'bin\pg_isready.exe'
     if (-not (Test-Path $pgIsReady)) { return $false }
-    $result = Invoke-Native -FilePath $pgIsReady -Arguments @('-h', '127.0.0.1', '-p', "$Port", '-q', '-t', '5')
+    $result = Invoke-Native -FilePath $pgIsReady -Arguments ((Get-PgClientArgs -Port $Port) + @('-q', '-t', '5'))
     return ($result.ExitCode -eq 0)
 }
 
@@ -348,8 +349,33 @@ function Test-PgQuery {
     Get-PgEnv
     $psql = Join-Path $PgHome 'bin\psql.exe'
     if (-not (Test-Path $psql)) { return $false }
-    $result = Invoke-Native -FilePath $psql -Arguments @('-U', $PgUser, '-p', "$Port", '-d', 'postgres', '-tAc', 'SELECT 1')
+    $result = Invoke-Native -FilePath $psql -Arguments @(
+        '-h', '127.0.0.1', '-U', $PgUser, '-p', "$Port", '-d', 'postgres', '-tAc', 'SELECT 1'
+    )
     return ($result.ExitCode -eq 0 -and $result.Output.Trim() -eq '1')
+}
+
+# Every client here must be given `-h 127.0.0.1`, and that is not decoration.
+#
+# Without it, libpq defaults to `localhost`, which on this machine resolves to `::1`
+# first. PostgreSQL is told `listen_addresses=127.0.0.1` — IPv4 only — so the IPv6
+# attempt fails and the client falls back, and the round trip costs **2.06 seconds
+# every single time**. Measured, on a running server:
+#
+#     psql -U postgres -d postgres -tAc "SELECT 1"                   2.13s
+#     psql -h 127.0.0.1 -U postgres -d postgres -tAc "SELECT 1"      0.07s
+#
+# A trivial `SELECT 1` is not slow; the address family is. Startup ran five of these,
+# which is the twelve-second gap between `PostgreSQL READY` and `Redis STARTING`.
+function Get-PgClientArgs {
+    <#
+      The connection flags every psql/pg_isready call shares.
+
+      Exists so the next person adding a call has one obvious thing to use rather than
+      a rule to remember. The two seconds above are the cost of remembering it instead.
+    #>
+    param([int]$Port = $PgPort)
+    return @('-h', '127.0.0.1', '-p', "$Port")
 }
 
 function Test-RedisReady {
@@ -543,9 +569,20 @@ function Stop-ProjectProcess {
             $stopped = $true
             $handled += $ownerPid
         }
-        # Wait for the OS to actually release the port.
-        for ($i = 0; $i -lt 25 -and (Test-PortOpen $Port); $i++) {
-            Start-Sleep -Milliseconds 400
+        # Wait for the OS to actually release the port — but only if we stopped
+        # something. Measured: this loop ran unconditionally, so a service whose port was
+        # held by a process this project deliberately refuses to touch (a Redis from
+        # another install, say) cost the full 25 x 400 ms = **10 seconds** waiting for a
+        # release that could never come. Two such services made `infra-stop.ps1` take
+        # 21.9 s on a machine where PostgreSQL itself stopped in 0.1 s. Closing the window
+        # is a thing the user waits for, so those ten seconds were paid twice per close.
+        if ($stopped) {
+            for ($i = 0; $i -lt 25 -and (Test-PortOpen $Port); $i++) {
+                Start-Sleep -Milliseconds 400
+            }
+        }
+        elseif (Test-PortOpen $Port) {
+            Write-Warn2 "port $Port is still held by another program - not waiting for it to close"
         }
     }
 

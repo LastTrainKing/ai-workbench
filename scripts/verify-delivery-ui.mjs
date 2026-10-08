@@ -186,7 +186,7 @@ async function main() {
     const workbench = await page.locator('body').innerText()
     check('详情里：执行计划栏', /执行计划/.test(workbench))
     check('详情里：实时执行栏', /实时执行/.test(workbench))
-    check('详情里：本次上下文栏', /本次上下文/.test(workbench))
+    check('详情里：这次依据了什么栏', /这次依据了什么/.test(workbench))
     await page.screenshot({ path: join(SHOTS, '61-workbench.png'), fullPage: true })
 
     // ---------------------------------------------- register a deliverable --
