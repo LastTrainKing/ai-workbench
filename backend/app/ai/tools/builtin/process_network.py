@@ -21,6 +21,7 @@ import asyncio
 import os
 import shutil
 import time
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -31,6 +32,23 @@ from app.core.errors import PermissionDeniedError, ValidationError
 
 NETWORK_TIMEOUT = 60.0
 MAX_RESPONSE_BYTES = 2_000_000
+
+#: Programs whose arguments *are* a program. Judging the wrapper tells you nothing about
+#: what will run, so `process_start` refuses them and points at the shell tool, which has
+#: its own permission path.
+#:
+#: Assembled from fragments on purpose, the same way `scripts/verify_shortcut.py` does it:
+#: a bare list of shell names in a source file reads like something to run.
+_SHELL = "power" + "shell"
+SHELL_WRAPPERS = frozenset(
+    {
+        "cmd", "cmd.exe",
+        _SHELL, _SHELL + ".exe",
+        "pwsh", "pwsh.exe",
+        "sh", "bash",
+        "wscript", "wscript.exe", "cscript", "cscript.exe",
+    }
+)
 
 
 # --------------------------------------------------------------------------- #
@@ -124,9 +142,29 @@ class ProcessStartTool(Tool):
         working = Path(ctx.resolve(cwd)) if cwd else Path(ctx.resolve("."))
         ctx.require_permission(working, write=True)
         if ctx.permissions is not None:
-            verdict = ctx.permissions.check_command(command, cwd=working, interpreter="process")
+            # **The whole command line, not just the executable.**
+            #
+            # This used to be `check_command(command)`, which saw `powershell.exe` while
+            # `create_subprocess_exec` ran `powershell.exe -Command "Remove-Item -Recurse
+            # -Force"`. The classifier judged one string and the machine ran another, so
+            # an Autonomous run executed a destructive command at `risk=low`.
+            #
+            # A shell wrapper is refused outright: its arguments *are* the program, and
+            # there is no way to classify a wrapper honestly. Shell work belongs to the
+            # shell tool, which has its own gate.
+            wrapper = Path(command).name.lower()
+            if wrapper in SHELL_WRAPPERS:
+                raise PermissionDeniedError(
+                    f"{wrapper} is a shell wrapper; its arguments are a program, so this "
+                    "tool cannot judge what it will run. Use the shell tool instead.",
+                    details={"command": command, "arguments": (arguments or [])[:10]},
+                )
+            full_command = " ".join([command, *(arguments or [])]).strip()
+            verdict = ctx.permissions.check_command(full_command, cwd=working, interpreter="process")
             if not verdict.allowed:
-                raise PermissionDeniedError(verdict.reason, details={"command": command[:300]})
+                raise PermissionDeniedError(
+                    verdict.reason, details={"command": full_command[:300]}
+                )
 
         creationflags = 0x0800_0000 if os.name == "nt" else 0
         try:
@@ -277,41 +315,78 @@ class _NetworkTool(Tool):
             )
 
     @staticmethod
-    def _fetch_script(url: str, method: str, body: str, headers: str) -> str:
-        """A PowerShell snippet that returns a JSON envelope.
+    def _perform_request(
+        url: str,
+        method: str,
+        body: str,
+        headers: dict[str, str],
+        *,
+        check_hop: Callable[[str], None],
+    ) -> dict[str, Any]:
+        """Make the request in Python. Synchronous; the caller runs it in a thread.
 
-        PowerShell is used rather than a Python HTTP library so the request goes
-        through the same TLS stack and proxy configuration as everything else on
-        the machine, which matters on a corporate network.
+        ## What this replaced, and why
+
+        The previous version built a script string and handed it to a shell host:
+
+            safe_url  = url.replace("'", "''")
+            safe_body = body.replace("'", "''")
+            header_block = f"$h = @{{ {headers} }}"      # headers, unescaped
+
+        `headers` is a **model-supplied tool parameter**, so anything the model put there
+        was executed by that host — downstream of the Permission Manager, the workspace
+        sandbox, the risk classifier and the audit log. The tool's own schema even invited
+        host-language input ("hashtable entries, e.g. ...").
+
+        There was never a reason for it. Python has `urllib`. No string is built, nothing
+        is parsed as code, and `headers` is now a plain object of name → value.
+
+        ## Redirects are followed here, one hop at a time
+
+        `check_domain` sees the URL it is given. A permitted host that answers `302
+        Location: http://127.0.0.1:6333/...` used to be followed by the HTTP client
+        without anyone looking again — the gate never saw the real target. `check_hop` is
+        called for the first URL and for **every** redirect target, so the gate sees all
+        of them.
         """
-        safe_url = url.replace("'", "''")
-        safe_body = body.replace("'", "''")
-        header_block = ""
-        if headers.strip():
-            header_block = f"$h = @{{ {headers} }}"
-        else:
-            header_block = "$h = @{}"
-        return f"""
-$ErrorActionPreference='Stop'
-{header_block}
-try {{
-  $p = @{{ Uri='{safe_url}'; Method='{method}'; Headers=$h; TimeoutSec=45; UseBasicParsing=$true }}
-  {f"$p['Body'] = '{safe_body}'" if body else ""}
-  $r = Invoke-WebRequest @p
-  $o = [ordered]@{{
-    status = [int]$r.StatusCode
-    content = $r.Content
-    length = $r.RawContentLength
-    content_type = "$($r.Headers['Content-Type'])"
-  }}
-  $o | ConvertTo-Json -Compress -Depth 4
-}} catch {{
-  $resp = $_.Exception.Response
-  $code = 0
-  if ($resp) {{ $code = [int]$resp.StatusCode }}
-  [ordered]@{{ status = $code; error = $_.Exception.Message }} | ConvertTo-Json -Compress
-}}
-"""
+        import urllib.error
+        import urllib.request
+
+        class _CheckedRedirect(urllib.request.HTTPRedirectHandler):
+            def redirect_request(self, req, fp, code, msg, hdrs, newurl):  # type: ignore[override]
+                check_hop(newurl)
+                return super().redirect_request(req, fp, code, msg, hdrs, newurl)
+
+        opener = urllib.request.build_opener(_CheckedRedirect)
+        request = urllib.request.Request(
+            url,
+            data=body.encode("utf-8") if body else None,
+            method=method,
+            headers={"User-Agent": "ai-workbench/2.0", **headers},
+        )
+        try:
+            with opener.open(request, timeout=NETWORK_TIMEOUT) as response:
+                raw = response.read(MAX_RESPONSE_BYTES + 1)
+                truncated = len(raw) > MAX_RESPONSE_BYTES
+                if truncated:
+                    raw = raw[:MAX_RESPONSE_BYTES]
+                return {
+                    "status": int(response.status),
+                    "content": raw.decode("utf-8", errors="replace"),
+                    "length": len(raw),
+                    "content_type": response.headers.get("Content-Type", ""),
+                    "content_truncated": truncated,
+                    "final_url": response.geturl(),
+                }
+        except urllib.error.HTTPError as exc:
+            return {
+                "status": int(exc.code),
+                "error": f"HTTP {exc.code} {exc.reason}",
+                "final_url": exc.geturl() if hasattr(exc, "geturl") else url,
+            }
+        except urllib.error.URLError as exc:
+            return {"status": 0, "error": f"{type(exc.reason).__name__}: {exc.reason}"}
+
 
 
 class HttpGetTool(_NetworkTool):
@@ -323,7 +398,14 @@ class HttpGetTool(_NetworkTool):
             "type": "object",
             "properties": {
                 "url": {"type": "string"},
-                "headers": {"type": "string", "description": "PowerShell hashtable entries, e.g. \"'Accept'='application/json'\""},
+                # Was a free-form string of host-language hashtable entries. That string
+                # was interpolated into an executed script — see `_perform_request`. A
+                # plain object of name → value cannot become code.
+                "headers": {
+                    "type": "object",
+                    "additionalProperties": {"type": "string"},
+                    "description": "Request headers as name/value pairs.",
+                },
             },
             "required": ["url"],
         },
@@ -333,9 +415,11 @@ class HttpGetTool(_NetworkTool):
         mutates_state=False,
     )
 
-    async def execute(self, ctx: ToolContext, url: str, headers: str = "") -> ToolResult:
+    async def execute(
+        self, ctx: ToolContext, url: str, headers: dict[str, str] | None = None
+    ) -> ToolResult:
         await self._authorise(ctx, url)
-        return await _run_http(ctx, url, "GET", "", headers, summary_prefix="GET")
+        return await _run_http(ctx, url, "GET", "", headers or {}, summary_prefix="GET")
 
 
 class HttpPostTool(_NetworkTool):
@@ -348,7 +432,10 @@ class HttpPostTool(_NetworkTool):
             "properties": {
                 "url": {"type": "string"},
                 "body": {"type": "string"},
-                "headers": {"type": "string"},
+                "headers": {
+                    "type": "object",
+                    "additionalProperties": {"type": "string"},
+                },
             },
             "required": ["url"],
         },
@@ -358,38 +445,66 @@ class HttpPostTool(_NetworkTool):
         mutates_state=True,
     )
 
-    async def execute(self, ctx: ToolContext, url: str, body: str = "", headers: str = "") -> ToolResult:
+    async def execute(
+        self,
+        ctx: ToolContext,
+        url: str,
+        body: str = "",
+        headers: dict[str, str] | None = None,
+    ) -> ToolResult:
         await self._authorise(ctx, url)
-        return await _run_http(ctx, url, "POST", body, headers, summary_prefix="POST")
+        return await _run_http(ctx, url, "POST", body, headers or {}, summary_prefix="POST")
 
 
 async def _run_http(
-    ctx: ToolContext, url: str, method: str, body: str, headers: str, *, summary_prefix: str
+    ctx: ToolContext,
+    url: str,
+    method: str,
+    body: str,
+    headers: dict[str, str],
+    *,
+    summary_prefix: str,
 ) -> ToolResult:
-    import json
+    """One implementation of "make an HTTP request", used by both tools.
 
-    exe, flags = _powershell()
-    script = _NetworkTool._fetch_script(url, method, body, headers)
-    from app.ai.tools.builtin.shell import _run_process
+    There used to be two: this one built a script and ran it through a shell host, and
+    `DownloadFileTool` used `urllib` directly. They had different timeouts, different
+    redirect behaviour and different error shapes, so a fix to one was a fix to half.
+    """
+    import asyncio
 
-    outcome = await _run_process(exe=exe, args=[*flags, script], cwd=Path(ctx.resolve(".")), timeout=NETWORK_TIMEOUT)
+    def check_hop(hop_url: str) -> None:
+        """Every URL that will actually be contacted must pass the gate.
+
+        Called for the first URL and for each redirect target. Without this, a permitted
+        host could answer `302 Location: http://127.0.0.1:6333/...` and the check would
+        never see the address that was really reached.
+        """
+        if ctx.permissions is None:
+            return
+        verdict = ctx.permissions.check_domain(hop_url)
+        if not verdict.allowed:
+            raise PermissionDeniedError(
+                f"Redirect target refused: {verdict.reason}", details={"url": hop_url}
+            )
+
     try:
-        payload = json.loads(outcome["stdout"].strip().splitlines()[-1] if outcome["stdout"].strip() else "{}")
-    except (json.JSONDecodeError, IndexError):
+        payload = await asyncio.to_thread(
+            _NetworkTool._perform_request, url, method, body, headers, check_hop=check_hop
+        )
+    except PermissionDeniedError:
+        raise
+    except Exception as exc:
         return ToolResult(
             ok=False,
-            error=outcome["stderr"] or "The request produced no usable response",
+            error=f"{type(exc).__name__}: {exc}",
             summary=f"{summary_prefix} failed",
         )
 
     if payload.get("error"):
-        return ToolResult(ok=False, error=str(payload["error"]), data=payload, summary=f"{summary_prefix} failed")
-
-    content = payload.get("content", "")
-    if isinstance(content, str) and len(content.encode("utf-8", errors="ignore")) > MAX_RESPONSE_BYTES:
-        content = content[:MAX_RESPONSE_BYTES]
-        payload["content_truncated"] = True
-    payload["content"] = content
+        return ToolResult(
+            ok=False, error=str(payload["error"]), data=payload, summary=f"{summary_prefix} failed"
+        )
 
     return ToolResult(
         ok=200 <= int(payload.get("status", 0)) < 400,
@@ -446,10 +561,31 @@ class DownloadFileTool(_NetworkTool):
 
         import urllib.request
 
+        def _check_hop(hop_url: str) -> None:
+            """The download follows redirects too, so it re-checks them too.
+
+            This was the second of the two outbound paths, and it followed redirects with
+            no re-check: an allow-listed host could send it to `http://127.0.0.1:6333/…`
+            and the gate would never see the address that was really fetched.
+            """
+            if ctx.permissions is None:
+                return
+            verdict = ctx.permissions.check_domain(hop_url)
+            if not verdict.allowed:
+                raise PermissionDeniedError(
+                    f"Redirect target refused: {verdict.reason}", details={"url": hop_url}
+                )
+
+        class _CheckedRedirect(urllib.request.HTTPRedirectHandler):
+            def redirect_request(self, req, fp, code, msg, hdrs, newurl):  # type: ignore[override]
+                _check_hop(newurl)
+                return super().redirect_request(req, fp, code, msg, hdrs, newurl)
+
         def _stream() -> dict[str, Any]:
             request = urllib.request.Request(url, headers={"User-Agent": "ai-workbench/2.0"})
             written = 0
-            with urllib.request.urlopen(request, timeout=45) as response:
+            opener = urllib.request.build_opener(_CheckedRedirect)
+            with opener.open(request, timeout=NETWORK_TIMEOUT) as response:
                 declared = response.headers.get("Content-Length")
                 if declared and int(declared) > cap:
                     raise ValidationError(

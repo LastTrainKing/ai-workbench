@@ -256,3 +256,27 @@ ai-workbench\
 
 上一轮已经证明"它能产出真东西"（70 KB / 11 页的真实 PPT）。
 这一轮要证明的是**它真的会学习**——无论是对失败的学习，还是对你偏好的学习。
+
+---
+
+## 代码审查（只读，未改代码）
+
+详见 `CODE-REVIEW.md`。P0 两条：
+
+1. `repair-install.bat` 的 `%~dp0` 被写成了 `$~dp0`，双击必然 exit 2 —— **修复入口实际不存在**。
+2. `verify_installer.py` / `measure_startup.py` 会 `rmtree` **用户真实数据目录**（与安装版同一个），**修好之前不要跑**。
+
+其余：连发消息气泡提前消失、新建会话首条串会话且重试发错会话、全选清不空 >50 条、
+窗口夹取单位换算错、卸载时全机器 taskkill 同名进程。
+
+### 补充：URL 安全（用户看不到的那层）
+
+- **P0 `headers` 参数被原样拼进会被执行的脚本**（`process_network.py:291`），
+  绕过权限管理器 / 沙箱 / 审计 —— 已用无害片段证实那段字符串会被执行。
+- **P0 默认白名单里有 `localhost` 和 `127.0.0.1`**（`config.py:115-120`），
+  `blocked_domains` 默认空串 → agent 可不经确认访问本机任意 HTTP 服务，
+  含无鉴权的 Qdrant:6333。
+- **P1 只查字符串、不跟重定向**（`Invoke-WebRequest` / `httpx follow_redirects=True`）
+  → 白名单主机 302 到 127.0.0.1 即可绕过。
+- **P1 无 IP / 私网 / 云元数据判定**（`check_domain` 只做后缀匹配）。
+- 做对的：`?draft=` 的 percent_encode、访问日志已压到 WARNING（实测 0 条）、无 token 进 URL。

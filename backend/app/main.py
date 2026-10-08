@@ -174,21 +174,33 @@ async def _bootstrap_schema() -> None:
             if seeded:
                 logger.info("prompt_templates_seeded", extra={"count": seeded})
             auth = AuthService(session)
-            if await auth.user_count() == 0:
+            # The demo account is a development convenience with a password printed on
+            # the sign-in screen. It must not exist in a shipped build — see
+            # `AuthService.ensure_demo_user`, which also refuses outside `dev`.
+            if settings.app_env == "dev" and await auth.user_count() == 0:
                 await auth.ensure_demo_user()
+            elif settings.app_env != "dev":
+                logger.info(
+                    "demo_user_not_seeded",
+                    extra={"app_env": settings.app_env, "users": await auth.user_count()},
+                )
     except Exception as exc:
         logger.error("seed_failed", extra={"error": f"{type(exc).__name__}: {exc}"})
         raise
 
 
 def create_app() -> FastAPI:
+    # `/docs`, `/redoc` and `/openapi.json` describe every route, every schema and every
+    # parameter. That is useful while building and a map of the attack surface in a
+    # shipped build, so they are off in `prod` — see `Settings.api_docs_enabled`.
+    docs = settings.api_docs_enabled
     app = FastAPI(
         title=settings.app_name,
         version=settings.app_version,
         description=DESCRIPTION,
-        docs_url="/docs",
-        redoc_url="/redoc",
-        openapi_url="/openapi.json",
+        docs_url="/docs" if docs else None,
+        redoc_url="/redoc" if docs else None,
+        openapi_url="/openapi.json" if docs else None,
         lifespan=lifespan,
         contact={"name": "AI Workbench", "url": "https://github.com/"},
         license_info={"name": "MIT"},

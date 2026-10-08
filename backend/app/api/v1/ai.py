@@ -271,7 +271,7 @@ async def list_tools(user: CurrentUser) -> dict:
 
 @router.post("/agents/run", summary="Execute the tool-calling agent")
 async def agent_run(payload: AgentRunIn, user: CurrentUser, session: DbSession) -> dict:
-    outcome = await AgentService(session).run(
+    outcome = await AgentService(session, user.id).run(
         owner_id=user.id,
         goal=payload.goal,
         project_id=payload.project_id,

@@ -522,7 +522,11 @@ class ConversationService:
         if ladder.memory_text:
             material_parts.append("【关于他的记忆】\n" + ladder.memory_text)
         for skill in ladder.skills:
-            material_parts.append(f"【他的做法：{skill.get('name', '')}】\n{skill.get('summary', '')}")
+            # `summary` never existed on this dict, so this line rendered the skill's name
+            # and then an empty string: the model was told which method to use and given
+            # none of it. The body is the rendered skill text stored on the row.
+            body = skill.get("body") or ""
+            material_parts.append(f"【他的做法：{skill.get('name', '')}】\n{body}")
         for index, chunk in enumerate(ladder.knowledge_chunks, start=1):
             title = chunk.get("document_title") or chunk.get("title") or ""
             material_parts.append(f"【他的资料 {index}：{title}】\n{chunk.get('content', '')}")

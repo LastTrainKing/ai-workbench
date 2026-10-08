@@ -531,15 +531,21 @@ class PlannerService:
 # Agent
 # ===========================================================================
 class AgentService:
-    def __init__(self, session: AsyncSession) -> None:
+    def __init__(self, session: AsyncSession, user_id: uuid.UUID | None = None) -> None:
         self.session = session
+        self.user_id = user_id
         # The policy is resolved per service instance rather than cached: a user
         # who raises the permission level in Settings expects the next run to use
         # it, not the next restart.
+        #
+        # It is resolved **for this user**. It used to be one file per machine, so
+        # raising the level in one account raised it in every account.
         from app.ai.tools.policy_store import build_policy, capability_flags
 
-        self.policy = build_policy()
-        self.executor = AgentExecutor(policy=self.policy, enabled_capabilities=capability_flags())
+        self.policy = build_policy(user_id)
+        self.executor = AgentExecutor(
+            policy=self.policy, enabled_capabilities=capability_flags(user_id)
+        )
         self.runs = AIRunRepository(session)
         self.projects = ProjectRepository(session)
         self.bases = KnowledgeBaseRepository(session)

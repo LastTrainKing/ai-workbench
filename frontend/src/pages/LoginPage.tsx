@@ -60,6 +60,16 @@ function validate(mode: Mode, form: FormState): Partial<Record<keyof FormState, 
 }
 
 export default function LoginPage() {
+  // The demo account is created by the backend only when `app_env == "dev"`, and the
+  // backend is the real gate. This is the second half of the same decision: a **build
+  // time** switch, so the credentials are not in a shipped bundle at all.
+  //
+  // It used to read `env` off `/health`. That endpoint answers "is the process up?" and
+  // nothing else now — a probe anyone can reach should answer the one question it is
+  // asked — so the frontend cannot ask it, and does not need to: `npm run build` is a
+  // production build and `npm run dev` is not.
+  const showDemoCredentials = import.meta.env.DEV
+
   const navigate = useNavigate()
   const location = useLocation()
   const login = useAuthStore((state) => state.login)
@@ -314,6 +324,7 @@ export default function LoginPage() {
             </Button>
           </form>
 
+          {showDemoCredentials ? (
           <div className="mt-5 rounded-md border border-subtle bg-surface px-3 py-2.5">
             <div className="flex items-center gap-1.5 text-2xs font-medium text-muted">
               <TriangleAlert className="size-3" />
@@ -326,6 +337,7 @@ export default function LoginPage() {
               </Button>
             </div>
           </div>
+          ) : null}
         </div>
       </section>
     </div>

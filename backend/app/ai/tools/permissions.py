@@ -26,8 +26,10 @@ prompt, and say what, where, why and what it will cost.
 
 from __future__ import annotations
 
+import ipaddress
 import os
 import re
+import socket
 from dataclasses import dataclass, field
 from enum import IntEnum, StrEnum
 from pathlib import Path
@@ -321,6 +323,23 @@ _DANGEROUS_COMMANDS: tuple[tuple[re.Pattern[str], RiskLevel, str], ...] = (
     (re.compile(r"\bmkfs\b", re.I), RiskLevel.CRITICAL, "filesystem creation"),
     (re.compile(r"\bdiskpart\b", re.I), RiskLevel.CRITICAL, "disk partitioning"),
 
+    # --- process termination -----------------------------------------------
+    #
+    # Absent until round 15, and the omission was measured rather than guessed: a live
+    # call to `/agent/tools/classify-command` returned `risk=low` for
+    # `taskkill /F /IM postgres.exe`, while `rm -rf /` and `del /S /Q C:\Windows` were
+    # correctly `high`. The classifier modelled file destruction and network access but
+    # not killing a process, so an Autonomous run could force-kill a database at `low`.
+    #
+    # `taskkill /F` without a filter kills by image name — every process with that name,
+    # including ones this product did not start. That is the same defect the installer had.
+    (re.compile(r"\btaskkill\b", re.I), RiskLevel.HIGH, "terminates processes"),
+    (re.compile(r"\bStop-Process\b", re.I), RiskLevel.HIGH, "terminates processes"),
+    (re.compile(r"\bkill\s+(-[a-z]*9|-[a-z]*KILL|-[a-z]*TERM)", re.I), RiskLevel.HIGH, "terminates processes"),
+    (re.compile(r"\bpkill\b|\bkillall\b", re.I), RiskLevel.HIGH, "terminates processes by name"),
+    (re.compile(r"\btskill\b|\bwmic\b.*\bdelete\b", re.I), RiskLevel.HIGH, "terminates processes"),
+    (re.compile(r"\btaskkill\b.*\s/IM\s", re.I), RiskLevel.CRITICAL, "kills every process with that image name"),
+
     # --- git history rewriting ---------------------------------------------
     (re.compile(r"\bgit\s+reset\s+--hard\b", re.I), RiskLevel.HIGH, "discards uncommitted work"),
     (re.compile(r"\bgit\s+clean\s+-[a-z]*[fd]", re.I), RiskLevel.HIGH, "deletes untracked files"),
@@ -351,6 +370,29 @@ _DANGEROUS_COMMANDS: tuple[tuple[re.Pattern[str], RiskLevel, str], ...] = (
 
 #: Commands that are fine on their own but deserve a note in the audit log.
 _NETWORK_COMMANDS = re.compile(r"\b(curl|wget|Invoke-WebRequest|Invoke-RestMethod|git\s+clone|npm\s+install|pip\s+install)\b", re.I)
+
+
+#: Reasons that are **never** waved through, even in Autonomous mode.
+#:
+#: Autonomous means "finish the task within the scope I granted". It does not mean "kill
+#: my database without telling me". These are the operations whose blast radius reaches
+#: outside the task: they affect processes this product did not start, or the machine as a
+#: whole. Every one of them still asks.
+#:
+#: Without this, `taskkill /F /IM postgres.exe` would be HIGH and Autonomous would still
+#: auto-allow it — the risk level alone was not enough, because the auto-allow rule is
+#: "anything below CRITICAL".
+NEVER_AUTOMATIC_REASONS = frozenset(
+    {
+        "terminates processes",
+        "terminates processes by name",
+        "kills every process with that image name",
+        "modifies the registry",
+        "disk format",
+        "filesystem creation",
+        "disk partitioning",
+    }
+)
 
 
 def classify_command(command: str) -> tuple[RiskLevel, str]:
@@ -483,13 +525,47 @@ class PermissionManager:
 
     # -------------------------------------------------------------- domains --
     def check_domain(self, url_or_host: str) -> PermissionVerdict:
-        """Decide whether the agent may talk to a host."""
-        host = url_or_host
-        if "://" in host:
-            host = host.split("://", 1)[1]
-        host = host.split("/", 1)[0].split("@")[-1].split(":", 1)[0].strip().lower()
+        """Decide whether the agent may talk to a host.
+
+        ## Why this is not a string match any more
+
+        It used to be: strip the scheme, take everything before the first `/`, strip
+        userinfo, take everything before the first `:`, then suffix-match. That let all of
+        the following through, and the first one was **allowlisted by default**:
+
+            http://127.0.0.1:6333/...      localhost was on the default allow-list, so the
+                                           agent could reach the app's own vector store —
+                                           which has no authentication — without asking
+            http://169.254.169.254/...     cloud metadata; not on any list, so it fell to
+                                           CONFIRM rather than DENY
+            http://[::1]:8000/...          `split(":", 1)[0]` yields "[" — the match then
+                                           compares a bracket against domain names
+            http://2130706433/...          decimal form of 127.0.0.1; not recognised
+            http://10.0.0.5/...            private range; not recognised
+
+        The order is now: **normalise the host, decide whether it is an address we refuse
+        outright, and only then consult the lists.** A name that resolves to a loopback or
+        private address is refused whatever the allow-list says, because the allow-list is
+        written in terms of names and the thing that actually gets connected to is an
+        address.
+
+        DNS rebinding is not solved here — the check resolves the name once, and the
+        connection resolves it again. That is a known limit, stated rather than implied.
+        """
+        host = self._normalise_host(url_or_host)
         if not host:
             return _deny("No host could be determined from the request")
+
+        # --- addresses that are never allowed, whatever any list says ---------------
+        address = self._as_ip(host)
+        if address is not None and self._is_local_address(address):
+            return _deny(
+                f"{host} is a local or private address ({address}); the agent does not "
+                "reach the machine it is running on",
+                risk=RiskLevel.HIGH,
+                operation="Contact a host",
+                target=host,
+            )
 
         for blocked in self.policy.blocked_domains:
             if host == blocked or host.endswith("." + blocked):
@@ -501,7 +577,19 @@ class PermissionManager:
                 )
 
         for allowed in self.policy.allowed_domains:
-            if host == allowed or host.endswith("." + allowed):
+            allowed_host = self._normalise_host(allowed)
+            if host == allowed_host or host.endswith("." + allowed_host):
+                # Even an allow-listed name is refused if it points at this machine or the
+                # local network. `localhost` in the default list is what made the vector
+                # store reachable; a name is not a guarantee about where it goes.
+                if self._resolves_to_local(host):
+                    return _deny(
+                        f"{host} is on the allowed list but resolves to a local or private "
+                        "address",
+                        risk=RiskLevel.HIGH,
+                        operation="Contact a host",
+                        target=host,
+                    )
                 return _allow("Host is on the allowed list", operation="Contact a host", target=host)
 
         if self.policy.mode is AgentMode.ASSIST:
@@ -515,6 +603,106 @@ class PermissionManager:
             target=host,
             impact="Only continue if you recognise this domain.",
         )
+
+    @staticmethod
+    def _normalise_host(value: str) -> str:
+        """Lower-case hostname from a URL, a host, or a host:port.
+
+        Handles the three forms the old one-liner got wrong: bracketed IPv6 (`[::1]`),
+        userinfo (`user@host`), and a bare host with no scheme.
+        """
+        text = (value or "").strip()
+        if not text:
+            return ""
+        if "://" in text:
+            text = text.split("://", 1)[1]
+        text = text.split("/", 1)[0].split("?", 1)[0]
+        if "@" in text:
+            text = text.split("@")[-1]
+        if text.startswith("["):
+            # Bracketed IPv6: the host is inside the brackets, the port after them.
+            closing = text.find("]")
+            return text[1:closing].strip().lower() if closing != -1 else text.strip("[]").lower()
+        # No brackets: a colon separates host from port. An unbracketed IPv6 literal is
+        # ambiguous, and refusing to guess is safer than guessing wrong.
+        return text.split(":", 1)[0].strip().lower()
+
+    @staticmethod
+    def _as_ip(host: str) -> ipaddress.IPv4Address | ipaddress.IPv6Address | None:
+        """Parse a host that is written as an address, including the odd forms.
+
+        `2130706433` is 127.0.0.1 and `0x7f.1` is 127.0.0.1 — both are accepted by
+        browsers and by `urllib`, so a check that only understands dotted quads misses
+        them.
+        """
+        try:
+            return ipaddress.ip_address(host)
+        except ValueError:
+            pass
+        # Single decimal integer
+        if host.isdigit():
+            try:
+                return ipaddress.ip_address(int(host))
+            except (ValueError, OverflowError):
+                return None
+        # Dotted forms with hex/octal/decimal parts, e.g. 0x7f.1
+        parts = host.split(".")
+        if 1 < len(parts) <= 4 and all(parts):
+            try:
+                numbers = [int(part, 0) for part in parts]
+            except ValueError:
+                return None
+            if all(0 <= number <= 0xFF for number in numbers[:-1]) and numbers[-1] < 256 ** (5 - len(numbers)):
+                packed = 0
+                for number in numbers:
+                    packed = (packed << 8) | number
+                try:
+                    return ipaddress.ip_address(packed)
+                except ValueError:
+                    return None
+        return None
+
+    @staticmethod
+    def _is_local_address(address: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+        """An address the agent must never reach: this machine, or the local network.
+
+        One predicate, two callers — `check_domain` for a host written as an address, and
+        `_resolves_to_local` for a name that resolves to one. Two copies of this list is
+        how one of them ends up missing `is_link_local`.
+        """
+        return bool(
+            address.is_loopback
+            or address.is_private
+            or address.is_link_local
+            or address.is_reserved
+            or address.is_multicast
+            or address.is_unspecified
+        )
+
+    @classmethod
+    def _resolves_to_local(cls, host: str) -> bool:
+        """Does this name resolve to this machine or the local network?
+
+        A resolution failure returns False — the name is then judged by the list alone,
+        and the connection itself will fail. Returning True on failure would refuse every
+        host whenever DNS is down.
+        """
+        address = cls._as_ip(host)
+        if address is not None:
+            return cls._is_local_address(address)
+        try:
+            infos = socket.getaddrinfo(host, None)
+        except OSError:
+            return False
+        for info in infos:
+            try:
+                resolved = ipaddress.ip_address(info[4][0])
+            except ValueError:
+                continue
+            if cls._is_local_address(resolved):
+                return True
+        return False
+
 
     # ------------------------------------------------------------- commands --
     def check_command(
@@ -555,7 +743,18 @@ class PermissionManager:
         # In autonomous mode the user has already accepted the scope, but a
         # critical command still stops: autonomy is not a licence for the
         # handful of operations that can destroy the machine.
-        if self.policy.mode is AgentMode.AUTONOMOUS and risk.order < RiskLevel.CRITICAL.order:
+        #
+        # Neither does it cover the operations in `NEVER_AUTOMATIC_REASONS` — killing
+        # processes by name, editing the registry, formatting a disk. Those reach outside
+        # the task, so they ask whatever the mode says. The risk level alone was not
+        # enough here: `taskkill` was `low`, and even once it became `high` the rule below
+        # would have waved it through, because `high < critical`.
+        flagged = {part.strip() for part in reason.split(";") if part.strip()}
+        if (
+            self.policy.mode is AgentMode.AUTONOMOUS
+            and risk.order < RiskLevel.CRITICAL.order
+            and not (flagged & NEVER_AUTOMATIC_REASONS)
+        ):
             return _allow(
                 f"Autonomous mode permits this ({reason})",
                 risk=risk,

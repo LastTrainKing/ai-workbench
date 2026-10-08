@@ -75,7 +75,7 @@ class ConfirmationDecision(BaseModel):
 @router.get("/permissions", summary="Effective permission policy")
 async def get_permissions(user: CurrentUser) -> dict[str, Any]:
     """The policy as Settings renders it, with the source of each value."""
-    view = policy_store.describe()
+    view = policy_store.describe(user.id)
     view["modes"] = [
         {
             "value": AgentMode.ASSIST.value,
@@ -116,14 +116,14 @@ async def update_permissions(payload: PermissionUpdate, user: CurrentUser) -> di
             raise ValidationError(f"Unknown permission level {level}")
         patch["level"] = level
 
-    policy_store.save_overrides(patch)
-    return ok(policy_store.describe(), message="Permission policy updated")
+    policy_store.save_overrides(patch, user.id)
+    return ok(policy_store.describe(user.id), message="Permission policy updated")
 
 
 @router.delete("/permissions", summary="Reset the policy to the configured defaults")
 async def reset_permissions(user: CurrentUser) -> dict[str, Any]:
-    policy_store.reset_overrides()
-    return ok(policy_store.describe(), message="Permission policy reset")
+    policy_store.reset_overrides(user.id)
+    return ok(policy_store.describe(user.id), message="Permission policy reset")
 
 
 # --------------------------------------------------------------------------- #
@@ -131,9 +131,9 @@ async def reset_permissions(user: CurrentUser) -> dict[str, Any]:
 # --------------------------------------------------------------------------- #
 @router.get("/capabilities", summary="Capability areas and whether each is available")
 async def list_capabilities(user: CurrentUser) -> dict[str, Any]:
-    policy = policy_store.build_policy()
-    registry = build_computer_registry(policy, enabled=policy_store.capability_flags())
-    enabled_flags = policy_store.capability_flags()
+    policy = policy_store.build_policy(user.id)
+    registry = build_computer_registry(policy, enabled=policy_store.capability_flags(user.id))
+    enabled_flags = policy_store.capability_flags(user.id)
 
     areas = []
     for area in registry.capabilities():
@@ -161,12 +161,12 @@ async def update_capabilities(payload: CapabilityUpdate, user: CurrentUser) -> d
     if unknown:
         raise ValidationError(f"Unknown capability area(s): {', '.join(unknown)}")
 
-    policy_store.save_capability_flags(payload.capabilities)
-    policy = policy_store.build_policy()
-    registry = build_computer_registry(policy, enabled=policy_store.capability_flags())
+    policy_store.save_capability_flags(payload.capabilities, user.id)
+    policy = policy_store.build_policy(user.id)
+    registry = build_computer_registry(policy, enabled=policy_store.capability_flags(user.id))
     return ok(
         {
-            "capabilities": policy_store.capability_flags(),
+            "capabilities": policy_store.capability_flags(user.id),
             "tool_count": len(registry.names()),
         },
         message="Capabilities updated",
@@ -187,8 +187,8 @@ async def list_tools(
     """
     from app.ai.agent.tools import get_tool_registry
 
-    policy = policy_store.build_policy()
-    registry = build_computer_registry(policy, enabled=policy_store.capability_flags())
+    policy = policy_store.build_policy(user.id)
+    registry = build_computer_registry(policy, enabled=policy_store.capability_flags(user.id))
     available_names = set(registry.names())
 
     rows: list[dict[str, Any]] = []
@@ -256,8 +256,8 @@ async def list_tools(
 
 @router.get("/tools/{tool_name}", summary="One tool in full detail")
 async def get_tool(tool_name: str, user: CurrentUser) -> dict[str, Any]:
-    policy = policy_store.build_policy()
-    registry = build_computer_registry(policy, enabled=policy_store.capability_flags())
+    policy = policy_store.build_policy(user.id)
+    registry = build_computer_registry(policy, enabled=policy_store.capability_flags(user.id))
     tool = registry.get(tool_name)
     if tool is None:
         from app.ai.agent.tools import get_tool_registry

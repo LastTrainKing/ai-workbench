@@ -12,7 +12,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # ---------------------------------------------------------------------------
@@ -76,6 +76,11 @@ def runtime_root() -> Path:
     return RUNTIME_ROOT
 
 
+#: The value that ships in `.env.example` and in the repository. A token signed with a key
+#: anyone can read is not signed, so `prod` refuses to start while this is in place.
+DEFAULT_SECRET_KEY = "change-me-in-dotenv-please-32-chars-min"
+
+
 class Settings(BaseSettings):
     """Typed, validated application settings."""
 
@@ -112,13 +117,26 @@ class Settings(BaseSettings):
     #: Always refused, even if a broader allowed path would cover them. Secrets
     #: and system directories live here.
     agent_denied_paths: str = ""
+    #: Hosts the agent may contact without asking.
+    #:
+    #: `localhost` and `127.0.0.1` used to be in this list. They are gone, and they must
+    #: not come back. The app runs its own vector store on `127.0.0.1:6333` with no
+    #: authentication, and the user may be running anything else locally; an allow-list
+    #: entry for the loopback address meant the agent could reach all of it **without a
+    #: confirmation prompt**. `check_domain` also refuses loopback and private addresses
+    #: outright now, whatever any list says, so an entry here would not work anyway.
     agent_allowed_domains: str = (
         "github.com,raw.githubusercontent.com,pypi.org,files.pythonhosted.org,"
         "registry.npmjs.org,npmjs.com,api.deepseek.com,docs.python.org,"
-        "developer.mozilla.org,stackoverflow.com,localhost,127.0.0.1"
+        "developer.mozilla.org,stackoverflow.com"
     )
     #: Hosts the agent may never contact, whatever the allow-list says.
-    agent_blocked_domains: str = ""
+    #:
+    #: Non-empty by default, unlike before: an empty blocklist means the blocklist step
+    #: of `check_domain` never fires, so "always refused" refused nothing.
+    agent_blocked_domains: str = (
+        "localhost,localhost.localdomain,ip6-localhost,metadata.google.internal"
+    )
 
     #: Where the agent's own workspace lives. Empty means the default:
     #: ``<project>/.runtime/workspace``.
@@ -158,7 +176,7 @@ class Settings(BaseSettings):
         return [d.strip().lower() for d in self.agent_blocked_domains.split(",") if d.strip()]
 
     # ------------------------------------------------------------- security --
-    secret_key: str = Field(default="change-me-in-dotenv-please-32-chars-min")
+    secret_key: str = Field(default=DEFAULT_SECRET_KEY)
     access_token_expire_minutes: int = 60 * 24
     cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173"
 
@@ -246,6 +264,48 @@ class Settings(BaseSettings):
         if not v or not v.strip():
             raise ValueError("SECRET_KEY must not be empty")
         return v
+
+    @model_validator(mode="after")
+    def _production_is_not_a_development_default(self) -> Settings:
+        """A shipped build must not run on the development defaults.
+
+        Three things were true out of the box, and all three are fine while building and
+        wrong the moment someone else runs it:
+
+            SECRET_KEY          the placeholder shipped in the repository
+            DEBUG               True
+            /docs, /redoc, /openapi.json    always served
+
+        A JWT signed with a key that is in the repository is not signed. So in `prod` this
+        **refuses to start** rather than warning: a warning on stderr is not read by
+        anyone, and the failure it predicts is silent. `dev` and `test` are unaffected.
+        """
+        if self.app_env != "prod":
+            return self
+
+        problems: list[str] = []
+        if self.secret_key.strip() == DEFAULT_SECRET_KEY:
+            problems.append("SECRET_KEY is still the built-in default")
+        if len(self.secret_key.strip()) < 32:
+            problems.append(f"SECRET_KEY is {len(self.secret_key.strip())} characters; 32 is the minimum")
+        if self.debug:
+            problems.append("DEBUG is on")
+
+        if problems:
+            raise ValueError(
+                "refusing to start with APP_ENV=prod: " + "; ".join(problems)
+                + ". Set them in the environment or in .env."
+            )
+        return self
+
+    @property
+    def api_docs_enabled(self) -> bool:
+        """`/docs`, `/redoc` and `/openapi.json` describe every route and every schema.
+
+        Useful while building, a map of the attack surface in a shipped build. Off in
+        `prod`; on everywhere else.
+        """
+        return self.app_env != "prod"
 
     # ------------------------------------------------------------ helpers ---
     @property

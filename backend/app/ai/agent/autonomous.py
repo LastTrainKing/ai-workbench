@@ -485,21 +485,68 @@ class AutonomousAgent:
         A failure here must not stop the run: personalisation is an enhancement,
         and an enhancement that can break the core task is a liability.
         """
+        parts: list[str] = []
         try:
             from app.ai.memory import ContextAssembler
 
             assembler = ContextAssembler(self.session, user_id=self.owner_id)
             assembled = await assembler.assemble(goal=goal)
-            if assembled.is_empty:
-                return ""
-            await assembler.persist(assembled, run_id=self.controller.run_id, purpose=purpose)
-            return assembled.render()
+            if not assembled.is_empty:
+                await assembler.persist(assembled, run_id=self.controller.run_id, purpose=purpose)
+                parts.append(assembled.render())
         except Exception as exc:
             logger.warning(
                 "personal_context_failed",
                 extra={"purpose": purpose, "error": f"{type(exc).__name__}: {exc}"},
             )
-            return ""
+
+        parts.extend(await self._skill_context(goal))
+        return "\n\n".join(part for part in parts if part.strip())
+
+    async def _skill_context(self, goal: str) -> list[str]:
+        """The user's own method for this job, as text.
+
+        **The autonomous chain never consulted skills at all.** `find_matching_skills` was
+        called from exactly one place — the conversation ladder (`ai/rag/tiers.py`) — so a
+        run started from a goal had no idea the user had a way of doing it. The product's
+        central claim ("carries your way of working into the job") was true for chatting
+        and false for the runs that actually do the work.
+
+        Injected into both the planner and the executor, because `_personal_context` is
+        called from both: the plan should be shaped by the method, not patched to fit it
+        afterwards.
+        """
+        if not goal.strip():
+            return []
+        try:
+            from app.ai.skills.registry import find_matching_skills
+
+            matches = await find_matching_skills(
+                self.session, user_id=self.owner_id, question=goal, limit=3
+            )
+        except Exception as exc:
+            # Visible, not silent: a skill lookup that fails changes the output of the run
+            # and the user deserves to be able to find out why.
+            logger.warning(
+                "skill_lookup_failed",
+                extra={"run_id": self.controller.run_id, "error": f"{type(exc).__name__}: {exc}"},
+            )
+            return []
+
+        blocks: list[str] = []
+        for match in matches:
+            body = (match.body or "").strip()
+            if not body:
+                # A skill row with no body cannot be handed to the model — a header with
+                # nothing under it is exactly the bug this method was written to fix.
+                logger.warning(
+                    "skill_matched_without_body",
+                    extra={"run_id": self.controller.run_id, "skill_id": match.id,
+                           "skill_name": match.name},
+                )
+                continue
+            blocks.append(f"【他的做法：{match.name}】\n{body}")
+        return blocks
 
     def _permissions(self) -> Any:
         from app.ai.tools.permissions import PermissionManager

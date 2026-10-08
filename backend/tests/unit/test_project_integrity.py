@@ -166,6 +166,12 @@ _ALLOW_MARKERS = ("allowlist secret", "secret-scan: allow", "pragma: allowlist")
 _SYNTHETIC_HINTS = (
     "xxx", "your", "example", "dummy", "fake", "placeholder", "sample",
     "0000000000", "1234567890", "0123456789abcdef", "aaaaaaaa",
+    # "change this before you ship" defaults. `DEFAULT_SECRET_KEY` in
+    # `app/core/config.py` is one of these, and it is the opposite of a credential: it is
+    # the value that exists so a reviewer can see it was never replaced. `prod` now
+    # refuses to start while it is in place, which is the real guard; this keeps the
+    # scanner from reporting the placeholder itself.
+    "change-me", "change_me", "changeme", "replace-me", "replace_me",
 )
 
 

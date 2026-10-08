@@ -29,6 +29,7 @@ import json
 import os
 import shutil
 import socket
+import sys
 import subprocess
 import tempfile
 import time
@@ -38,10 +39,28 @@ import winreg
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "scripts"))
+from _test_data_guard import (  # noqa: E402
+    REAL_DATA_DIR,
+    TEST_DATA_DIR,
+    point_install_at_test_data,
+    safe_rmtree,
+)
+
 SETUP = ROOT / "build" / "installer" / "AI-Workbench-Setup.exe"
 INSTALL_DIR = Path(os.environ["LOCALAPPDATA"]) / "AI Workbench InstallTest"
 EXE_NAME = "AI Workbench.exe"
-DATA_ASIDE = Path(os.environ["LOCALAPPDATA"]) / "AI Workbench Data"
+
+#: The acceptance test needs a *fresh* data directory to prove that a first run
+#: initialises the cluster. It used to use the real one:
+#:
+#:     DATA_ASIDE = %LOCALAPPDATA%\AI Workbench Data      <-- the user's actual data
+#:
+#: and `shutil.rmtree` it before every run, so running the acceptance destroyed the
+#: user's database, memories, knowledge base and deliverables. That happened for real in
+#: round 14 (50 MB). It is now a separate directory, and `safe_rmtree` refuses to touch
+#: anything that overlaps the real one.
+DATA_ASIDE = TEST_DATA_DIR
 PROJECT = Path(r"C:\Users\user\Desktop\ai-workbench")
 PROJECT_ASIDE = Path(r"C:\Users\user\Desktop\ai-workbench-MOVED-FOR-INSTALL-TEST")
 SHORTCUTS = [
@@ -146,8 +165,9 @@ def main() -> int:
         kill_shells()
         time.sleep(2)
         for path in (INSTALL_DIR, DATA_ASIDE):
-            if path.exists():
-                shutil.rmtree(path, ignore_errors=True)
+            # `safe_rmtree` raises SystemExit(3) if the path overlaps the user's real
+            # data directory. There is no flag to skip it.
+            safe_rmtree(path, who="verify_installer.py step 1 (clean slate)")
         check("1", "target path does not exist beforehand", not INSTALL_DIR.exists(), str(INSTALL_DIR))
 
         install = subprocess.run(
@@ -166,6 +186,17 @@ def main() -> int:
                 break
             time.sleep(2)
         check("1", "installer exited 0", install.returncode == 0, f"exit {install.returncode}")
+        # The installer hard-codes the data directory to the user's real one, regardless
+        # of `/D=`. Rewrite this copy's marker so the whole stack (launcher + backend)
+        # uses the test directory instead — otherwise the "clean slate" above would be
+        # pointless and every launch would touch real data.
+        test_runtime = point_install_at_test_data(INSTALL_DIR)
+        check(
+            "1",
+            "test install redirected to its own data directory",
+            str(test_runtime).lower().startswith(str(TEST_DATA_DIR).lower()),
+            str(test_runtime),
+        )
         check("1", "launcher present in the install dir", (INSTALL_DIR / EXE_NAME).is_file())
         for part in ("backend", "frontend", "scripts", "vendor", "worker"):
             check("1", f"{part}/ extracted", (INSTALL_DIR / part).is_dir())

@@ -38,6 +38,7 @@ Unicode true
 !include "MUI2.nsh"
 !include "FileFunc.nsh"
 !include "LogicLib.nsh"
+!include "TextFunc.nsh"
 
 ; ------------------------------------------------------------------- config --
 !define APP_NAME        "AI Workbench"
@@ -122,24 +123,50 @@ VIAddVersionKey "FileVersion"     "${APP_VERSION}"
 !macro StopEverything
   ; Stop the stack the way the product does, then make sure nothing survived.
   ;
-  ; Two steps on purpose: `stop.bat` is the graceful path (it stops PostgreSQL
-  ; with a checkpoint rather than a kill), and `taskkill` is the guarantee. An
-  ; uninstaller that only does the graceful half leaves locked files behind when
-  ; the graceful half fails, and the user sees "cannot delete".
-  IfFileExists "$INSTDIR\scripts\stop.bat" 0 +3
+  ; Two steps on purpose: `stop.bat` is the graceful path (it stops PostgreSQL with a
+  ; checkpoint rather than a kill), and a PID sweep is the guarantee.
+  ;
+  ; **The guarantee used to be `taskkill /F /IM`.** That matches on the image name, so
+  ; installing or uninstalling this application force-killed the user's own
+  ; `postgres.exe`, `redis-server.exe` and `qdrant.exe` — a real loss for anyone who runs
+  ; their own database. `scripts/stop.bat` states in its header that it deliberately has
+  ; no `/IM` rule for exactly that reason; the installer had four.
+  ;
+  ; `stop-by-pid.ps1` is the scoped replacement. Every process this product starts is
+  ; recorded in `<data>\.runtime\pids\<name>.pid`, PostgreSQL writes `postmaster.pid`,
+  ; and the script additionally refuses any pid whose executable does not live under the
+  ; product's own directory — so a stale pid file cannot take out an unrelated process
+  ; that inherited the number.
+  IfFileExists "$INSTDIR\scripts\stop.bat" 0 stop_bat_done
     nsExec::ExecToLog '"$INSTDIR\scripts\stop.bat"'
     Pop $0
+  stop_bat_done:
   Sleep 3000
+
+  ; Our own binary by name is fine — the name belongs to this product and to nothing
+  ; else. It is the three third-party names (`postgres.exe`, `redis-server.exe`,
+  ; `qdrant.exe`) that were the problem, and they are gone.
   nsExec::ExecToLog 'taskkill /F /IM "${APP_EXE}" /T'
   Pop $0
-  nsExec::ExecToLog 'taskkill /F /IM "postgres.exe" /T'
-  Pop $0
-  nsExec::ExecToLog 'taskkill /F /IM "redis-server.exe" /T'
-  Pop $0
-  nsExec::ExecToLog 'taskkill /F /IM "qdrant.exe" /T'
-  Pop $0
+
+  IfFileExists "$INSTDIR\scripts\stop-by-pid.ps1" 0 stop_pid_done
+    ; The runtime root comes from the marker the installer wrote, so a custom data
+    ; directory is swept too.
+    ReadEnvStr $0 "LOCALAPPDATA"
+    StrCpy $1 "$0\${DATA_DIR_NAME}\.runtime"
+    IfFileExists "$INSTDIR\data-dir.txt" 0 stop_pid_sweep
+      FileOpen $2 "$INSTDIR\data-dir.txt" r
+      FileRead $2 $1
+      FileClose $2
+      ; Trailing newline from FileRead.
+      ${TrimNewLines} $1 $1
+    stop_pid_sweep:
+    nsExec::ExecToLog 'powershell -NoProfile -ExecutionPolicy Bypass -File "$INSTDIR\scripts\stop-by-pid.ps1" -RuntimeRoot "$1"'
+    Pop $0
+  stop_pid_done:
   Sleep 2000
 !macroend
+
 
 ; ------------------------------------------------------- install verification --
 ;

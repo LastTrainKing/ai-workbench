@@ -50,14 +50,16 @@ def _build_agent(
     deliverable_kind: str = "",
 ) -> AutonomousAgent:
     """Assemble an autonomous agent for one run."""
-    policy = build_policy()
+    # Scoped to the owner. A shared policy file meant one account's permission level
+    # applied to every account on the machine.
+    policy = build_policy(owner_id)
     # The workspace is created with its layout, not just as an empty directory:
     # the shape is part of the contract, so a run never has to invent a place to
     # put things and never has to wonder where a previous run put them.
     ensure_workspace_layout(policy.workspace)
 
     business = __import__("app.ai.agent.tools", fromlist=["get_tool_registry"]).get_tool_registry()
-    computer = build_computer_registry(policy, enabled=capability_flags())
+    computer = build_computer_registry(policy, enabled=capability_flags(owner_id))
     limits = ResourceLimits(
         max_output_bytes=policy.max_output_bytes,
         max_files_modified=policy.max_files_modified,
@@ -218,7 +220,7 @@ async def start_run(
     deliverable_kind: str = "",
 ) -> dict[str, Any]:
     """Register the run, create the recorder, and launch the background task."""
-    policy = build_policy()
+    policy = build_policy(owner_id)
 
     # The real provider and model, not the permission mode.
     #

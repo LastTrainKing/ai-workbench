@@ -36,9 +36,21 @@ import urllib.request
 from pathlib import Path
 
 LOCALAPPDATA = Path(os.environ["LOCALAPPDATA"])
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _test_data_guard import (  # noqa: E402
+    TEST_DATA_DIR,
+    point_install_at_test_data,
+    safe_rmtree,
+)
+
 SETUP = Path(__file__).resolve().parent.parent / "build" / "installer" / "AI-Workbench-Setup.exe"
 INSTALL_DIR = LOCALAPPDATA / "AI Workbench InstallTest"
-DATA_DIR = LOCALAPPDATA / "AI Workbench Data"
+
+#: The cold-start measurement needs a data directory it may wipe. It used to wipe the
+#: user's real one — `%LOCALAPPDATA%\AI Workbench Data`, the same directory the installed
+#: app uses — which destroyed 50 MB of real data in round 14. It is now a separate
+#: directory, and `safe_rmtree` refuses anything that overlaps the real one.
+DATA_DIR = TEST_DATA_DIR
 STARTUP_LOG = DATA_DIR / ".runtime" / "logs" / "startup.log"
 HEALTH = "http://127.0.0.1:8000/api/v1/health"
 
@@ -66,8 +78,7 @@ def read_log() -> str:
 
 
 def install() -> None:
-    if INSTALL_DIR.exists():
-        shutil.rmtree(INSTALL_DIR, ignore_errors=True)
+    safe_rmtree(INSTALL_DIR, who="measure_startup.py install (clean slate)")
     print("  installing...", flush=True)
     subprocess.run(
         f'"{SETUP}" /S /D={INSTALL_DIR}',
@@ -77,13 +88,17 @@ def install() -> None:
     )
     if not (INSTALL_DIR / "AI Workbench.exe").is_file():
         raise SystemExit("install failed")
+    # Point this copy at the test data directory. The installer hard-codes the real one,
+    # so without this the measurement would wipe and measure the user's actual data.
+    point_install_at_test_data(INSTALL_DIR)
 
 
 def launch_and_time(label: str, *, wipe_data: bool) -> list[str]:
     """Launch, wait for the API, then return this run's log lines."""
     if wipe_data:
-        print(f"  [{label}] wiping the data directory (this is what makes it a cold start)")
-        shutil.rmtree(DATA_DIR, ignore_errors=True)
+        print(f"  [{label}] wiping the test data directory (this is what makes it a cold start)")
+        print(f"  [{label}] it is {DATA_DIR} — never the user's real data directory")
+        safe_rmtree(DATA_DIR, who="measure_startup.py cold start (wipe test data)")
 
     before = len(read_log())
     started = time.perf_counter()

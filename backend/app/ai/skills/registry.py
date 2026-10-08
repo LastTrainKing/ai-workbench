@@ -47,13 +47,31 @@ SKILL_LAYER_BUILT = True
 
 @dataclass
 class SkillMatch:
-    """One skill that bears on a question."""
+    """One skill that bears on a question.
+
+    `body` carries the **rendered** skill text — the thing the agent actually works from.
+
+    It used to be missing, and the consequence was the whole product claim:
+
+        registry.py stored it    row.rendered_body = rendered
+        SkillMatch did not have it
+        tiers.py passed three keys   {"id", "name", "score"}
+        conversation_service read    skill.get("summary", "")   -> always ""
+
+    so the model was told 「【他的做法：PPT制作Skill】」 and then given **no body at all**.
+    "Carries your way of working into the job" was an empty sentence. Found by reading the
+    four sites end to end; there is now a test that asserts the body arrives
+    (`tests/unit/test_skill_body_reaches_context.py`).
+    """
 
     id: str
     name: str
     score: float = 0.0
     when_to_use: str = ""
     skill_type: str = "document"
+    #: Rendered body. Unfilled `{{param}}` slots are kept as-is, never blanked — that is
+    #: the existing design and it is what makes an unfilled slot visible to the model.
+    body: str = ""
 
 
 # ------------------------------------------------------------------------ matching --
@@ -117,6 +135,11 @@ async def find_matching_skills(
             score=round(score, 2),
             when_to_use=row.when_to_use,
             skill_type=row.skill_type,
+            # The rendered body, falling back to the template if a row predates the
+            # `rendered_body` column. Never empty-by-accident: a skill whose body cannot
+            # be found is worse than no skill, because the prompt then claims a method
+            # and supplies nothing.
+            body=row.rendered_body or row.body or "",
         )
         for score, row in scored[:limit]
     ]

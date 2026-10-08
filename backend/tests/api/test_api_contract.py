@@ -42,7 +42,29 @@ async def test_request_id_is_echoed_back(client: httpx.AsyncClient) -> None:
 
 @pytest.mark.asyncio
 async def test_metrics_endpoint(client: httpx.AsyncClient) -> None:
-    data = (await client.get("/metrics")).json()["data"]
+    """`/metrics` reports how much the caller has. It requires a caller.
+
+    It used to answer anyone who could reach the port, with no token. The counts are not
+    secret, but they are the user's: how many documents, how much they have been using it.
+    Round 15 put it behind the same door as everything else, so this asserts both halves —
+    anonymous is refused, and an authenticated caller still gets the numbers.
+    """
+    anonymous = await client.get("/metrics")
+    assert anonymous.status_code in (401, 403), anonymous.status_code
+
+    registered = await client.post(
+        "/auth/register",
+        json={
+            "email": f"metrics_{uuid.uuid4().hex[:8]}@aiworkbench.dev",
+            "username": f"metrics_{uuid.uuid4().hex[:8]}",
+            "password": "test1234",
+            "display_name": "Metrics",
+        },
+    )
+    assert registered.status_code == 201
+    token = registered.json()["data"]["access_token"]
+
+    data = (await client.get("/metrics", headers={"Authorization": f"Bearer {token}"})).json()["data"]
     assert data["enabled"] is True
     assert "ai_24h" in data
     assert "cache" in data

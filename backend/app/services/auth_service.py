@@ -104,8 +104,24 @@ class AuthService:
         await self.session.flush()
         return user
 
-    async def ensure_demo_user(self) -> User:
-        """Create the default local account on first boot (single-user friendly)."""
+    async def ensure_demo_user(self) -> User | None:
+        """Create the default local account on first boot — **development only**.
+
+        This account is `demo` / `demo1234`, and the password is printed on the sign-in
+        screen. That is convenient while building and unacceptable in a shipped build,
+        because this application reads and writes the user's files, runs commands,
+        reaches the network, and holds their memory and knowledge base. A known
+        credential on a machine with those powers is a back door with a sign on it.
+
+        Refuses outside `dev`. `main.py` also checks before calling, so this is the
+        second of two gates rather than the only one.
+        """
+        from app.core.config import settings
+
+        if settings.app_env != "dev":
+            logger.info("demo_user_skipped", extra={"app_env": settings.app_env})
+            return None
+
         existing = await self.users.by_username("demo")
         if existing:
             return existing

@@ -295,7 +295,12 @@ async def _try_skill(
             f"匹配 {len(matches)} 个：{names}",
             f"用了 Skill「{names}」",
         ),
-        [{"id": m.id, "name": m.name, "score": m.score} for m in matches],
+        # `body` must travel with the match. Passing only id/name/score is how the
+        # agent ended up being told 「【他的做法：X】」 with nothing after it.
+        [
+            {"id": m.id, "name": m.name, "score": m.score, "body": m.body}
+            for m in matches
+        ],
     )
 
 
