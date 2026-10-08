@@ -1,11 +1,11 @@
 /**
- * Browser test for the conversation screen — the new home.
+ * Browser test for the conversation screen — the only screen most people need.
  *
- * The acceptance this exists for, in the user's own words: a person who has never
- * seen the product should be able to say, unprompted, where they are supposed to
- * type. That is not a thing typecheck or build can tell you, and it is not a thing
- * that can be asserted from the DOM being merely *present* — a card of inputs in the
- * middle of a dashboard is present too. So the checks are positional and verbal:
+ * The acceptance this exists for, in the user's own words: a person who has never seen the
+ * product should be able to say, unprompted, where they are supposed to type. That is not
+ * something typecheck or build can tell you, and it is not something that can be asserted
+ * from the DOM being merely *present* — a card of inputs in the middle of a dashboard is
+ * present too. So the checks are positional and verbal:
  *
  *   * the input is in the lower part of the viewport, on arrival, without scrolling
  *   * the page says what to do in it
@@ -13,11 +13,16 @@
  *   * the machinery is folded, and still there when unfolded
  *   * nothing on the screen is a status code or an engine-room word
  *
+ * It gets to a running build the way a person does — through the conversation, answering
+ * if it asks (`_conversation.mjs`). Whether it asks is a real model's decision, and the
+ * test accepts either answer rather than assuming one.
+ *
  *   node scripts/verify-conversation-ui.mjs
  */
 
 import { chromium } from './_playwright.mjs'
-import { mkdirSync } from 'node:fs'
+import { startThroughConversation } from './_conversation.mjs'
+import { copyFileSync, existsSync, mkdirSync, statSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -56,7 +61,7 @@ async function main() {
 
     // ------------------------------------------------------- where do I type --
     await page.goto(`${BASE}/`, { waitUntil: 'networkidle' })
-    await page.waitForTimeout(2500)
+    await page.waitForTimeout(2000)
 
     const input = page.locator('[data-testid="goal-input"]')
     check('首页有一个输入框', (await input.count()) === 1, `${await input.count()} 个`)
@@ -79,26 +84,61 @@ async function main() {
     const sendLabel = await page.locator('[data-testid="start-build"]').innerText()
     check('有一个明确的发送按钮', /发送|配置/.test(sendLabel), sendLabel)
 
+    // -------------------------------------------------- the sidebar is a list --
+    const rail = await page.locator('aside').first().innerText()
+    check('侧栏是会话列表，不是菜单树', /新对话/.test(rail), rail.replace(/\n/g, ' | ').slice(0, 70))
+    check('侧栏不列出工作台/执行记录', !/工作台|执行记录/.test(rail))
+    await page.screenshot({ path: join(SHOTS, '80-conversation.png'), fullPage: true })
+
+    // ------------------------------------------------- get to a running build --
+    const { conversationId, runId } = await startThroughConversation(
+      page,
+      BASE,
+      '用我的资料做一份 15 分钟的答辩 PPT，只要目录，每个阶段带两三个例子，给我自己看',
+    )
+    check('说一句话之后真的开工了', Boolean(runId), `conversation=${conversationId} run=${runId}`)
+    await page.goto(`${BASE}/c/${conversationId}`, { waitUntil: 'networkidle' })
+    await page.waitForTimeout(2000)
+
     // ------------------------------------------------------------- timeline ---
     const turns = await page.locator('[data-testid="conversation-turn"]').count()
     check('时间线上有对话轮次', turns > 0, `${turns} 轮`)
 
-    if (turns > 0) {
-      const body = await page.locator('body').innerText()
-      check('页面不含状态码与工程术语', !JARGON.test(body), (body.match(JARGON) ?? []).join(','))
+    const body = await page.locator('body').innerText()
+    check('页面不含状态码与工程术语', !JARGON.test(body), (body.match(JARGON) ?? []).join(','))
+    check('它说的话在同一条时间线上', /答辩 PPT/.test(body))
 
-      const status = await page.locator('[data-testid="turn-status"]').first().innerText()
-      check('状态是一句话，不是一个码', !JARGON.test(status) && status.length > 2, status.slice(0, 40))
+    const status = await page.locator('[data-testid="turn-status"]').first().innerText()
+    check('状态是一句话，不是一个码', !JARGON.test(status) && status.length > 2, status.slice(0, 40))
 
-      // 产出物长在对话里 —— same turn, not another page.
+    // ------------------------------------- a file shows up inside the turn ----
+    if (runId) {
+      const dir = [process.cwd(), '.runtime', 'workspace', 'deliverables'].join('/')
+      const target = `${dir}/conversation-check.pptx`
+      mkdirSync(dir, { recursive: true })
+      // A **real** pptx: `record_deliverable` reads the file back before registering it,
+      // so a text file with a .pptx name is correctly refused and would prove nothing.
+      copyFileSync(join(HERE, 'fixtures', 'ui-check.pptx'), target)
+      check('演示文件是真实的 pptx', existsSync(target), `${statSync(target).size} B`)
+
+      const token = await page.evaluate(() => localStorage.getItem('aiw.token'))
+      const attached = await page.request.post(`${BASE}/api/v1/build-runs/${runId}/deliverables`, {
+        headers: { Authorization: `Bearer ${token}` },
+        data: { path: target, kind: 'pptx', title: '答辩PPT v1' },
+      })
+      check('登记产出物成功', attached.status() === 201, `HTTP ${attached.status()}`)
+
+      await page.reload({ waitUntil: 'networkidle' })
+      await page.waitForTimeout(2500)
+
       const inlineCards = await page
         .locator('[data-testid="conversation-turn"] [data-testid="deliverable-card"]')
         .count()
       check('产出物长在对话里（不是另一个页面）', inlineCards > 0, `${inlineCards} 张`)
 
-      // 接受 / 退回 must stay reachable in the conversation: this is the loop the
-      // product exists for, and hiding it behind a click would be the one change
-      // that made this redesign a regression.
+      // 接受 / 退回 must stay reachable in the conversation: this is the loop the product
+      // exists for, and hiding it behind a click would be the one change that made this
+      // redesign a regression.
       const hasAccept = await page.locator('[data-testid="accept-deliverable"]').count()
       const hasReject = await page.locator('[data-testid="start-reject"]').count()
       const alreadyDecided = await page.locator('text=你已验收').count()
@@ -107,45 +147,33 @@ async function main() {
         hasAccept > 0 || hasReject > 0 || alreadyDecided > 0,
         `接受 ${hasAccept} · 退回 ${hasReject} · 已决定 ${alreadyDecided}`,
       )
-
-      // 详情折叠
-      const fold = page.locator('details:has([data-testid="run-details"])').first()
-      check('有「详情」折叠区', (await fold.count()) > 0)
-      const openNow = await fold.evaluate((el) => el.hasAttribute('open')).catch(() => null)
-      check('详情默认收起（已结束的轮次）', openNow === false, `open=${openNow}`)
-
-      // innerText on a collapsed <details> still returns the content — it is in the
-      // DOM, just not laid out. Assert on what Playwright says is visible.
-      const planVisibleBefore = await page.locator('text=执行计划').first().isVisible().catch(() => false)
-      check('收起时看不到「执行计划」', planVisibleBefore === false)
-
-      await page.screenshot({ path: join(SHOTS, '80-conversation.png'), fullPage: true })
-
-      await page.locator('[data-testid="run-details"]').first().click()
-      await page.waitForTimeout(900)
-      check('展开后「执行计划」在', await page.locator('text=执行计划').first().isVisible().catch(() => false))
-      check('展开后「实时执行」在', await page.locator('text=实时执行').first().isVisible().catch(() => false))
-      check('展开后「本次上下文」在', await page.locator('text=本次上下文').first().isVisible().catch(() => false))
-      await page.screenshot({ path: join(SHOTS, '81-conversation-details.png'), fullPage: true })
+      await page.screenshot({ path: join(SHOTS, '81-conversation-deliverable.png'), fullPage: true })
+    } else {
+      check('产出物长在对话里（不是另一个页面）', false, '没有拿到 runId')
+      check('验收与退回就在对话里', false, '没有拿到 runId')
     }
 
-    // -------------------------------------------------------------- sidebar ---
-    const nav = await page.locator('nav').first().innerText()
-    check('主菜单是四项（对话 / 我的 / 资料 / 设置）',
-      /对话/.test(nav) && /我的/.test(nav) && /资料/.test(nav) && /设置/.test(nav),
-      nav.replace(/\n/g, ' | ').slice(0, 80),
-    )
-    check('「高级」默认折叠（执行记录不可见）', !/执行记录/.test(nav))
-
-    const advanced = page.getByRole('button', { name: /高级/ })
-    if ((await advanced.count()) > 0) {
-      await advanced.click()
-      await page.waitForTimeout(700)
-      const expanded = await page.locator('nav').first().innerText()
-      check('展开「高级」后旧入口都在', /执行记录/.test(expanded) && /权限/.test(expanded) && /工作台/.test(expanded))
-      await page.screenshot({ path: join(SHOTS, '82-conversation-advanced.png') })
+    // ------------------------------------------------------------ 详情折叠 ----
+    const fold = page.locator('details:has([data-testid="run-details"])').first()
+    check('有「详情」折叠区', (await fold.count()) > 0)
+    if ((await fold.count()) > 0) {
+      const open = await fold.evaluate((el) => el.hasAttribute('open')).catch(() => null)
+      // A run that is executing opens by default on purpose — that is the moment somebody
+      // is watching. `verify-workbench-layout.mjs` covers the settled-run case.
+      if (!open) {
+        await page.locator('[data-testid="run-details"]').first().click()
+        await page.waitForTimeout(800)
+      }
+      // innerText on a collapsed <details> still returns the content — it is in the DOM,
+      // just not laid out. Assert on what Playwright says is visible.
+      check('「详情」里有执行计划', await page.locator('[data-testid="panel-plan"]').first().isVisible().catch(() => false))
+      check('「详情」里有实时执行', await page.locator('[data-testid="panel-execution"]').first().isVisible().catch(() => false))
+      check('「详情」里有本次上下文', await page.locator('[data-testid="panel-context"]').first().isVisible().catch(() => false))
+      await page.screenshot({ path: join(SHOTS, '82-conversation-details.png'), fullPage: true })
     } else {
-      check('展开「高级」后旧入口都在', false, '未找到「高级」标题')
+      check('「详情」里有执行计划', false, '没有找到详情折叠')
+      check('「详情」里有实时执行', false, '没有找到详情折叠')
+      check('「详情」里有本次上下文', false, '没有找到详情折叠')
     }
 
     // ----------------------------------------------------------- old routes ---
@@ -161,7 +189,11 @@ async function main() {
       if (response && response.status() === 200) reachable += 1
       else missing.push(`${route}(${response?.status()})`)
     }
-    check(`全部 ${routes.length} 条旧路由仍可达`, reachable === routes.length, missing.join(',') || `${reachable}/${routes.length}`)
+    check(
+      `全部 ${routes.length} 条旧路由仍可达`,
+      reachable === routes.length,
+      missing.join(',') || `${reachable}/${routes.length}`,
+    )
 
     // ------------------------------------------------------ the old home too ---
     await page.goto(`${BASE}/home`, { waitUntil: 'networkidle' })

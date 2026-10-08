@@ -13,6 +13,7 @@
  */
 
 import { chromium } from './_playwright.mjs'
+import { startThroughConversation } from './_conversation.mjs'
 import { copyFileSync, existsSync, mkdirSync, statSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -77,47 +78,60 @@ async function main() {
     await page.screenshot({ path: join(SHOTS, '60-home.png'), fullPage: true })
 
     // -------------------------------------------------------- create a run --
-    // Submitted from the conversation, because that is where a person does it now.
+    // Submitted from the conversation, because that is where a person does it now. The
+    // understanding layer may answer, may ask, or may start — the helper answers if it
+    // asks, which is the supported "stop asking, get on with it" path rather than a way
+    // of forcing the test past the feature.
     await page.goto(`${BASE}/`, { waitUntil: 'networkidle' })
     await page.waitForTimeout(1500)
     const goalInput = page.locator('[data-testid="goal-input"]')
     check('目标输入框存在', (await goalInput.count()) > 0)
 
-    const goalText = `用我的资料做一份 15 分钟的答辩 PPT（${Date.now()}）`
-    await goalInput.fill(goalText)
-    // The format chips are behind 「选项」 on the conversation screen — one click,
-    // not a removal.
+    // The format chips are behind 「选项」 — one click, not a removal.
     await page.locator('[data-testid="toggle-options"]').click()
     await page.waitForTimeout(300)
-    await page.locator('[data-testid="format-pptx"]').click()
+    check('产出格式仍可选（在「选项」里）', (await page.locator('[data-testid="format-pptx"]').count()) > 0)
+    await page.locator('[data-testid="toggle-options"]').click()
+    await page.waitForTimeout(200)
+
+    const goalText = `用我的资料做一份 15 分钟的答辩 PPT（${Date.now()}）`
     const before = calls.length
-    await page.locator('[data-testid="start-build"]').click()
-    // Wait for the execute call rather than a fixed sleep. A timer that is long
-    // enough on an idle machine is short enough on a loaded one, and this check
-    // flaked exactly that way at 4000ms before being made deterministic.
-    await page
-      .waitForRequest((r) => /\/api\/v1\/build-runs\/[^/]+\/execute$/.test(r.url()), { timeout: 20000 })
-      .catch(() => null)
-    await page.waitForTimeout(1500)
+    const { conversationId, runId: runIdForStatus, asked } = await startThroughConversation(
+      page,
+      BASE,
+      goalText,
+    )
+    check('说一句话之后真的开工了', Boolean(runIdForStatus), `run=${runIdForStatus} 先问过=${asked}`)
 
-    const posted = calls.slice(before).some((c) => c === 'POST /build-runs')
-    check('点击「发送」真的创建了 BuildRun', posted, calls.slice(before).slice(0, 3).join(' | '))
-
-    // It stays on the conversation. Navigating away to a detail page is what the
-    // old screen did, and the whole point of this one is that the work shows up
-    // where you asked for it.
-    check('提交后留在对话页（产出会出现在这条对话里）', new URL(page.url()).pathname === '/', page.url())
-
-    // create + execute, in that order. Asserting on `POST /build-runs` alone passed
-    // while the product was broken — the run was created and then never started, which
-    // is exactly what the user reported. The execute call is the claim that matters.
-    const seq = calls.slice(before)
-    const createAt = seq.indexOf('POST /build-runs')
-    const executeAt = seq.findIndex((c) => /^POST \/build-runs\/[^/]+\/execute$/.test(c))
+    // It stays inside a conversation. Navigating away to a detail page is what the old
+    // screen did, and the whole point of this one is that the work shows up where you
+    // asked for it.
     check(
-      '提交后紧接着调了 execute（创建 ≠ 开始）',
-      createAt !== -1 && executeAt !== -1 && executeAt > createAt,
-      seq.slice(0, 4).join(' | '),
+      '提交后留在对话里（产出会出现在这条对话里）',
+      new URL(page.url()).pathname.startsWith('/c/'),
+      page.url(),
+    )
+
+    // Create and start are **one action**, and since this round they are one request too:
+    // the conversation endpoint creates the run and starts it server-side, through the
+    // single implementation of "start a run". So the client must *not* be making two calls
+    // — that split is what let the frontend call one of them and leave a run in DRAFT
+    // while the screen looked like work in progress.
+    //
+    // The old shape of this check ("POST /build-runs then POST .../execute") is gone on
+    // purpose rather than deleted quietly: one user action producing two client requests
+    // was the bug, not the requirement.
+    const seq = calls.slice(before)
+    check(
+      '开工只发了发消息这一个请求（创建与开始是同一个动作）',
+      seq.some((c) => /^POST \/conversations\/[^/]+\/messages$/.test(c)),
+      seq.slice(0, 6).join(' | '),
+    )
+    check(
+      '客户端没有再分两步去 create / execute',
+      !seq.some((c) => c === 'POST /build-runs') &&
+        !seq.some((c) => /^POST \/build-runs\/[^/]+\/execute$/.test(c)),
+      seq.filter((c) => c.startsWith('POST /build-runs')).join(' | ') || '(没有)',
     )
 
     // The real failure the user hit: the row stays DRAFT. Read it back from the API
@@ -126,10 +140,6 @@ async function main() {
       data: { identifier: 'demo', password: 'demo1234' },
     })
     const tokenEarly = (await loginEarly.json())?.data?.access_token
-    const newest = await page.request.get(`${BASE}/api/v1/build-runs?limit=1`, {
-      headers: { Authorization: `Bearer ${tokenEarly}` },
-    })
-    const runIdForStatus = (await newest.json())?.data?.build_runs?.[0]?.id
     const statusResponse = await page.request.get(`${BASE}/api/v1/build-runs/${runIdForStatus}`, {
       headers: { Authorization: `Bearer ${tokenEarly}` },
     })
@@ -147,10 +157,10 @@ async function main() {
     )
 
     // The turn is in the conversation, with its goal, without going anywhere.
-    await page.reload({ waitUntil: 'networkidle' })
+    await page.goto(`${BASE}/c/${conversationId}`, { waitUntil: 'networkidle' })
     await page.waitForTimeout(2500)
     const conversationAfter = await page.locator('body').innerText()
-    check('新的一轮出现在对话时间线上', conversationAfter.includes(goalText))
+    check('新的一轮出现在对话时间线上', conversationAfter.includes('答辩 PPT'))
     await page.screenshot({ path: join(SHOTS, '60b-conversation-submitted.png'), fullPage: true })
 
     // ------------------------------------------------------------ workbench --
