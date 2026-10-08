@@ -85,6 +85,35 @@ def _within(root: Path, candidate: Path) -> bool:
 # --------------------------------------------------------------------------- #
 # file_read
 # --------------------------------------------------------------------------- #
+#: Read size for hashing. 1 MiB is small enough that peak memory does not depend on the
+#: file and large enough that a 100 MB file is a hundred reads, not a hundred thousand.
+_HASH_CHUNK = 1024 * 1024
+
+
+def _hash_file(path: Path) -> str:
+    """SHA-256 of a file, read in chunks.
+
+    **Not `hashlib.sha256(path.read_bytes())`.** That is what this used to be, in five
+    places, and it means a 100 MB file costs 100 MB of memory to produce a 32-byte string —
+    inside a process that is also holding a database connection pool, a vector store client
+    and the agent's own history. The hash is the same; the memory is not.
+
+    Returns an empty string if the file cannot be read, rather than raising: every caller
+    treats the hash as metadata about a file it has already decided to act on.
+    """
+    digest = hashlib.sha256()
+    try:
+        with path.open("rb") as handle:
+            while True:
+                chunk = handle.read(_HASH_CHUNK)
+                if not chunk:
+                    break
+                digest.update(chunk)
+    except OSError:
+        return ""
+    return digest.hexdigest()
+
+
 class FileReadTool(Tool):
     spec = ToolSpec(
         name="file_read",
@@ -139,13 +168,17 @@ class FileReadTool(Tool):
                 summary="binary file",
             )
 
-        raw = target.read_bytes()[:ceiling]
+        # Read only what will be returned. `read_bytes()[:ceiling]` reads the whole file
+        # and then throws most of it away, so a 500 MB log cost 500 MB of memory to show
+        # the first megabyte of it.
+        with target.open("rb") as handle:
+            raw = handle.read(ceiling)
         try:
             text = raw.decode("utf-8")
         except UnicodeDecodeError:
             text = raw.decode("utf-8", errors="replace")
 
-        digest = hashlib.sha256(target.read_bytes()).hexdigest()
+        digest = _hash_file(target)
         total_lines = text.count("\n") + 1
 
         sliced = False
@@ -213,7 +246,7 @@ class FileWriteTool(Tool):
 
         previous_hash = ""
         if target.exists():
-            previous_hash = hashlib.sha256(target.read_bytes()).hexdigest()
+            previous_hash = _hash_file(target)
 
         data = content.encode("utf-8")
         target.write_bytes(data)
@@ -291,7 +324,7 @@ class FileDeleteTool(Tool):
                 error="Refusing to delete a directory with file_delete - use directory_delete",
                 summary="is a directory",
             )
-        digest = hashlib.sha256(target.read_bytes()).hexdigest()
+        digest = _hash_file(target)
         target.unlink()
         ctx.consume_write()
         ctx.register_artifact("files_deleted", str(target))
@@ -447,7 +480,7 @@ class FileMetadataTool(Tool):
             "writable": os.access(target, os.W_OK),
         }
         if target.is_file() and stat.st_size <= 32 * 1024 * 1024:
-            data["sha256"] = hashlib.sha256(target.read_bytes()).hexdigest()
+            data["sha256"] = _hash_file(target)
         return ToolResult(ok=True, data=data, summary=f"{target.name} ({data['size_human']})")
 
 

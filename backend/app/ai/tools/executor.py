@@ -22,12 +22,14 @@ retrying, the second never is.
 from __future__ import annotations
 
 import asyncio
+import json
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any
 
+from app.ai.tools.agent_scope import agent_tool_scope
 from app.ai.tools.permissions import (
     AgentPolicy,
     Decision,
@@ -476,7 +478,12 @@ class ToolExecutor:
         # --- 4. run ---------------------------------------------------------
         timeout = float(getattr(spec, "timeout_seconds", 30.0) or 30.0)
         try:
-            result = await asyncio.wait_for(tool.execute(ctx, **cleaned), timeout=timeout)
+            # Everything the agent does to the machine happens inside this block, and this
+            # is the only place a tool is called — the class says so in its own docstring.
+            # The flag it sets is what `policy_store` reads before refusing to let the
+            # agent change the policy that governs it. See `agent_scope.py`.
+            with agent_tool_scope(spec.name):
+                result = await asyncio.wait_for(tool.execute(ctx, **cleaned), timeout=timeout)
         except TimeoutError:
             outcome = ToolOutcome(
                 ok=False,
@@ -555,57 +562,157 @@ class ToolExecutor:
         return finish(outcome)
 
 
-def _cap_payload(data: Any, limit: int) -> tuple[Any, bool, int]:
-    """Keep a tool result inside the output ceiling.
+class _OutputBudget:
+    """How many bytes are left for this tool result.
 
-    A command that prints a gigabyte must not end up in the database, in the
-    prompt, or in the UI. Strings are cut and flagged; structures are walked and
-    the same rule applied to each string inside them.
+    The old `_cap_payload` passed the **full** limit to every child, so a dict with fifty
+    keys produced fifty strings of up to `limit` bytes each and a payload fifty times the
+    ceiling. The number it returned was then wrong too, because it summed the children's
+    claimed sizes rather than the bytes actually kept.
+
+    A budget object rather than a running integer because the recursion needs to *spend*,
+    not to receive: every leaf draws from the same pot, and when the pot is empty every
+    remaining leaf is dropped rather than truncated to nothing.
+    """
+
+    __slots__ = ("limit", "truncated", "used")
+
+    def __init__(self, limit: int) -> None:
+        self.limit = limit
+        self.used = 0
+        self.truncated = False
+
+    @property
+    def remaining(self) -> int:
+        return max(0, self.limit - self.used)
+
+    def take(self, size: int) -> None:
+        self.used += size
+
+
+def _cap_payload(data: Any, limit: int) -> tuple[Any, bool, int]:
+    """Keep a tool result inside the output ceiling — the whole result, not each field.
+
+    A command that prints a gigabyte must not end up in the database, in the prompt, or in
+    the UI. The ceiling is a property of the **result**: one budget, spent by every string
+    inside it, so `{"a": "...", "b": "..."}` cannot total twice the limit.
+
+    ## Why there is a loop at the end
+
+    The budget counts bytes of content, of keys, and of JSON punctuation — but it is a
+    *model* of what `json.dumps` will produce, and a model of a serializer is never exact.
+    The first three versions of this function each came in a few bytes over: quotes and
+    commas per field, then the container's own brackets, then multi-byte characters
+    counted as one each. Each fix narrowed the gap and none of them closed it.
+
+    So the guarantee is not made by the model. The result is serialised, measured, and if
+    it is still over, the budget is reduced by the overshoot and the walk runs again. Two
+    or three passes converge. **The number this returns is the measured size**, not the
+    budget's opinion of it.
     """
     if limit <= 0:
         return data, False, 0
 
+    budget = _OutputBudget(limit)
+    capped = _cap_value(data, budget)
+    size = _measure(capped)
+
+    for _ in range(4):
+        if size <= limit:
+            break
+        # Take off the overshoot, plus a margin for the marker text the next pass will add.
+        budget = _OutputBudget(max(1, limit - (size - limit) - 64))
+        capped = _cap_value(data, budget)
+        size = _measure(capped)
+
+    return capped, budget.truncated or size > limit, size
+
+
+def _measure(value: Any) -> int:
+    """The bytes this value actually costs once serialised."""
+    try:
+        return len(json.dumps(value, ensure_ascii=False, default=str).encode("utf-8", errors="ignore"))
+    except (TypeError, ValueError):
+        return len(str(value).encode("utf-8", errors="ignore"))
+
+
+def _cap_value(data: Any, budget: _OutputBudget) -> Any:
+    """Walk one value, spending from the shared budget.
+
+    **The marker text is part of the budget too.** The first version of this counted only
+    the content it kept, so fifty truncated fields each added an eighty-byte "... omitted
+    ..." note on top of the ceiling and the result came out four times over. A limit that
+    does not include the words explaining the limit is not a limit.
+    """
     if isinstance(data, str):
         size = len(data.encode("utf-8", errors="ignore"))
-        if size <= limit:
-            return data, False, size
-        keep = max(1, limit // 2)
-        head = data[:keep]
-        tail = data[-keep:] if len(data) > keep else ""
-        return (
-            f"{head}\n\n... [{size - len(head.encode()) - len(tail.encode())} bytes omitted: "
-            f"output exceeded the {limit}-byte limit] ...\n\n{tail}",
-            True,
-            limit,
+        if size <= budget.remaining:
+            budget.take(size)
+            return data
+
+        # Build the marker first, then keep whatever is left after paying for it.
+        marker = (
+            f"\n\n... [{size} bytes omitted: the whole result is capped at "
+            f"{budget.limit} bytes] ...\n\n"
         )
+        available = budget.remaining - len(marker.encode("utf-8", errors="ignore"))
+        budget.truncated = True
+        if available < 64:
+            # The budget was spent by earlier fields. Return nothing rather than a marker
+            # nobody has room for — an empty string costs two bytes and does not lie.
+            budget.take(2)
+            return ""
+
+        # **Slice bytes, not characters.** `data[:keep]` counts characters while the
+        # budget counts UTF-8 bytes, so five thousand Chinese characters — fifteen
+        # thousand bytes — were budgeted as five thousand and came out at 5,853. The
+        # string is cut on a byte boundary and decoded with `errors="ignore"` so a
+        # multi-byte character split down the middle is dropped rather than mangled.
+        raw = data.encode("utf-8", errors="ignore")
+        half = available // 2
+        head = raw[:half].decode("utf-8", errors="ignore")
+        tail = raw[-half:].decode("utf-8", errors="ignore") if len(raw) > half else ""
+        body = f"{head}{marker}{tail}"
+        budget.take(len(body.encode("utf-8", errors="ignore")))
+        return body
 
     if isinstance(data, dict):
         out: dict[str, Any] = {}
-        truncated = False
-        total = 0
+        budget.take(2)  # this container's own braces
         for key, value in data.items():
-            capped, was_cut, size = _cap_payload(value, limit)
-            out[key] = capped
-            truncated = truncated or was_cut
-            total += size
-        return out, truncated, total
+            # **JSON's own punctuation is part of the size.** `{"a":"b"}` is eight bytes
+            # for two bytes of content: two quotes, a colon, a comma and two braces per
+            # field. A thousand-element array is three kilobytes of structure alone, and
+            # the first version of this budget counted none of it — the result was under
+            # budget by its own accounting and over budget on the wire.
+            cost = len(str(key).encode("utf-8", errors="ignore")) + 4
+            if cost > budget.remaining:
+                # Stop adding fields. Emitting an empty string for each remaining key
+                # would still cost its quotes and comma — a thousand keys is three
+                # kilobytes of punctuation, which is how "capped at 2 KB" produced 5.9 KB.
+                budget.truncated = True
+                break
+            budget.take(cost)
+            out[key] = _cap_value(value, budget)
+        return out
 
     if isinstance(data, list):
         out_list: list[Any] = []
-        truncated = False
-        total = 0
+        budget.take(2)  # this container's own brackets
         for value in data:
-            capped, was_cut, size = _cap_payload(value, limit)
-            out_list.append(capped)
-            truncated = truncated or was_cut
-            total += size
-        return out_list, truncated, total
+            if budget.remaining < 3:  # the comma, the quotes, and something to put in them
+                budget.truncated = True
+                break
+            budget.take(2)
+            out_list.append(_cap_value(value, budget))
+        return out_list
 
     if data is None:
-        return None, False, 0
+        return None
 
     size = len(str(data).encode("utf-8", errors="ignore"))
-    return data, False, size
+    budget.take(size)
+    return data
 
 
 __all__ = [

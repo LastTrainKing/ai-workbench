@@ -71,3 +71,48 @@ def constant_time_equals(a: str, b: str) -> bool:
 
 def generate_api_token(prefix: str = "awb") -> str:
     return f"{prefix}_{secrets.token_urlsafe(32)}"
+
+# ------------------------------------------------------------- token revocation --
+#
+# A JWT is stateless: it is valid until it expires, and nothing the server does can
+# change that. The logout endpoint used to acknowledge the action and rely on the client
+# throwing the token away — which is what a browser does and what an attacker does not.
+#
+# The payload already carries a `jti` (issued in `create_access_token`), so the fix is a
+# revocation list keyed on it. Redis rather than a process-local set: two workers, or one
+# worker that restarted, must not disagree about whether a token is still good.
+#
+# The entry expires at the same moment the token does. A token that has expired on its own
+# does not need a revocation entry, and keeping one forever is how a list like this grows
+# without bound.
+
+_REVOCATION_NS = "auth:revoked"
+
+
+async def revoke_token(payload: dict[str, Any]) -> bool:
+    """Make this token unusable from now on. Returns whether it was recorded."""
+    from app.core.cache import cache_set
+
+    jti = str(payload.get("jti") or "")
+    if not jti:
+        return False
+    expires_at = int(payload.get("exp") or 0)
+    ttl = max(expires_at - int(datetime.now(UTC).timestamp()), 1)
+    return await cache_set(_REVOCATION_NS, jti, True, ttl)
+
+
+async def is_token_revoked(payload: dict[str, Any]) -> bool:
+    """Has this token been logged out?
+
+    **Fails open, deliberately, and says so.** If Redis is down, `cache_get` returns None
+    and every token looks valid. The alternative — failing closed — means one Redis
+    hiccup signs everybody out, and the thing being protected is a local desktop
+    application whose data is on the same machine. The trade is recorded here rather than
+    left for someone to discover.
+    """
+    from app.core.cache import cache_get
+
+    jti = str(payload.get("jti") or "")
+    if not jti:
+        return False
+    return await cache_get(_REVOCATION_NS, jti) is not None

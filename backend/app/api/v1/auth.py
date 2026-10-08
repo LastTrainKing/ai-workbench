@@ -2,10 +2,16 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, status
+import contextlib
+from typing import Annotated
 
-from app.api.deps import CurrentUser, DbSession
+from fastapi import APIRouter, Depends, status
+from fastapi.security import HTTPAuthorizationCredentials
+
+from app.api.deps import CurrentUser, DbSession, bearer
+from app.core.errors import AuthenticationError
 from app.core.response import ok
+from app.core.security import decode_access_token, revoke_token
 from app.schemas.auth import TokenOut, UserCreate, UserLogin, UserOut, UserUpdate
 from app.services.auth_service import AuthService
 
@@ -46,11 +52,24 @@ async def me(user: CurrentUser) -> dict:
     return ok(UserOut.model_validate(user).model_dump(mode="json"))
 
 
-@router.post("/auth/logout", summary="Client-side logout acknowledgement")
-async def logout(user: CurrentUser) -> dict:
-    # JWTs are stateless; the client discards the token. The endpoint exists so
-    # the frontend has a single place to clear local state and audit the action.
-    return ok({"logged_out": True, "username": user.username})
+@router.post("/auth/logout", summary="Log out, and make this token stop working")
+async def logout(
+    user: CurrentUser,
+    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer)] = None,
+) -> dict:
+    """Revoke this token, rather than trusting the client to discard it.
+
+    It used to acknowledge the action and rely on the browser throwing the token away.
+    That is what a browser does and what anyone else does not: the token stayed valid for
+    the rest of its 24 hours, and "log out" was a message to the client rather than a
+    decision by the server. The `jti` is now recorded as revoked until the token would
+    have expired on its own.
+    """
+    revoked = False
+    if credentials is not None and credentials.credentials:
+        with contextlib.suppress(AuthenticationError):
+            revoked = await revoke_token(decode_access_token(credentials.credentials))
+    return ok({"logged_out": True, "username": user.username, "token_revoked": revoked})
 
 
 user_router = APIRouter(tags=["users"])

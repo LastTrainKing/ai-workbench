@@ -299,7 +299,13 @@ def _powershell() -> tuple[str, list[str]]:
 
 
 class _NetworkTool(Tool):
-    async def _authorise(self, ctx: ToolContext, url: str) -> None:
+    async def _authorise(self, ctx: ToolContext, url: str, *, writes: bool = False) -> None:
+        """Check the URL, and check it **as a write** when it carries a body.
+
+        `writes` is not a formality. A GET to an allow-listed host and a POST of the user's
+        own notes to that same host are different acts, and an allow-list entry was granted
+        for the first one. Sending is confirmed separately.
+        """
         parsed = urlparse(url)
         if parsed.scheme not in {"http", "https"}:
             raise ValidationError(f"Only http and https are supported, got '{parsed.scheme}'")
@@ -307,11 +313,16 @@ class _NetworkTool(Tool):
             raise ValidationError(f"No host in URL: {url}")
         if ctx.permissions is None:
             return
-        verdict = ctx.permissions.check_domain(url)
+        verdict = ctx.permissions.check_domain(url, writes=writes)
         if not verdict.allowed:
             raise PermissionDeniedError(
                 verdict.reason,
-                details={"url": url, "host": parsed.hostname, "risk": verdict.risk.value},
+                details={
+                    "url": url,
+                    "host": parsed.hostname,
+                    "risk": verdict.risk.value,
+                    "method": "write" if writes else "read",
+                },
             )
 
     @staticmethod
@@ -452,7 +463,8 @@ class HttpPostTool(_NetworkTool):
         body: str = "",
         headers: dict[str, str] | None = None,
     ) -> ToolResult:
-        await self._authorise(ctx, url)
+        # A POST carries a body, so it is authorised as egress rather than as a read.
+        await self._authorise(ctx, url, writes=True)
         return await _run_http(ctx, url, "POST", body, headers or {}, summary_prefix="POST")
 
 

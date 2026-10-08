@@ -132,6 +132,26 @@ def _deny(reason: str, **kw: Any) -> PermissionVerdict:
     return PermissionVerdict(Decision.DENY, reason, **kw)
 
 
+def host_matches_allowed(host: str, allowed: str) -> bool:
+    """Does `host` belong to the domain `allowed`?
+
+    **The dot boundary is the whole point.** `host.endswith("github.com")` is true for
+    `evilgithub.com`, so a suffix test written without it lets an attacker register a name
+    that ends with a trusted one and inherit its trust. `host.endswith(".github.com")` is
+    not true for `evilgithub.com`, and that is the difference between a domain rule and a
+    string rule.
+
+    One implementation, used by the permission manager and by the skill scanner. The
+    scanner had its own copy of the suffix test and got it wrong in exactly that way —
+    two implementations of one decision is how that happens.
+    """
+    host = (host or "").strip().lower().rstrip(".")
+    allowed = (allowed or "").strip().lower().rstrip(".")
+    if not host or not allowed:
+        return False
+    return host == allowed or host.endswith("." + allowed)
+
+
 # --------------------------------------------------------------------------- #
 # Policy
 # --------------------------------------------------------------------------- #
@@ -229,6 +249,16 @@ BUILTIN_DENIED: tuple[str, ...] = (
     r"%ProgramData%",
     # This project's own secrets.
     r"{PROJECT}\.env",
+    # The policy that governs the agent. `policy_store` refuses the *write* while the
+    # agent is acting; this refuses the *file*, so a path that goes around that
+    # function still meets a wall.
+    r"{RUNTIME}\agent-policy.json",
+    r"{RUNTIME}\agent-policy",
+    # The policy that governs the agent. Denied on the filesystem side too: the check in
+    # `policy_store` refuses the *write*, and this refuses the *file*, so a path that
+    # reaches around the function still hits a wall.
+    r"{RUNTIME}gent-policy.json",
+    r"{RUNTIME}gent-policy",
     r"{PROJECT}\.runtime\ai-config.json",
 )
 
@@ -260,6 +290,9 @@ class AgentPolicy:
         expand["ProgramFiles"] = os.environ.get("ProgramFiles", r"C:\Program Files")  # noqa: SIM112
         expand["ProgramFiles(x86)"] = os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)")  # noqa: SIM112
         expand["ProgramData"] = os.environ.get("ProgramData", r"C:\ProgramData")  # noqa: SIM112
+        # The product's own data directory. Denied paths name the policy file inside it.
+        from app.core.config import runtime_root as _runtime_root
+        expand["RUNTIME"] = str(_runtime_root())
 
         def expand_path(raw: str) -> Path:
             text = raw
@@ -524,7 +557,7 @@ class PermissionManager:
         return self.check_path(raw, write=True).allowed
 
     # -------------------------------------------------------------- domains --
-    def check_domain(self, url_or_host: str) -> PermissionVerdict:
+    def check_domain(self, url_or_host: str, *, writes: bool = False) -> PermissionVerdict:
         """Decide whether the agent may talk to a host.
 
         ## Why this is not a string match any more
@@ -568,7 +601,7 @@ class PermissionManager:
             )
 
         for blocked in self.policy.blocked_domains:
-            if host == blocked or host.endswith("." + blocked):
+            if host_matches_allowed(host, blocked):
                 return _deny(
                     "This host is on the blocked list",
                     risk=RiskLevel.HIGH,
@@ -577,8 +610,7 @@ class PermissionManager:
                 )
 
         for allowed in self.policy.allowed_domains:
-            allowed_host = self._normalise_host(allowed)
-            if host == allowed_host or host.endswith("." + allowed_host):
+            if host_matches_allowed(host, self._normalise_host(allowed)):
                 # Even an allow-listed name is refused if it points at this machine or the
                 # local network. `localhost` in the default list is what made the vector
                 # store reachable; a name is not a guarantee about where it goes.
@@ -589,6 +621,22 @@ class PermissionManager:
                         risk=RiskLevel.HIGH,
                         operation="Contact a host",
                         target=host,
+                    )
+                if writes:
+                    # A trusted domain is not a licence to *send*. Reading from
+                    # `github.com` and posting the user's notes to `github.com` are not the
+                    # same act, and only the first is what an allow-list entry was granted
+                    # for. Egress asks, whatever the host.
+                    return _confirm(
+                        "This would send data to a host on the allowed list",
+                        risk=RiskLevel.MEDIUM,
+                        detail=(
+                            f"{host} is trusted for reading, but this request carries a body. "
+                            "Outbound data is confirmed separately from outbound requests."
+                        ),
+                        operation="Send data to a host",
+                        target=host,
+                        impact="The content of this request leaves this machine.",
                     )
                 return _allow("Host is on the allowed list", operation="Contact a host", target=host)
 

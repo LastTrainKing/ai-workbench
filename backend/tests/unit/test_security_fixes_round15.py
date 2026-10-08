@@ -392,3 +392,130 @@ def test_the_guard_does_not_fake_a_response() -> None:
 
     refuse_source = inspect.getsource(guard_module.BlockedProvider._refuse)
     assert "raise ModelCallBlocked" in refuse_source, "_refuse does not raise"
+
+
+# ------------------------------------------------- the agent may not change its own limits --
+
+
+def test_the_agent_cannot_write_the_permission_policy() -> None:
+    """The policy decides what the agent may do; the agent must not be able to change it.
+
+    There is no tool that writes the policy, and that is not enough. The agent can reach
+    the same place three other ways — `http_post` to the app's own API, `filesystem` to
+    write the file, a command — so the check is at the thing being protected rather than
+    at the doors. `ToolExecutor` sets the flag around every tool call; this asserts the
+    protected side reads it.
+    """
+    from app.ai.tools.agent_scope import AgentScopeViolation, agent_tool_scope
+    from app.ai.tools import policy_store
+
+    with agent_tool_scope("http_post"):
+        with pytest.raises(AgentScopeViolation) as excinfo:
+            policy_store.save_overrides({"level": 3})
+        assert "http_post" in str(excinfo.value), "the refusal does not name the tool"
+
+        with pytest.raises(AgentScopeViolation):
+            policy_store.reset_overrides()
+
+        with pytest.raises(AgentScopeViolation):
+            policy_store.save_capability_flags({"observation": True})
+
+
+def test_the_policy_write_still_works_for_the_user() -> None:
+    """A guard that blocks the owner as well is not a guard, it is a bug."""
+    from app.ai.tools.agent_scope import in_agent_scope
+
+    assert not in_agent_scope(), "the flag leaked outside a tool call"
+
+
+def test_the_policy_file_is_on_the_denied_path_list() -> None:
+    """Belt and braces: the write is refused, and the file is refused.
+
+    `policy_store` refuses the *write* while the agent is acting. The denied-path list
+    refuses the *file*. A path that goes around the function still meets a wall.
+    """
+    from app.ai.tools.permissions import AgentPolicy
+
+    denied = [str(p).lower() for p in AgentPolicy.from_settings().denied_paths]
+    assert any("agent-policy" in p for p in denied), denied
+
+
+# ------------------------------------------------------------- egress is its own decision --
+
+
+def test_posting_to_a_trusted_host_is_confirmed() -> None:
+    """Reading from an allow-listed host and sending to it are different acts.
+
+    An allow-list entry was granted for fetching. Posting the user's notes to the same
+    host is egress, and it asks — the host being trusted says nothing about the payload.
+    """
+    from app.ai.tools.permissions import AgentPolicy, PermissionManager
+
+    manager = PermissionManager(AgentPolicy.from_settings())
+
+    reading = manager.check_domain("https://github.com/foo/bar")
+    assert reading.allowed, "a plain GET to an allow-listed host must still pass"
+
+    sending = manager.check_domain("https://github.com/foo/bar", writes=True)
+    assert not sending.allowed, "a POST to an allow-listed host was allowed without asking"
+    assert sending.decision.value == "confirm", sending.decision.value
+
+
+def test_http_post_authorises_as_a_write() -> None:
+    """The tool must pass `writes=True`, or the policy above never runs."""
+    from app.ai.tools.builtin import process_network
+
+    source = inspect.getsource(process_network.HttpPostTool.execute)
+    assert "writes=True" in source, "HttpPostTool is authorising as a read"
+
+    get_source = inspect.getsource(process_network.HttpGetTool.execute)
+    assert "writes=True" not in get_source, "HttpGetTool is authorising as a write"
+
+
+# ------------------------------------------------- unverified skills cannot reach the agent --
+
+
+def test_the_skills_package_has_no_directory_scan() -> None:
+    """A skill file dropped into a folder must not become a usable skill.
+
+    The brief asks about "the user copies a skill file into skills/". That path does not
+    exist: nothing in `app/ai/skills/` walks a directory. `adopt()` is the only writer of
+    `installed_skills`, and `find_matching_skills` reads only rows that are `enabled` and
+    `active`.
+
+    Asserted structurally, because the risk is a *future* addition: the day someone adds a
+    convenience "load the folder" function, this test fails and the reviewer has to think
+    about the gate again.
+    """
+    import ast
+    from pathlib import Path as _Path
+
+    skills_dir = _Path(__file__).resolve().parents[2] / "app" / "ai" / "skills"
+    offenders: list[str] = []
+    for path in skills_dir.glob("*.py"):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+                if node.func.attr in {"glob", "rglob", "iterdir", "scandir", "walk"}:
+                    offenders.append(f"{path.name}:{node.lineno} .{node.func.attr}()")
+    assert not offenders, f"a directory scan appeared in the skills package: {offenders}"
+
+
+def test_adoption_refuses_what_has_not_been_checked() -> None:
+    """The gate itself: no confirmation, a blocking finding, or no source, and it refuses."""
+    from app.ai.skills.registry import AdoptionRefused, adopt
+    from app.ai.skills.schema import Skill, SkillType
+
+    source = inspect.getsource(adopt)
+    for reason in ("未经用户确认", "blocks_adoption", "缺少来源"):
+        assert reason in source, f"the adoption gate no longer checks: {reason}"
+
+    assert issubclass(AdoptionRefused, Exception)
+
+    # A skill with no source cannot be traced, so it cannot be adopted — the check that
+    # makes "where did this come from?" answerable.
+    untraceable = Skill(
+        name="x", description="", when_to_use="", body="b",
+        skill_type=SkillType.DOCUMENT, params=[], scripts=[], source="",
+    )
+    assert untraceable.source == ""

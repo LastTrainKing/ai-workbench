@@ -263,7 +263,17 @@ VIAddVersionKey "FileVersion"     "${APP_VERSION}"
   FileWrite $9 "REM registry entries, the Start Menu shortcut and the desktop shortcut.$\r$\n"
   FileWrite $9 "REM It does not reinstall, does not download anything, and does not touch data.$\r$\n"
   FileWrite $9 "setlocal$\r$\n"
-  FileWrite $9 "set $\"HERE=$$~dp0$\"$\r$\n"
+  ; `%~dp0`, not `$$~dp0`.
+  ;
+  ; `$$` is NSIS's escape for a literal `$`, so the old line wrote `set "HERE=$~dp0"` into
+  ; the batch file — and batch wants `%~dp0`. `%HERE%` then expanded to the literal text
+  ; `$~dp0`, the python path under it never existed, and the script exited 2 on line 9
+  ; every single time. The repair entry point shipped broken and stayed broken: round 14
+  ; verified `install_selfcheck.py --repair` by calling Python directly, which is not the
+  ; thing the user clicks, and round 15's report recorded this as FAILED without fixing it.
+  ;
+  ; `%` is not special to NSIS. It is written literally.
+  FileWrite $9 "set $\"HERE=%~dp0$\"$\r$\n"
   FileWrite $9 "if not exist $\"%HERE%vendor\runtime\python\python.exe$\" ($\r$\n"
   FileWrite $9 "  echo The program files are incomplete - python.exe is missing.$\r$\n"
   FileWrite $9 "  echo Run the installer again.$\r$\n"

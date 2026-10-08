@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.errors import AuthenticationError
 from app.core.logging import get_logger
 from app.core.response import PaginationParams
-from app.core.security import decode_access_token
+from app.core.security import decode_access_token, is_token_revoked
 from app.infrastructure.database import get_db
 from app.models.user import User
 
@@ -30,6 +30,10 @@ async def get_current_user(
     if credentials is None or not credentials.credentials:
         raise AuthenticationError("Missing bearer token")
     payload = decode_access_token(credentials.credentials)
+    # A token that has been logged out is not accepted, even though its signature is
+    # still valid — that is the whole point of a revocation list.
+    if await is_token_revoked(payload):
+        raise AuthenticationError("This token has been logged out")
     subject = payload.get("sub")
     if not subject:
         raise AuthenticationError("Token is missing the subject claim")

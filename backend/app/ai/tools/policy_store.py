@@ -29,6 +29,7 @@ import os
 from pathlib import Path
 from typing import Any
 
+from app.ai.tools.agent_scope import refuse_if_in_agent_scope
 from app.ai.tools.permissions import AgentMode, AgentPolicy, PermissionLevel
 from app.core.config import runtime_root, settings
 from app.core.logging import get_logger
@@ -120,7 +121,14 @@ def load_overrides(user_id: Any = None) -> dict[str, Any]:
 
 
 def save_overrides(patch: dict[str, Any], user_id: Any = None) -> dict[str, Any]:
-    """Merge a patch into this user's overrides and return the new set."""
+    """Merge a patch into this user's overrides and return the new set.
+
+    **Refused while the agent is acting.** The policy decides what the agent may do, so
+    the agent changing it would make every other limit advisory. The check is here rather
+    than on the API route because the route is one road: the agent could also reach it
+    through `http_post`, or write the file through `filesystem`, or run a command.
+    """
+    refuse_if_in_agent_scope("the agent permission policy")
     current = load_overrides(user_id)
     for key, value in (patch or {}).items():
         if key not in MUTABLE_KEYS:
@@ -137,6 +145,7 @@ def save_overrides(patch: dict[str, Any], user_id: Any = None) -> dict[str, Any]
 
 
 def reset_overrides(user_id: Any = None) -> None:
+    refuse_if_in_agent_scope("the agent permission policy")
     with contextlib.suppress(FileNotFoundError):
         _store_path(user_id).unlink()
 
@@ -147,6 +156,7 @@ def capability_flags(user_id: Any = None) -> dict[str, bool]:
 
 
 def save_capability_flags(flags: dict[str, bool], user_id: Any = None) -> dict[str, bool]:
+    refuse_if_in_agent_scope("the agent capability switches")
     save_overrides({"capabilities": {k: bool(v) for k, v in (flags or {}).items()}}, user_id)
     return capability_flags(user_id)
 
