@@ -37,6 +37,7 @@
 Unicode true
 !include "MUI2.nsh"
 !include "FileFunc.nsh"
+!include "LogicLib.nsh"
 
 ; ------------------------------------------------------------------- config --
 !define APP_NAME        "AI Workbench"
@@ -68,6 +69,16 @@ VIAddVersionKey "FileVersion"     "${APP_VERSION}"
 !insertmacro MUI_PAGE_WELCOME
 !insertmacro MUI_PAGE_DIRECTORY
 !insertmacro MUI_PAGE_INSTFILES
+
+; MUI2 generates `.onUserAbort` itself and calls this hook from inside it — see the
+; `OnInstallAborted` function at the bottom for why the hook is needed at all.
+;
+; It has to be defined **here**, before `MUI_LANGUAGE` below. MUI2 expands
+; `MUI_FUNCTION_ABORTWARNING` while processing the language macros, and a `!define` that
+; comes later is simply not there yet: the build then succeeds with
+; `warning 6010: install function "OnInstallAborted" not referenced - zeroing code out`,
+; which is the compiler saying the safety net was thrown away.
+!define MUI_CUSTOMFUNCTION_ABORT OnInstallAborted
 
 !define MUI_FINISHPAGE_RUN "$INSTDIR\${APP_EXE}"
 !define MUI_FINISHPAGE_RUN_TEXT "立即启动 ${APP_NAME}"
@@ -130,6 +141,121 @@ VIAddVersionKey "FileVersion"     "${APP_VERSION}"
   Sleep 2000
 !macroend
 
+; ------------------------------------------------------- install verification --
+;
+; The three macros below exist because of one sentence from the user:
+;
+;     装得上、看不见、删不掉
+;
+; A real install on this machine ended with `Uninstall.exe` written, **none** of the
+; eight registry values written, and no Start Menu entry at all. The software ran; it
+; appeared in no list; there was no uninstall entry anywhere the user would look. The
+; installer reported success, because that is what NSIS does: `WriteRegStr` sets an
+; error flag that nothing here was reading, `CreateShortCut` does not even do that, and
+; the progress bar reaches the end either way.
+;
+; **铺完文件不等于装好。** These macros check the things that make the install *real*
+; and report the first one that is missing, by name.
+
+; Sets $R0 to the description of the first missing file, or leaves it empty.
+;
+; `${AndIfNot} ${FileExists}` rather than a string comparison: LogicLib's expression
+; parser splits on quotes, so a value that *contains* a quote — which
+; `UninstallString` does — arrives as five parameters to a four-parameter macro and
+; makensis stops with "macro _And requires 4 parameter(s), passed 5". Found by compiling;
+; the registry comparisons below therefore put the expected value in a register first.
+!macro FailIfMissing PATH DESC
+  ${If} $R0 == ""
+  ${AndIfNot} ${FileExists} "${PATH}"
+    StrCpy $R0 "${DESC}"
+  ${EndIf}
+!macroend
+
+; The whole check. Leaves the answer in $R0: empty means the install is complete.
+;
+; Every comparison is register-to-register on purpose. `${If} $R1 != "some path"` works
+; right up until the path contains a quote, and the one value that matters most here —
+; `UninstallString`, which is `"C:\...\Uninstall.exe"` — contains two.
+!macro VerifyInstall
+  StrCpy $R0 ""
+
+  !insertmacro FailIfMissing "$INSTDIR\${APP_EXE}" "程序文件 $INSTDIR\${APP_EXE}"
+  !insertmacro FailIfMissing "$INSTDIR\Uninstall.exe" "卸载程序 $INSTDIR\Uninstall.exe"
+  !insertmacro FailIfMissing "$SMPROGRAMS\${APP_NAME}\${APP_NAME}.lnk" "开始菜单快捷方式"
+  !insertmacro FailIfMissing "$DESKTOP\${APP_NAME}.lnk" "桌面快捷方式"
+
+  ; The three values that decide whether the program shows up in 设置 → 应用 and whether
+  ; the 「卸载」 button there works. DisplayName is the name in the list, UninstallString
+  ; is what the button runs, DisplayIcon is the picture next to it.
+  ReadRegStr $R1 HKCU "${UNINST_KEY}" "DisplayName"
+  StrCpy $R2 "${APP_NAME}"
+  ${If} $R0 == ""
+  ${AndIf} $R1 != $R2
+    StrCpy $R0 "注册表 DisplayName（应用列表里显示的名字）"
+  ${EndIf}
+
+  ReadRegStr $R1 HKCU "${UNINST_KEY}" "UninstallString"
+  StrCpy $R2 '"$INSTDIR\Uninstall.exe"'
+  ${If} $R0 == ""
+  ${AndIf} $R1 != $R2
+    StrCpy $R0 "注册表 UninstallString（应用列表里的「卸载」按钮要用它）"
+  ${EndIf}
+
+  ReadRegStr $R1 HKCU "${UNINST_KEY}" "DisplayIcon"
+  StrCpy $R2 "$INSTDIR\${APP_EXE}"
+  ${If} $R0 == ""
+  ${AndIf} $R1 != $R2
+    StrCpy $R0 "注册表 DisplayIcon（应用列表里的图标）"
+  ${EndIf}
+
+  ; InstallLocation is what `InstallDirRegKey` reads on the next install, and what
+  ; `scripts/install_selfcheck.py` uses to find the app. A wrong one is how a reinstall
+  ; lands somewhere unexpected.
+  ReadRegStr $R1 HKCU "${UNINST_KEY}" "InstallLocation"
+  StrCpy $R2 "$INSTDIR"
+  ${If} $R0 == ""
+  ${AndIf} $R1 != $R2
+    StrCpy $R0 "注册表 InstallLocation"
+  ${EndIf}
+!macroend
+
+; The repair entry point, written into the install directory.
+;
+; Pure ASCII, because cmd.exe reads a .bat as ANSI and a Chinese character in one turns
+; into mojibake at best and a syntax error at worst. The Chinese lives in the shortcut
+; name instead, where it is a UTF-16 string and safe.
+;
+; It does not reinstall and does not re-download 440 MB: it only fills in the registry
+; values and shortcuts that are missing, then checks all four again.
+!macro WriteRepairBat
+  FileOpen $9 "$INSTDIR\repair-install.bat" w
+  FileWrite $9 "@echo off$\r$\n"
+  FileWrite $9 "REM AI Workbench - repair this installation.$\r$\n"
+  FileWrite $9 "REM$\r$\n"
+  FileWrite $9 "REM Fills in the parts that make Windows aware of the program: the app-list$\r$\n"
+  FileWrite $9 "REM registry entries, the Start Menu shortcut and the desktop shortcut.$\r$\n"
+  FileWrite $9 "REM It does not reinstall, does not download anything, and does not touch data.$\r$\n"
+  FileWrite $9 "setlocal$\r$\n"
+  FileWrite $9 "set $\"HERE=$$~dp0$\"$\r$\n"
+  FileWrite $9 "if not exist $\"%HERE%vendor\runtime\python\python.exe$\" ($\r$\n"
+  FileWrite $9 "  echo The program files are incomplete - python.exe is missing.$\r$\n"
+  FileWrite $9 "  echo Run the installer again.$\r$\n"
+  FileWrite $9 "  pause$\r$\n"
+  FileWrite $9 "  exit /b 2$\r$\n"
+  FileWrite $9 ")$\r$\n"
+  FileWrite $9 "$\"%HERE%vendor\runtime\python\python.exe$\" $\"%HERE%scripts\install_selfcheck.py$\" --repair$\r$\n"
+  FileWrite $9 "set CODE=%ERRORLEVEL%$\r$\n"
+  FileWrite $9 "echo.$\r$\n"
+  FileWrite $9 "if $\"%CODE%$\"==$\"0$\" ($\r$\n"
+  FileWrite $9 "  echo Repaired. You can close this window.$\r$\n"
+  FileWrite $9 ") else ($\r$\n"
+  FileWrite $9 "  echo Still incomplete - see the output above.$\r$\n"
+  FileWrite $9 ")$\r$\n"
+  FileWrite $9 "pause$\r$\n"
+  FileWrite $9 "exit /b %CODE%$\r$\n"
+  FileClose $9
+!macroend
+
 ; ------------------------------------------------------------------ install --
 Section "Install"
   SectionIn RO
@@ -178,12 +304,29 @@ Section "Install"
   marker_exists:
 
   ; ------------------------------------------------------------ shortcuts --
+  ;
+  ; `SetShellVarContext current` is written out rather than left to the default. The
+  ; default happens to be `current`, and "happens to be" is how an installer ends up
+  ; writing its Start Menu entry into `C:\ProgramData` as a non-elevated user — where
+  ; `CreateShortCut` fails without saying anything, and the user gets an empty Start
+  ; Menu while the file is technically somewhere.
+  SetShellVarContext current
+
   CreateDirectory "$SMPROGRAMS\${APP_NAME}"
   CreateShortCut "$SMPROGRAMS\${APP_NAME}\${APP_NAME}.lnk" "$INSTDIR\${APP_EXE}" "" "$INSTDIR\${APP_EXE}" 0 SW_SHOWNORMAL "" "${APP_NAME}"
   CreateShortCut "$DESKTOP\${APP_NAME}.lnk" "$INSTDIR\${APP_EXE}" "" "$INSTDIR\${APP_EXE}" 0 SW_SHOWNORMAL "" "${APP_NAME}"
-  DetailPrint "已创建桌面与开始菜单快捷方式（指向 exe 本身）"
+
+  ; The repair entry point. Shipped on a *successful* install too, deliberately: the
+  ; user who needs it is the one whose install already went wrong, and at that moment
+  ; the only copy of this script is the one they cannot reach. It sits in the app's own
+  ; Start Menu folder, not on the desktop, so a healthy install stays tidy.
+  !insertmacro WriteRepairBat
+  CreateShortCut "$SMPROGRAMS\${APP_NAME}\修复 AI Workbench.lnk" "$INSTDIR\repair-install.bat" "" "$INSTDIR\repair-install.bat" 0 SW_SHOWNORMAL "" "修复 AI Workbench"
 
   ; ------------------------------------------------------------- registry --
+  ; These eight values are what Windows reads to list the program. They are also the
+  ; part that failed silently once, so they are verified below before this install is
+  ; allowed to call itself finished.
   WriteUninstaller "$INSTDIR\Uninstall.exe"
 
   WriteRegStr HKCU "${UNINST_KEY}" "DisplayName"     "${APP_NAME}"
@@ -198,6 +341,31 @@ Section "Install"
   ${GetSize} "$INSTDIR" "/S=0K" $0 $1 $2
   IntFmt $0 "0x%08X" $0
   WriteRegDWORD HKCU "${UNINST_KEY}" "EstimatedSize" "$0"
+
+  ; ------------------------------------------------------- verify, then done --
+  ;
+  ; Everything above is a write that can fail without saying so. This is where the
+  ; install finds out whether it actually worked — **before** the finish page claims it
+  ; did. See the note above `FailIfMissing` for the install that made this necessary.
+  !insertmacro VerifyInstall
+
+  ${If} $R0 != ""
+    ; Leave a way out before giving up. The Start Menu may be one of the things that is
+    ; missing, so the repair entry goes on the desktop as well.
+    !insertmacro WriteRepairBat
+    CreateShortCut "$DESKTOP\修复 AI Workbench.lnk" "$INSTDIR\repair-install.bat" "" "$INSTDIR\repair-install.bat" 0 SW_SHOWNORMAL "" "修复 AI Workbench"
+
+    ${IfNot} ${Silent}
+      MessageBox MB_OK|MB_ICONSTOP \
+        "安装没有完成，缺的是：$\r$\n$\r$\n$R0$\r$\n$\r$\n程序文件已经释放到：$\r$\n$INSTDIR$\r$\n$\r$\n不必重新下载 440 MB。桌面上有一个「修复 AI Workbench」，双击它就能把缺的部分补齐。$\r$\n$\r$\n如果它补不上，请把上面的这一行发给开发者。"
+    ${EndIf}
+
+    DetailPrint "安装校验失败：$R0"
+    SetErrorLevel 3
+    Abort
+  ${EndIf}
+
+  DetailPrint "校验通过：注册表、开始菜单、桌面、卸载程序都在"
 SectionEnd
 
 ; ---------------------------------------------------------------- uninstall --
@@ -233,7 +401,9 @@ Section "Uninstall"
   no_data:
 
   Delete "$DESKTOP\${APP_NAME}.lnk"
+  Delete "$DESKTOP\修复 AI Workbench.lnk"
   Delete "$SMPROGRAMS\${APP_NAME}\${APP_NAME}.lnk"
+  Delete "$SMPROGRAMS\${APP_NAME}\修复 AI Workbench.lnk"
   RMDir "$SMPROGRAMS\${APP_NAME}"
 
   RMDir /r "$INSTDIR\backend"
@@ -245,6 +415,7 @@ Section "Uninstall"
   Delete "$INSTDIR\.env"
   Delete "$INSTDIR\.env.example"
   Delete "$INSTDIR\data-dir.txt"
+  Delete "$INSTDIR\repair-install.bat"
   Delete "$INSTDIR\README.md"
   Delete "$INSTDIR\LICENSE"
   Delete "$INSTDIR\Uninstall.exe"
@@ -268,4 +439,31 @@ Function .onInit
   ; uninstall had moved aside. That whole mechanism is gone: the data lives outside the
   ; install directory and a reinstall simply finds it, so there is nothing to ask and
   ; nothing to move. `data-dir.txt` is rewritten on every install to point at it.
+FunctionEnd
+
+; A cancelled install is a half-install, and it looks exactly like a finished one.
+;
+; The payload is 440 MB and is written first; the shortcuts and the registry entries —
+; the things that make Windows aware the program exists — come last. Clicking Cancel in
+; the last seconds therefore leaves a directory full of working files, no app-list entry
+; and no Start Menu entry: **「装得上、看不见、删不掉」**, which is precisely what the user
+; reported. NSIS aborts at the next instruction, so `WriteUninstaller` can have run while
+; the eight `WriteRegStr` calls have not.
+;
+; The installer cannot stop the abort, but it can refuse to leave the user with no way
+; out: a repair entry point on the desktop, and a sentence saying what happened.
+;
+; MUI2 owns `.onUserAbort` itself — defining that function here fails to compile with
+; "Function named .onUserAbort already exists". `MUI_CUSTOMFUNCTION_ABORT` (defined up
+; with the pages, because MUI2 reads it while expanding the language macros) is the hook
+; it provides for exactly this.
+Function OnInstallAborted
+  ${If} ${FileExists} "$INSTDIR\${APP_EXE}"
+    !insertmacro WriteRepairBat
+    CreateShortCut "$DESKTOP\修复 AI Workbench.lnk" "$INSTDIR\repair-install.bat" "" "$INSTDIR\repair-install.bat" 0 SW_SHOWNORMAL "" "修复 AI Workbench"
+    ${IfNot} ${Silent}
+      MessageBox MB_OK|MB_ICONEXCLAMATION \
+        "安装被取消了，但程序文件已经释放了一部分。$\r$\n$\r$\n这时候的软件是「装了一半」：文件在，但 Windows 可能认不出它 —— 设置里找不到、开始菜单里没有。$\r$\n$\r$\n桌面上放了一个「修复 AI Workbench」，双击它就能把缺的部分补齐；或者重新运行安装程序。"
+    ${EndIf}
+  ${EndIf}
 FunctionEnd

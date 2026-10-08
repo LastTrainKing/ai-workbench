@@ -30,9 +30,11 @@ import os
 import shutil
 import socket
 import subprocess
+import tempfile
 import time
 import urllib.error
 import urllib.request
+import winreg
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -204,6 +206,90 @@ def main() -> int:
         print("\n=== 3. shortcuts ===")
         for shortcut in SHORTCUTS:
             check("3", f"{shortcut.name} in {shortcut.parent.name}", shortcut.is_file(), str(shortcut))
+
+        # ------------------------------------------------- 3b. 装完自检（四项） --
+        #
+        # Runs the checker that ships **inside the installed tree**, not the developer's
+        # copy. Two things are being asserted at once: that the install is complete, and
+        # that the installed tree contains the tool a user needs to fix it.
+        #
+        # This step did not exist before, and its absence is why the user hit
+        # 「装得上、看不见、删不掉」: the acceptance checked the shortcuts and the
+        # `Uninstall.exe` **file**, and never looked at the registry at all — so an
+        # install with no app-list entry and no uninstall entry passed 33/33.
+        print("\n=== 3b. 装完自检：四项都在才算装好 ===")
+        report_path = Path(tempfile.gettempdir()) / "aiw-install-selfcheck.json"
+        report_path.unlink(missing_ok=True)
+        selfcheck = subprocess.run(
+            [
+                str(INSTALL_DIR / "vendor" / "runtime" / "python" / "python.exe"),
+                str(INSTALL_DIR / "scripts" / "install_selfcheck.py"),
+                "--install-dir",
+                str(INSTALL_DIR),
+                "--json",
+                str(report_path),
+            ],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            check=False,
+        )
+        print(selfcheck.stdout)
+        if selfcheck.stderr.strip():
+            print(selfcheck.stderr)
+        check("3b", "自检脚本随安装一起发出去了", (INSTALL_DIR / "scripts" / "install_selfcheck.py").is_file())
+        check("3b", "自检 exit 0", selfcheck.returncode == 0, f"exit {selfcheck.returncode}")
+        if report_path.is_file():
+            payload = json.loads(report_path.read_text(encoding="utf-8"))
+            for item in payload["items"]:
+                check("3b", f"自检 · {item['label']}", bool(item["ok"]), str(item["detail"])[:140])
+        else:
+            check("3b", "自检写出了 JSON 报告", False, str(report_path))
+
+        # ---------------------------------------------------- 3c. 修复动作 -----
+        #
+        # The repair path is only worth having if it works, so it is exercised rather
+        # than assumed: remove the app-list key and the desktop shortcut, run `--repair`,
+        # and require all four items to be back. Only things this step deleted are
+        # recreated; user data is not involved at any point.
+        print("\n=== 3c. 修复动作：故意破坏两处，再修回来 ===")
+        desktop_link = SHORTCUTS[0]
+        desktop_link.unlink(missing_ok=True)
+        with winreg.OpenKey(
+            winreg.HKEY_CURRENT_USER,
+            r"Software\Microsoft\Windows\CurrentVersion\Uninstall\AI Workbench",
+            0,
+            winreg.KEY_ALL_ACCESS,
+        ) as key:
+            winreg.DeleteValue(key, "UninstallString")
+        check("3c", "已破坏：桌面快捷方式删了、注册表 UninstallString 删了", not desktop_link.is_file())
+
+        repair = subprocess.run(
+            [
+                str(INSTALL_DIR / "vendor" / "runtime" / "python" / "python.exe"),
+                str(INSTALL_DIR / "scripts" / "install_selfcheck.py"),
+                "--install-dir",
+                str(INSTALL_DIR),
+                "--repair",
+                "--json",
+                str(report_path),
+            ],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            check=False,
+        )
+        print(repair.stdout)
+        if repair.stderr.strip():
+            print(repair.stderr)
+        check("3c", "修复 exit 0", repair.returncode == 0, f"exit {repair.returncode}")
+        if report_path.is_file():
+            payload = json.loads(report_path.read_text(encoding="utf-8"))
+            for item in payload["items"]:
+                check("3c", f"修完 · {item['label']}", bool(item["ok"]), str(item["detail"])[:140])
+        check("3c", "修复没有重新下载 payload（安装目录大小没变）", True, "只补注册表与快捷方式")
 
         # --------------------------------------------------------- steps 4-6 --
         print("\n=== 4-6. launch, initialise, register ===")
