@@ -26,6 +26,7 @@ import {
 import { Badge, Card, CardBody, CardHeader, PageContainer, SectionHeader } from '@/components/ui/primitives'
 import { Button } from '@/components/ui/Button'
 import { ErrorState, InlineAlert, LoadingBlock } from '@/components/ui/feedback'
+import { Switch } from '@/components/ui/form'
 import { agentApi } from '@/lib/agentApi'
 import type { AgentPermissions, Capability, ToolRow } from '@/lib/agentApi'
 import { toApiError } from '@/lib/api'
@@ -287,28 +288,12 @@ export default function AgentPermissionsPage() {
                       {capability.tools.length > 4 && ' …'}
                     </p>
                   </div>
-                  <button
-                    type="button"
-                    role="switch"
-                    aria-checked={capability.user_enabled}
+                  <Switch
+                    checked={capability.user_enabled}
                     disabled={busy}
-                    onClick={() =>
-                      toggleCapability.mutate({ [capability.key]: !capability.user_enabled })
-                    }
-                    className={cn(
-                      'mt-1 h-5 w-9 shrink-0 rounded-full border transition-colors disabled:opacity-50',
-                      capability.user_enabled
-                        ? 'border-accent/60 bg-accent/40'
-                        : 'border-border bg-inset',
-                    )}
-                  >
-                    <span
-                      className={cn(
-                        'block size-3.5 rounded-full bg-text transition-transform',
-                        capability.user_enabled ? 'translate-x-[18px]' : 'translate-x-[2px]',
-                      )}
-                    />
-                  </button>
+                    onChange={(next) => toggleCapability.mutate({ [capability.key]: next })}
+                    className="mt-1"
+                  />
                 </div>
               )
             })}

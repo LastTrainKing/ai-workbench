@@ -129,6 +129,51 @@ export const SearchInput = forwardRef<HTMLInputElement, SearchInputProps>(functi
 
 /* ------------------------------------------------------------------ switch */
 
+/**
+ * Switch geometry, in one place, derived rather than written out.
+ *
+ * ## What was wrong
+ *
+ * The knob was positioned with `top-[2px]` and nothing else — no `left` — plus
+ * `translate-x-[2px]` / `translate-x-[16px]`. That reads as "2px from the left, then slide
+ * 16px", and the author's arithmetic was `2 + 16 + 14 = 32`, i.e. exactly the track width.
+ * **The measured result was nothing like it.** The knob's own rect, in the two states:
+ *
+ *     关   左 17   右  -1        开   左 31   右 -15
+ *
+ * 15px further right than intended, in both states, which is why the knob crossed the
+ * track's right edge. Two separate mistakes stacked:
+ *
+ * 1. **An absolutely positioned box with `left: auto` uses its static position.** A
+ *    `<button>` centres its content (`text-align: center`), so that position is the
+ *    *centre* of the track — measured at 15px, not 0. Every offset was therefore added to
+ *    15. Fixed by giving the knob an explicit `left`, which removes the static position
+ *    from the question entirely.
+ *
+ * 2. **The knob lives in the track's padding box, not its border box.** The track has a
+ *    1px border, so the space the knob can move in is 30px wide, not 32. `2 + 16 + 14`
+ *    was 2px more than the room that exists even before the static-position error.
+ *
+ * ## The numbers
+ *
+ * Everything below is computed from `KNOB` and `INSET`, so changing one of them moves
+ * everything else with it. The old version had three literals that had to agree and did
+ * not; that is the whole bug.
+ *
+ *     轨道 32×20，边框 1 → 内边距盒 30×18，滑块 14，留白 2
+ *     关  左 2  右 14        开  左 14  右 2        纵向 上 2  下 2
+ */
+const KNOB = 14
+const INSET = 2
+const BORDER = 1
+const TRACK_WIDTH = 32
+// 20 rather than 18: `INSET + KNOB + INSET` is 18, and the track needs a 1px border on
+// top of that. At 18 the bottom gap was 0 — the knob sat on the bottom edge, which is the
+// same mistake as the horizontal one, in the other axis.
+const TRACK_HEIGHT = INSET * 2 + KNOB + BORDER * 2
+//: How far the knob travels. This is what `translate-x-[16px]` was trying to be.
+const TRAVEL = TRACK_WIDTH - BORDER * 2 - KNOB - INSET * 2
+
 export interface SwitchProps {
   checked: boolean
   onChange: (checked: boolean) => void
@@ -154,13 +199,20 @@ export function Switch({ checked, onChange, label, description, disabled, classN
           'disabled:cursor-not-allowed disabled:opacity-50',
           checked ? 'border-transparent bg-accent' : 'border-strong bg-elevated',
         )}
-        style={{ height: 18, width: 32 }}
+        style={{ height: TRACK_HEIGHT, width: TRACK_WIDTH }}
       >
         <span
-          className={cn(
-            'absolute top-[2px] size-3.5 rounded-full bg-white transition-transform duration-150',
-            checked ? 'translate-x-[16px]' : 'translate-x-[2px]',
-          )}
+          data-testid="switch-knob"
+          className="absolute rounded-full bg-white transition-transform duration-150"
+          style={{
+            width: KNOB,
+            height: KNOB,
+            top: INSET,
+            // Explicit, and this is the fix. With `left: auto` the knob started from the
+            // button's centred static position (15px) instead of the padding box origin.
+            left: INSET,
+            transform: `translateX(${checked ? TRAVEL : 0}px)`,
+          }}
         />
       </button>
       {label || description ? (
