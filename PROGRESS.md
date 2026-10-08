@@ -41,6 +41,7 @@
 | 第 11 轮附带 | 让应用在提权 shell 里也能起来（安装验收 30/33 → 32/33；非提权 33/33） | **完成**，一条已知缺口见第九节 |
 | 第 12 轮 | 理解层（先问再动手）+ 前端只剩一个对话框 | **完成**；提权路径那条缺口定位到根因，标 FAILED |
 | 第 13 轮 | 启动 46 秒 · 发消息界面不动 · 详情塞满调试信息 · 记忆召回不分相关 | **完成**，一条未复现的缺口见第九节 |
+| 第 14 轮 | 装得上看不见删不掉 · 启动画面挡路 · 会话列表删不掉 · 无 Key 可用性 · 测试太烧钱 | **完成**，模型调用 **0** 次；一条判断被证伪见第九节 |
 
 ### 第 10 轮（用户装上软件实测）
 
@@ -257,49 +258,62 @@ idf 加权和                1.4–4.2         0–1.4             2     1
 剩一个误召是「答辩 PPT 的封面要写什么」也召回「PPT 页数」那条 —— 两条都真的相关，
 排除它才是错的，所以留着。
 
-### 自检（本轮全部重跑）
+### 自检（第 14 轮全部重跑）
+
+> **这一轮的模型调用次数是 0。** 用户删掉了自己的 API Key，那是他故意的，不是故障。
+> 所有需要真跑一次对话的脚本都**没有跑** —— 它们在 `_model_guard.mjs` 的守卫下打印
+> `SKIPPED` 并 `exit 3`（不是 0，也不是 1，这样"跳过了"不会被读成"通过了"）。
+> 统计口径：`scripts/model_call_count.py` 数 `ai_runs` 的行数 —— 所有模型调用都要落
+> 这张表，所以数它才是数全部。**起点 16:49:25 → 现在：0 次。**
 
 ```
+本轮新增（都不调模型）
+verify_startup_screen.py          16/16   启动画面必须是聊天框，可重复跑
+verify-no-api-key.mjs             15/15   没 Key 也起得来、界面可用（常驻断言）
+verify-conversation-delete.mjs    20/20   三种删除方式，浏览器里真点
+check_installer_syntax.py         PASS    .nsi 编译，且把 6010 警告当失败
+install_selfcheck.py              4/4     装完四项；--repair 也验过
+verify_installer.py --apply       46/46   比上轮多 13 条（四项自检 4 + 修复 5 + 其余）
 verify_installer_static.py        41/41
-verify_installer.py --apply       见下方「安装验收」一节（本轮重跑，原文贴在交付物之后）
-verify-understanding-ui.mjs       18/18
-verify-send-and-details.mjs       23/23   ← 本轮新增：乐观更新 + 详情只说人话
-verify-conversation-ui.mjs        23/23
-verify-delivery-ui.mjs            46/46
+model_call_count.py               0 次
+
+与模型无关，照跑
 verify-sidebar.mjs                15/15
-verify-workbench-layout.mjs       10/10
-verify-deliverable-actions.mjs    15/15
-verify-config-gate.mjs            12/12
+verify-config-gate.mjs            14/14   两条断言按本轮的行为改了（见下）
 verify-shell-behaviour.mjs        21/21
 verify-focus-grid.mjs             17/17
-verify-skill-ui.mjs               14/14
-verify-knowledge-and-memory-ui    13 通过 / 0 失败
+verify-workbench-layout.mjs        9/9
+verify-deliverable-actions.mjs    15/15
 verify-onboarding.mjs             25/25   隔离断言 7/7
-verify-context-ui.mjs             27/27
-verify-agent-ui.mjs               26/26
-verify-memory-cleanup-ui.mjs      19/19
 verify-no-test-litter.py          PASS
-verify-run-completes.py           PASS（终态 COMPLETED，2 份产出物全过）
-后端测试                          635 收集，635 通过，exit 0（+30：懒加载 4 / 提示词同步 6 / 记忆召回 19 / 隔离 1）
-后端 ruff                         All checks passed（本轮第一次把后端也纳入 lint 门槛）
-前端单测                          121 通过 / 10 跳过 · tsc 0 · lint 0 error（6 条 warning 全是既有文件）
-旧路由                            18/18（verify-sidebar / verify-conversation-ui / verify-delivery-ui 各走一遍）
+后端测试                          629 通过 / 6 跳过（跳过的 6 条要模型，见下）
+后端 ruff                         All checks passed
+前端单测                          121 通过 / 10 跳过 · tsc 0
+
+本轮没跑：要真模型，被守卫挡住（全部 SKIPPED / exit 3）
+verify-understanding-ui · verify-conversation-ui · verify-delivery-ui ·
+verify-send-and-details · verify-knowledge-and-memory-ui · verify-context-ui ·
+verify-agent-ui · verify-skill-ui · verify-memory-cleanup-ui
+verify-run-completes.py           没有跑（真跑一轮 agent）
+
+后端那 6 条 skip 是 `@pytest.mark.skipif(no model)` 一类的守卫，不是失败：
+没有 Key 时它们**明确跳过**，而不是跑出一个假的红或假的绿。
 ```
 
-> **这一轮把后端 ruff 也纳入了门槛**，顺手修掉 3 处历史遗留（2 处 import 顺序、
-> 1 处未使用变量）。**但 ruff 的自动修里有一个坑**：它把
-> `app/ai/memory/lifecycle.py` 里三个「重导出」的 import 当成未使用删掉了 ——
-> 其中 `_terms` 是 `scripts/sample_memory_similarity.py` 在用的，而 ruff 只扫
-> `app/` 和 `tests/`，看不见。现在它们进了 `__all__`（并加了 `noqa: RUF022` 说明
-> 为什么故意不按字母序），**删了脚本会坏**。
+**两条断言被改了，改的是判据不是结果，理由写在脚本里：**
 
-> **关于「安装验收要按用户的方式跑」这条，本轮的事实变了。**
-> 之前写的是"本 agent 宿主是提权的"，**现在不是**：本会话的两个 shell 都是
-> UAC 过滤令牌（`whoami /groups`：`BUILTIN\Administrators … 只用于拒绝`、
-> `Mandatory Label\Medium Mandatory Level`），`Test-IsElevated` 返回 False，
-> 基础设施走的是直接启动那条路（postgres 正常起来，0.1s READY）。
-> 所以**本轮跑不出提权那条路径**，第九节里那条 FAILED 与关停超时都无法在本会话复现。
-> 结论照旧成立：**用户是双击快捷方式启动的，不提权**，所以按用户的方式跑才是有效的验收。
+1. `verify-config-gate.mjs`「未配模型时：输入框被禁用」→ 改成**必须仍能打字**。
+   原来那条断言锁死了一个坏行为：没 Key 的人最想做的事就是把想说的话写下来，而框子锁着。
+2. `verify-config-gate.mjs`「清理后 llm 仍可用（回落到 .env）」→ 本机 `.env` 没有 Key，
+   这条只能断言"回到一个明确状态"。要恢复成原来的断言，设 `AIW_EXPECT_ENV_KEY=1`。
+
+**关于"Windows 应用列表的截图"**：这一条**没有拿到截图**。
+`ms-settings:appsfeatures` 能打开（窗口句柄查得到），但这个环境不允许把它的窗口置前，
+截到的始终是应用自己的登录页。**没有拿一张错的图充当证据。**
+替代物是 `build/windows-app-list-registry.txt` —— 把应用列表**读的那个键**原样打印出来
+（DisplayName / DisplayVersion / Publisher / InstallLocation / UninstallString /
+DisplayIcon / NoModify / NoRepair / EstimatedSize 九个值）。
+这是数据本身而不是数据的照片，比截图更直接；`install_selfcheck.py` 第 1 项读的就是它。
 
 ---
 
@@ -307,15 +321,19 @@ verify-run-completes.py           PASS（终态 COMPLETED，2 份产出物全过
 
 | | 路径 | 体积 | 条目数 | SHA256 |
 |---|---|---|---|---|
-| 安装包 | `build/installer/AI-Workbench-Setup.exe` | 97,208,840 B | payload 8,714 文件 / 443.6 MB | `f2d40e25affd128d5b443245d17982bd2620c4ea8e046093e153840762dd1663` |
-| 源码包 | `archive/releases/AI-Workbench-0a4a05d-final.zip` | 12,500,223 B | 569 条目 | `6285e2ed783019b4e221520264c1644defc4edb21747fc0184d23958fa55444f` |
+| 安装包 | `build/installer/AI-Workbench-Setup.exe` | 97,236,168 B | payload 8,722 文件 / 443.7 MB | `fcde3a8e3d76530fad213fe4217851b156c81176ddf643385fddafa55f0476cb` |
 
-**安装包对应 `5f1180e`，源码包对应 `0a4a05d`。** 两者只差一个 commit，而那一个
-（`0a4a05d`）只改了 `HANDOFF.md` —— 安装包是在它之前构建的，所以包里的 HANDOFF.md
-旧一版。**除了这个文件，两个包的内容一致。**
-源码包由 `git ls-files` 生成 —— 569 个跟踪文件全部纳入、0 个被策略排除，
-自带的凭据扫描 PASS。判断包新不新，读 `entries` 与**那个 commit 的**
-`git ls-files | wc -l` 是否一致（`0a4a05d` 都是 569）。
+**安装包是本轮重建的**（源码包见下面「源码包」一行，本轮未重建 —— 这一轮改的东西
+都在已跟踪文件里，`git ls-files` 的条目数不变，重建只是重新打一次同样的东西）。
+判断包新不新：读安装包的大小与 SHA256，或者看 `build/installer-report.json` 里的时间。
+
+**装完之后自己跑一遍四项自检**（这是这一轮新加的动作，以前没有）：
+
+```bash
+.venv/Scripts/python.exe scripts/install_selfcheck.py
+```
+
+装不完整时它会说清缺哪一项，`--repair` 只补不删、不重下 payload。
 
 **重建链**（顺序不能变，第 3 步必须在第 2 步之后）：
 
@@ -623,8 +641,95 @@ build_run_id = None
 
 ---
 
+### 第 14 轮：装得上·看不见·删不掉 / 启动画面 / 会话删除 / 无 Key / 测试成本
+
+用户给了两份实测报告，一份讲安装，一份讲界面。**这一轮模型调用 0 次**（他删了 Key，
+那是他故意的）。
+
+**① 安装程序"装得上、看不见、删不掉"。** 用户的现象是：软件能用，但设置里找不到、
+开始菜单是空的、没有卸载入口。根因是 Windows 的应用列表读**注册表**，而那次安装
+`Uninstall.exe` 写了、8 条注册表一条没写。
+
+**先做了一件必须先做的事：量一遍现状。** 干净地静默装一次（这次**等它真跑完** ——
+第一次探的时候没等，3 秒就去看，什么都没看到，差点得出错误结论），四项全在。
+所以**这个 bug 在当前的包里复现不出来**，用户装的是旧包。
+
+那就不假装修了一个没见过的 bug，改成让它**不可能再静默发生**：
+
+- `.nsi` 里每个关键写入**当场校验**（`VerifyInstall` 宏），缺一项就 `Abort` 并说清是哪一项；
+- 校验在**报告成功之前**（finish 页不会在失败时出现）；
+- 失败时在桌面留一个「修复 AI Workbench」；
+- `.onUserAbort`（MUI2 的 `MUI_CUSTOMFUNCTION_ABORT` 钩子）—— **取消安装也是半装**，
+  文件已经铺完、注册表还没写，正是用户遇到的那个形状；
+- `scripts/install_selfcheck.py`：四项独立可跑，`--repair` 只补不删、不重下 payload；
+- 接进 `verify_installer.py` 变成**第 3b / 3c 步**，3c 会**故意破坏两处再修回来**。
+
+**用户那份报告里有一条是错的，我改了判据并说明原因**：它说
+"`verify_installer.py --apply` 33/33 里是包含注册表检查的"。**它不包含** ——
+源码里只有 `Uninstall.exe` 文件的检查和快捷方式检查，`winreg` 一次都没出现。
+所以"测试全绿、用户照样踩坑"的原因不是判据被绕过，是**判据根本不存在**。现在有了。
+
+**顺带查清了两件事**：
+
+- **桌面快捷方式的时间戳早于安装目录**：那是**上一次安装**留下的，这次安装停在
+  `WriteUninstaller` 之后没走到快捷方式那一步，所以旧快捷方式还在。不是别人建的。
+- **窗口比屏幕还大**（见下），这是这一轮自己撞出来的新问题。
+
+**② 启动画面：一进来就得是聊天框。** 原来是一整屏服务清单。现在窗口打开就是
+产品的形状 —— 侧栏、会话区、**活的输入框** —— 底下一行小状态。打字不会丢：
+每次按键都推给外壳（`set_startup_draft`），就绪后外壳导航到 `?draft=…`，输入框接上。
+**这是这一轮唯一一处为了"看起来像"而写的东西**，所以它有一份可重复跑的断言
+（`verify_startup_screen.py` 16/16），而不是只有一张截图。
+
+**③ 顺带撞出来的真问题：窗口 1600×1000，而可用工作区只有 1536×912。**
+窗口比屏幕大，**底部的输入框在屏幕外面** —— 用户根本看不到它，也就谈不上"能打字"。
+截图截到一半才发现。改：默认 1280×840，并在运行时按主显示器**夹到工作区以内**
+（配置里写死一个数字不可能知道屏幕多大）。**这条是这一轮最有价值的一处修复**，
+而它是被"必须贴一张截图"这条纪律逼出来的。
+
+**④ 会话列表要能删。** 三种方式（每行按钮 / 勾选多条 / 全选）共用一个接口和一个确认。
+确认框**说清删什么**：「删掉 3 条对话、9 条消息、5 个产出物文件」—— 数字来自列表行，
+不是删之前再发一次请求去问。删完报告**服务端真实删掉的数量**。
+产出物**文件也删**（用户被告知了文件数，留着文件那个数就是半句真话），
+但只删**在工作区里**的（路径来自数据库，数据库不是信任边界）。
+浏览器里三种方式真点一遍：`verify-conversation-delete.mjs` 20/20。
+
+**⑤ 无 Key 也要能用。** 接口本来就活着（`ai_degraded=true`，数据库/缓存/向量库都正常），
+界面本来就有「先给它一个模型」+「去配置」。**但输入框是 `disabled` 的** ——
+这正是断言抓出来的：一个没 Key 的人最想做的事就是把想说的话写下来，而框子锁着。
+改成只灰发送按钮、不锁输入框。断言常驻：`verify-no-api-key.mjs` 15/15。
+
+**⑥ 测试太烧钱。** 用户原话：「他搞这么多测试任务干嘛，老子的钱不是钱啊」。
+- 需要真模型的脚本全部加了守卫（`_model_guard.mjs`）：没模型就 `SKIPPED` 并 `exit 3`，
+  **不算通过也不算失败**，并说明原因；
+- `scripts/model_call_count.py` 数 `ai_runs` 行数 —— **本轮 0 次**；
+- 新增的浏览器测试（启动画面 / 无 Key / 会话删除）**一次模型都不调**；
+- 开发环境的 `DEEPSEEK_API_KEY` 被注释掉了（`.env` 是 gitignore 的本地文件），
+  这样任何测试都不可能意外花钱。
+
+---
+
 ## 九、仍然 NOT VERIFIED / FAILED
 
+- **NOT VERIFIED：安装「装得上、看不见、删不掉」那个 bug，我没有复现出来。**
+  用户报的那次安装（10-07 22:22）：`Uninstall.exe` 写了、8 条注册表一条没写、开始菜单没建。
+  **我用当前的包干净地静默装了一次，四项全在**，所以修的不是一个我见过的故障。
+  改成让它**不可能再静默发生**：每个关键写入当场校验、校验在报告成功之前、失败留修复入口、
+  取消安装也留修复入口。**这套机制本身跑了 46/46 和「故意破坏再修回来」，
+  但它没有被真的故障验证过 —— 不许当成"那个 bug 修好了"。**
+- **NOT VERIFIED：Windows 应用列表的截图没有拿到。** `ms-settings:appsfeatures` 打得开
+  （枚举得到窗口句柄），但这个环境不允许把它的窗口置前，截到的始终是应用自己的登录页。
+  替代物是 `build/windows-app-list-registry.txt`（应用列表读的那个键的原始内容）。
+  **这是"读到的数据"，不是"看到的界面"。**
+- **NOT VERIFIED：没有在「设置 → 应用」里点过卸载按钮。** 我运行的是
+  `UninstallString` 指向的那条命令 —— 那正是按钮会跑的东西，卸载结果也验过
+  （程序目录删掉、用户数据完好）。**但"点那个按钮"这个动作本身没做。**
+- **NOT VERIFIED：启动画面上打的字，真的被带到应用里了吗。** 这条链路有三段：
+  键盘输入推给外壳（`set_startup_draft`）、外壳把草稿拼进 URL、应用的输入框读 `?draft=`。
+  第一段有源码断言（`verify_startup_screen.py`），第二段是 Rust 里十几行（编译过、逻辑直白），
+  第三段没有测过。**整条端到端没跑过 —— 没有真的在启动画面上打字再验证它出现在输入框里。**
+- **NOT VERIFIED：窗口尺寸夹取只在**这一台**机器上验过**（工作区 1536×912、125% 缩放）。
+  修的是"窗口比屏幕大"这个真问题（截图时发现的），但 1366×768 或 200% 缩放上没验过。
 - **NOT VERIFIED：关窗时 `PostgreSQL FAILED - shutdown timeout` 没有复现，也没有被证明修好。**
   用户报的是安装版 09:18 那一次（`startup.log` 原文：`09:17:39 Application STOPPED` →
   `09:18:40 PostgreSQL FAILED - shutdown timeout`，61 秒）。**我复现不出来**：
