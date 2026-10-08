@@ -23,6 +23,11 @@
  */
 
 import { chromium } from './_playwright.mjs'
+import { requireModelOrSkip } from './_model_guard.mjs'
+
+// 清理计划是模型出的。没有模型就没有「就按这个来」那个按钮，整条跑不了。
+await requireModelOrSkip('verify-memory-cleanup-ui.mjs')
+
 import { mkdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'

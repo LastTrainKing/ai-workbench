@@ -205,10 +205,16 @@ async function main() {
 
       const profileAfter = await apiGet(page, '/profile', await tokenOf(page))
       const identityAfter = profileAfter?.data?.identity ?? ''
+      // The profile digest is written by the model. With no key (round 14: the user
+      // deleted theirs on purpose) it is legitimately empty, and asserting otherwise
+      // would be asserting that a key exists. The property that still has to hold without
+      // a model is that the confirm step **completes** — which the two checks above cover.
+      const profileNeedsModel = (await page.request.get(`${BASE}/api/v1/health/deps`).then((r) => r.json()).catch(() => null))
+        ?.data?.ai_degraded === true
       check(
-        '确认后档案真的写入了',
-        Boolean(identityAfter) && identityAfter !== identityBefore,
-        `identity="${identityAfter}"`,
+        profileNeedsModel ? '确认后档案留空是预期的（本机没有模型）' : '确认后档案真的写入了',
+        profileNeedsModel ? identityAfter === '' : Boolean(identityAfter) && identityAfter !== identityBefore,
+        `identity="${identityAfter}"${profileNeedsModel ? ' · 没有模型' : ''}`,
       )
       check('确认前档案是空的（判断权在用户手里）', identityBefore === '', `确认前 identity="${identityBefore}"`)
       await page.screenshot({ path: join(SHOTS, '07-path-a-home.png') })

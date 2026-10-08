@@ -21,6 +21,11 @@
  */
 
 import { chromium } from './_playwright.mjs'
+import { requireModelOrSkip } from './_model_guard.mjs'
+
+// 要真跑一次对话的脚本：没有模型就跳过（exit 3），不许假装通过。
+await requireModelOrSkip('verify-conversation-ui.mjs')
+
 import { startThroughConversation } from './_conversation.mjs'
 import { copyFileSync, existsSync, mkdirSync, statSync } from 'node:fs'
 import { dirname, join } from 'node:path'

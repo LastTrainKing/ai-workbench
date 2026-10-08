@@ -23,6 +23,11 @@
 
 import { chromium } from './_playwright.mjs'
 
+import { requireModelOrSkip } from './_model_guard.mjs'
+
+// 要真跑一次对话的脚本：没有模型就跳过（exit 3），不许假装通过。
+await requireModelOrSkip('verify-understanding-ui.mjs')
+
 const BASE = process.env.AWB_BASE ?? 'http://127.0.0.1:8000'
 const SHOTS = 'screenshots/ui-verification'
 const results = []

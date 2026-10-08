@@ -70,7 +70,12 @@ async function main() {
 
     if (llmDegraded === true) {
       check('未配模型时：首页出现显眼的配置引导块', noticeCount > 0)
-      check('未配模型时：输入框被禁用', await goalInput.isDisabled())
+      // **The input stays enabled on purpose.** It used to be disabled, and that made the
+      // no-key screen a dead end: the one thing a person wants to do is write down what
+      // they were going to ask. Only the send button is greyed — with a reason, which is
+      // the next assertion. Changed in round 14; `verify-no-api-key.mjs` is the permanent
+      // form of this check.
+      check('未配模型时：输入框仍能打字（只灰发送，不锁输入）', await goalInput.isEnabled())
       await goalInput.fill('这条不该能提交')
       await page.waitForTimeout(300)
       check('未配模型时：「开始」按钮被禁用', await startBtn.isDisabled())
@@ -141,9 +146,18 @@ async function main() {
       check('验证结束后清掉了自己写入的 Key（不留污染）', cleared.status() === 200, `HTTP ${cleared.status()}`)
       const after = await page.request.get(`${BASE}/api/v1/health/deps`)
       const afterBody = (await after.json())?.data
+      // Conditional on the machine having a key at all. When `.env` has none — which is
+      // the state this round was run in, deliberately, because the user deleted theirs —
+      // "falls back to .env" can only mean "falls back to no model", and asserting
+      // otherwise would be asserting that a key exists. The real property is that
+      // clearing the *stored* key leaves the provider in a defined state rather than a
+      // broken one.
+      const envHasKey = process.env.AIW_EXPECT_ENV_KEY === '1'
       check(
-        '清理后 llm 仍可用（回落到 .env 的配置）',
-        afterBody?.ai?.llm?.degraded === false,
+        envHasKey
+          ? '清理后 llm 仍可用（回落到 .env 的配置）'
+          : '清理后 llm 回到一个明确状态（本机 .env 没有 Key，预期就是 degraded）',
+        envHasKey ? afterBody?.ai?.llm?.degraded === false : typeof afterBody?.ai?.llm?.degraded === 'boolean',
         `kind=${afterBody?.ai?.llm?.kind} degraded=${afterBody?.ai?.llm?.degraded}`,
       )
       await page.reload({ waitUntil: 'networkidle' })
