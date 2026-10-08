@@ -139,6 +139,76 @@ Python/Java 的信号）。
 | PG READY 后 12s | 每条 `psql` 都没带 `-h`，默认连 `localhost` → 先试 `::1`，而 PG 只听 `127.0.0.1`，回退花 **2.06s/次**；provisioning 有 4-5 次 | `psql -U postgres -tAc "SELECT 1"` **2.13s** vs 加 `-h 127.0.0.1` **0.07s** |
 | Redis READY 后 7s | `Test-QdrantReady` 对**关闭的端口**探 3 个路径，每个等超时 | 端口先问一次（TCP 连接被拒 ~1ms），没在听就直接起 |
 
+### 冷启动 vs 第二次启动（**安装版**，用户要求的那条验收）
+
+`scripts/measure_startup.py`：装一份、清掉数据目录跑一次、再跑一次，两次的原始日志都贴出来。
+用户报的是 **46.2 秒**（他自己的日志：`09:16:24.80` → `09:17:11`）。
+
+**第一次（数据目录是空的，等于"装完第一次"）— 23.6s：**
+
+```
+16:14:30.16 ----- desktop start requested -----
+16:14:30.17 infrastructure: start requested
+16:14:30    Infrastructure STARTING
+16:14:31    PostgreSQL STARTING - initialising cluster      ← initdb
+16:14:39    PostgreSQL STARTING - port 5432
+16:14:41    PostgreSQL READY - 0.1s via pg_isready, schema 0.8s (created)
+16:14:41    Redis STARTING - port 6379
+16:14:42    Qdrant STARTING - port 6333
+16:14:43    Redis READY - 0s via redis-cli ping
+16:14:43    Qdrant READY - 0s via HTTP /healthz
+16:14:43    Infrastructure READY - 12.5s total
+16:14:43.34 api: start requested
+16:14:44    api STARTING - port 8000
+16:14:52    api READY - 7s via HTTP GET http://127.0.0.1:8000/api/v1/health
+16:14:53.03 confirming the API serves HTTP 200
+16:14:53.61 desktop startup complete
+```
+
+**第二次（数据目录还在，用户双击第二次）— 10.1s：**
+
+```
+16:15:18.11 ----- desktop start requested -----
+16:15:18.12 infrastructure: start requested
+16:15:18    Infrastructure STARTING
+16:15:19    PostgreSQL STARTING - port 5432                  ← 没有 initdb
+16:15:20    PostgreSQL READY - 0.1s via pg_isready, schema 0.1s (already set up)
+16:15:20    Redis STARTING - port 6379
+16:15:21    Qdrant STARTING - port 6333
+16:15:21    Redis READY - 0s via redis-cli ping
+16:15:22    Qdrant READY - 1s via HTTP /healthz
+16:15:22    Infrastructure READY - 3.7s total
+16:15:22.42 api: start requested
+16:15:23    api STARTING - port 8000
+16:15:26    api READY - 3s via HTTP GET http://127.0.0.1:8000/api/v1/health
+16:15:27.42 confirming the API serves HTTP 200
+16:15:28.09 desktop startup complete
+```
+
+**23.6s → 10.1s，第二次比第一次快 57%。** 两个数字都是从日志自己的时间戳算的
+（第一行到最后一行 `desktop startup complete`）。
+
+> **另一条口径，一并给出**：脚本从"启动 exe"到"health 返回 200"实测
+> **冷 34.4s / 热 20.4s**。比日志多出来的那 10 秒是 **exe 自己**的启动
+> （WebView2 冷启动 + 进程拉起 + 桌面壳 700ms 一次的轮询节奏），不在启动脚本的
+> 时间线里。**两个数都是真的，量的是不同的两段。** 日志那条是"服务要多久"，
+> 轮询那条是"用户从双击到能用要多久"。
+
+### 安装验收（新安装包，本会话非提权）
+
+```
+=== 7. force-kill the window; everything must go ===
+  [PASS] PostgreSQL port 5432 released
+  [PASS] Redis port 6379 released
+  [PASS] Qdrant port 6333 released
+  [PASS] API port 8000 released
+=== 33/33 passed ===
+```
+
+**这一条以前是红的**（提权路径下 32/33）。本会话两个 shell 都是 UAC 过滤令牌，
+所以跑的是用户那条路 —— **33/33，含 `PostgreSQL port 5432 released`**。
+第九节里那条 FAILED 说的是**提权**路径，本轮没有复现条件。
+
 **API 那一层也量了**（用户问「看时间花在哪」）：
 
 ```
@@ -237,12 +307,15 @@ verify-run-completes.py           PASS（终态 COMPLETED，2 份产出物全过
 
 | | 路径 | 体积 | 条目数 | SHA256 |
 |---|---|---|---|---|
-| 安装包 | `build/installer/AI-Workbench-Setup.exe` | 97,185,773 B | payload 8,710 文件 / 443.6 MB | `6baa4fe1631c039caf38ccfe88cdd5024e2d943fd5a44386aa709eed061bdc83` |
-| 源码包 | `archive/releases/AI-Workbench-0642ab4-final.zip` | 11,238,037 B | 556 条目 | `e71783efc20f8643962df38c8aa07e553c215476b38a101c8beb6ededa85f53c` |
+| 安装包 | `build/installer/AI-Workbench-Setup.exe` | 97,208,840 B | payload 8,714 文件 / 443.6 MB | `f2d40e25affd128d5b443245d17982bd2620c4ea8e046093e153840762dd1663` |
+| 源码包 | `archive/releases/AI-Workbench-0a4a05d-final.zip` | 12,500,223 B | 569 条目 | `6285e2ed783019b4e221520264c1644defc4edb21747fc0184d23958fa55444f` |
 
-两者都对应 `0642ab4`。源码包由 `git ls-files` 生成 —— 该 commit 的 556 个跟踪文件
-全部纳入、0 个被策略排除，自带的凭据扫描 PASS。判断包新不新，读 `entries` 与
-**那个 commit 的** `git ls-files | wc -l` 是否一致（`0642ab4` 都是 556）。
+**安装包对应 `5f1180e`，源码包对应 `0a4a05d`。** 两者只差一个 commit，而那一个
+（`0a4a05d`）只改了 `HANDOFF.md` —— 安装包是在它之前构建的，所以包里的 HANDOFF.md
+旧一版。**除了这个文件，两个包的内容一致。**
+源码包由 `git ls-files` 生成 —— 569 个跟踪文件全部纳入、0 个被策略排除，
+自带的凭据扫描 PASS。判断包新不新，读 `entries` 与**那个 commit 的**
+`git ls-files | wc -l` 是否一致（`0a4a05d` 都是 569）。
 
 **重建链**（顺序不能变，第 3 步必须在第 2 步之后）：
 
