@@ -45,11 +45,12 @@ export default function App() {
 
           <Route element={<RequireOnboarding />}>
             <Route element={<AppShell />}>
-              {/* `/` is the conversation. The four-area home it replaced still
-                  exists at `/home` rather than being deleted — nothing was removed
-                  to make the new screen look simpler, and the old routes all still
-                  resolve (verify-sidebar.mjs counts them). */}
+              {/* `/` is the conversation, and `/c/:id` is one that was reopened from the
+                  list. The four-area home it replaced still exists at `/home` rather than
+                  being deleted — nothing was removed to make the new screen look simpler,
+                  and the old routes all still resolve (verify-sidebar.mjs counts them). */}
               <Route index element={<ConversationPage />} />
+              <Route path="c/:id" element={<ConversationPage />} />
               <Route path="home" element={<HomePage />} />
               <Route path="dashboard" element={<DashboardPage />} />
               <Route path="workbench" element={<WorkbenchPage />} />

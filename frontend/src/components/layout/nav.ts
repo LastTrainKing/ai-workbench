@@ -11,7 +11,6 @@ import {
   Network,
   NotebookPen,
   Search,
-  Settings,
   ShieldCheck,
   SlidersHorizontal,
   Sparkles,
@@ -30,46 +29,62 @@ export interface NavItem {
 export interface NavSection {
   title: string
   items: NavItem[]
-  /**
-   * Start collapsed. Used for the section that holds the machinery — see the
-   * note on `NAV_SECTIONS` below.
-   */
   collapsible?: boolean
 }
 
 /**
- * The sidebar, ordered by how often a person actually needs each thing.
+ * True on the conversation screens — `/` and `/c/:id`.
  *
- * The rule behind the ordering and the wording: **the user should never have to
- * read the word "RAG", "vector", "runtime" or "tool registry"**. Those are the
- * engine room. What the user sees is: this is my AI, it knows me, it does things
- * for me, and I can see what it did.
- *
- * **Four entries, then everything else.** The user's complaint about the previous
- * arrangement was that it still read like a control panel: eight entries under
- * 工作, each one a different way of looking at the same work. A person who opens
- * this product wants to talk to it, look at what it knows about them, look at
- * their material, and change a setting — in that order. Everything else is for
- * looking into the system, and lives under 高级, collapsed.
- *
- * Nothing was deleted. Every old route still resolves and every page still exists
- * (`verify-sidebar.mjs` walks all seventeen of them); what changed is where they
- * sit and what they are called. Renaming a section is presentation. Deleting a
- * route would not be, which is why nothing below was deleted.
+ * One predicate rather than a `pathname === '/'` in each place that asks. Both routes are
+ * the same screen (one with a conversation open), so every "hide the engine room here"
+ * decision has to answer for both, and a second copy of the test is how one of them ends
+ * up forgotten — the right panel reappearing the moment you reopened something from the
+ * list.
  */
-export const NAV_SECTIONS: NavSection[] = [
+export function isConversation(pathname: string): boolean {
+  return pathname === '/' || pathname.startsWith('/c/')
+}
+
+/**
+ * Everything that is not the conversation, behind one gear.
+ *
+ * The user's instruction for this round:
+ *
+ *     把现在软件里的内核全部藏起来，前端最后就是一个对话框，
+ *     哪怕像微信 qq 一样都可以
+ *
+ * and, about the sidebar specifically:
+ *
+ *     左侧只有会话列表，不是 16 个菜单项。
+ *     记忆 / 知识库 / Skill / 设置 → 收进一个不显眼的入口（齿轮或头像菜单）
+ *
+ * So the sidebar is the conversation list and nothing else, and this is what the gear
+ * opens. **Nothing was deleted.** Every route below still resolves and every page still
+ * exists; `verify-sidebar.mjs` walks all of them from this menu, which is why the menu is
+ * a real list of links rather than a decoration.
+ *
+ * The wording rule is unchanged from the last round: the user should never have to read
+ * "RAG", "vector", "runtime" or "tool registry". Those are the engine room.
+ */
+export const MENU_SECTIONS: NavSection[] = [
   {
-    title: '对话',
+    title: '我的',
     items: [
-      { to: '/', label: '对话', icon: Home, hint: '说一件你想完成的事' },
-      { to: '/me', label: '我的', icon: UserCircle, hint: '它记住了什么、你在意什么' },
-      { to: '/knowledge', label: '资料', icon: Library, prefix: true, hint: '它可以从哪些材料里找' },
-      { to: '/settings', label: '设置', icon: SlidersHorizontal },
+      { to: '/me', label: '记忆与偏好', icon: UserCircle, hint: '它记住了什么' },
+      { to: '/knowledge', label: '知识库', icon: Library, prefix: true, hint: '它能从哪些材料里找' },
+      { to: '/skills', label: 'Skill', icon: Sparkles, prefix: true, hint: '它学会的做法' },
+    ],
+  },
+  {
+    title: '设置',
+    items: [
+      { to: '/settings', label: '模型与工作区', icon: SlidersHorizontal },
+      { to: '/settings/agent', label: '权限', icon: ShieldCheck },
     ],
   },
   {
     // Everything a user opens only when they want to understand or control the
-    // machinery. Collapsed by default so the four entries above stay scannable.
+    // machinery. Collapsed by default so the two sections above stay scannable.
     title: '高级',
     collapsible: true,
     items: [
@@ -83,17 +98,8 @@ export const NAV_SECTIONS: NavSection[] = [
       { to: '/chat', label: '问答', icon: Sparkles },
       { to: '/ai-runs', label: '执行记录', icon: Activity, prefix: true },
       { to: '/agent', label: 'Agent 控制台', icon: Bot, prefix: true },
-      { to: '/settings/agent', label: '权限', icon: ShieldCheck },
       { to: '/graph', label: '知识图谱', icon: Network },
       { to: '/home', label: '四区首页（旧）', icon: Home, hint: '上一版的首页，仍在' },
     ],
   },
 ]
-
-/**
- * Kept as a value so nothing that imports it breaks; not rendered in the sidebar.
- *
- * 设置 is one of the four main entries now, and listing it twice made the short
- * list look longer than it was — which is the thing this restructure was fixing.
- */
-export const SETTINGS_ITEM: NavItem = { to: '/settings', label: '设置', icon: Settings }

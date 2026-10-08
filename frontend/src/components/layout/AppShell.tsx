@@ -3,6 +3,7 @@ import { Outlet, useLocation } from 'react-router-dom'
 import { useUiStore } from '@/store/ui'
 import { Sidebar } from './Sidebar'
 import { TopBar } from './TopBar'
+import { isConversation } from './nav'
 import { ConnectionBanner } from '@/features/shell/ConnectionBanner'
 import { useConnection } from '@/features/shell/useConnection'
 import { RightPanel } from './RightPanel'
@@ -97,14 +98,17 @@ export function AppShell() {
   const connection = useConnection()
   const { pathname } = useLocation()
 
-  // The conversation screen has one job, and the right panel is the engine room:
-  // quick actions (all in the sidebar), recent AI runs with token counts and
-  // latencies, workspace counts, dependency badges. On every other page it is the
-  // right thing to have; on the one screen that is supposed to feel like talking to
-  // something, it is the console the user objected to. Hidden there, present
-  // everywhere else — and still one click away, because the toggle stays in the top
-  // bar on every page that shows it.
-  const showRightPanel = pathname !== '/'
+  // The conversation screens have one job, and the right panel is the engine room:
+  // quick actions (all in the menu), recent AI runs with token counts and latencies,
+  // workspace counts, dependency badges. On every other page it is the right thing to
+  // have; on the screens that are supposed to feel like talking to something, it is the
+  // console the user objected to. Hidden there, present everywhere else — and still one
+  // click away, because the toggle stays in the top bar on every page that shows it.
+  //
+  // Both conversation routes, not just `/`: `/c/:id` is the same screen with a
+  // conversation open, and leaving the panel on for it would mean the console reappeared
+  // the moment you reopened something from the list.
+  const showRightPanel = !isConversation(pathname)
 
   return (
     <div className="flex h-full overflow-hidden bg-base">

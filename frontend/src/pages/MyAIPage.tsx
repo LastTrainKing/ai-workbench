@@ -418,7 +418,9 @@ export default function MyAIPage() {
   })
 
   const pending = candidates.data?.candidates ?? []
-  const rows = memories.data?.memories ?? []
+  // Memoised because it is a `useMemo` dependency: `?? []` builds a new array on every
+  // render, which would make the grouping recompute every time and defeat the point.
+  const rows = useMemo(() => memories.data?.memories ?? [], [memories.data])
 
   // By kind, in the order the kinds are declared, so the groups do not shuffle
   // between renders. Empty kinds are dropped rather than shown as headings with

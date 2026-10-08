@@ -1,5 +1,15 @@
 import { NavLink } from 'react-router-dom'
-import { ChevronRight, LogOut, Moon, PanelLeftClose, PanelLeftOpen, Sparkles, Sun, X } from 'lucide-react'
+import {
+  ChevronRight,
+  LogOut,
+  Moon,
+  PanelLeftClose,
+  PanelLeftOpen,
+  Settings,
+  Sparkles,
+  Sun,
+  X,
+} from 'lucide-react'
 import { useState } from 'react'
 
 import { cn } from '@/lib/utils'
@@ -8,29 +18,78 @@ import { useUiStore } from '@/store/ui'
 import { useToastStore } from '@/store/toast'
 import { Avatar } from '@/components/ui/primitives'
 import { IconButton } from '@/components/ui/Button'
-import { NAV_SECTIONS, type NavItem } from './nav'
+import { ConversationList } from '@/features/conversation/ConversationList'
+import { MENU_SECTIONS, type NavItem } from './nav'
 
-function NavEntry({ item, collapsed, onNavigate }: { item: NavItem; collapsed: boolean; onNavigate: () => void }) {
+function NavEntry({ item, onNavigate }: { item: NavItem; onNavigate: () => void }) {
   const Icon = item.icon
   return (
     <NavLink
       to={item.to}
       end={!item.prefix}
       onClick={onNavigate}
-      title={collapsed ? item.label : undefined}
       className={({ isActive }) =>
         cn(
-          'group flex items-center gap-2.5 rounded-md px-2 py-1.5 text-sm transition-colors',
-          collapsed && 'justify-center px-0',
+          'flex items-center gap-2.5 rounded-md px-2 py-1.5 text-[13px] transition-colors',
           isActive
             ? 'bg-accent-soft font-medium text-accent'
             : 'text-muted hover:bg-elevated hover:text-primary',
         )
       }
     >
-      <Icon className="size-4 shrink-0" />
-      {!collapsed ? <span className="truncate">{item.label}</span> : null}
+      <Icon className="size-3.5 shrink-0" />
+      <span className="truncate">{item.label}</span>
     </NavLink>
+  )
+}
+
+/**
+ * Everything that is not the conversation, behind one gear.
+ *
+ * See `nav.ts` for why this exists and what the user asked for. The menu is a real list of
+ * links — every route it names still resolves — rather than a set of labels that go
+ * nowhere, which is the shape a "we hid the menus" change usually takes.
+ */
+function MenuPanel({ onNavigate }: { onNavigate: () => void }) {
+  const [openSections, setOpenSections] = useState<Record<string, boolean>>({})
+
+  return (
+    <div
+      data-testid="app-menu"
+      className="aiw-scroll absolute bottom-2 left-2 z-30 max-h-[70vh] w-[210px] overflow-y-auto rounded-xl border border-border bg-surface p-2 shadow-lg"
+    >
+      {MENU_SECTIONS.map((section) => {
+        const closed = Boolean(section.collapsible) && !openSections[section.title]
+        return (
+          <div key={section.title} className="mb-1.5 last:mb-0">
+            {section.collapsible ? (
+              <button
+                type="button"
+                onClick={() =>
+                  setOpenSections((prev) => ({ ...prev, [section.title]: !prev[section.title] }))
+                }
+                aria-expanded={!closed}
+                className="mb-1 flex w-full items-center gap-1 px-2 text-2xs font-semibold uppercase tracking-wider text-faint transition-colors hover:text-muted"
+              >
+                <ChevronRight className={cn('size-3 transition-transform', !closed && 'rotate-90')} />
+                {section.title}
+              </button>
+            ) : (
+              <p className="mb-1 px-2 text-2xs font-semibold uppercase tracking-wider text-faint">
+                {section.title}
+              </p>
+            )}
+            {!closed ? (
+              <div className="space-y-0.5">
+                {section.items.map((item) => (
+                  <NavEntry key={item.to} item={item} onNavigate={onNavigate} />
+                ))}
+              </div>
+            ) : null}
+          </div>
+        )
+      })}
+    </div>
   )
 }
 
@@ -41,76 +100,53 @@ function SidebarBody({ collapsed, onNavigate }: { collapsed: boolean; onNavigate
   const toggleTheme = useUiStore((state) => state.toggleTheme)
   const toggleSidebar = useUiStore((state) => state.toggleSidebar)
   const toast = useToastStore((state) => state.success)
-
-  // Collapsible sections start closed: the point is that the first three
-  // sections stay scannable without the machinery competing for attention.
-  const [openSections, setOpenSections] = useState<Record<string, boolean>>({})
-  const toggleSection = (title: string) =>
-    setOpenSections((prev) => ({ ...prev, [title]: !prev[title] }))
-  /** A section is closed unless the user has opened it. */
-  const isClosed = (section: { title: string; collapsible?: boolean }) =>
-    Boolean(section.collapsible) && !openSections[section.title]
+  const [menuOpen, setMenuOpen] = useState(false)
 
   return (
-    <div className="flex h-full flex-col bg-surface">
+    <div className="relative flex h-full flex-col bg-surface">
       {/* brand */}
-      <div className={cn('flex h-12 shrink-0 items-center gap-2 border-b border-subtle px-3', collapsed && 'justify-center px-0')}>
+      <div
+        className={cn(
+          'flex h-12 shrink-0 items-center gap-2 border-b border-subtle px-3',
+          collapsed && 'justify-center px-0',
+        )}
+      >
         <span className="flex size-6 shrink-0 items-center justify-center rounded bg-accent text-accent-fg">
           <Sparkles className="size-3.5" />
         </span>
         {!collapsed ? (
-          <span className="truncate text-sm font-semibold tracking-tight text-primary">AI Workbench</span>
+          <span className="truncate text-sm font-semibold tracking-tight text-primary">
+            AI Workbench
+          </span>
         ) : null}
       </div>
 
-      {/* nav */}
-      <nav className="aiw-scroll flex-1 space-y-4 px-2 py-3">
-        {NAV_SECTIONS.map((section) => {
-          const closed = isClosed(section)
-          return (
-          <div key={section.title}>
-            {!collapsed ? (
-              section.collapsible ? (
-                <button
-                  type="button"
-                  onClick={() => toggleSection(section.title)}
-                  aria-expanded={!closed}
-                  className="mb-1 flex w-full items-center gap-1 px-2 text-2xs font-semibold uppercase tracking-wider text-faint transition-colors hover:text-muted"
-                >
-                  <ChevronRight
-                    className={cn('size-3 transition-transform', !closed && 'rotate-90')}
-                  />
-                  {section.title}
-                </button>
-              ) : (
-                <p className="mb-1 px-2 text-2xs font-semibold uppercase tracking-wider text-faint">
-                  {section.title}
-                </p>
-              )
-            ) : (
-              <div className="mx-2 mb-1.5 h-px bg-subtle" />
-            )}
-            {/* A collapsed section still renders its entries in the DOM when the
-                sidebar itself is icon-only, because the icons are the only
-                navigation available at that width. */}
-            {(collapsed || !closed) && (
-              <div className="space-y-0.5">
-                {section.items.map((item) => (
-                  <NavEntry key={item.to} item={item} collapsed={collapsed} onNavigate={onNavigate} />
-                ))}
-              </div>
-            )}
-          </div>
-          )
-        })}
-      </nav>
+      <ConversationList collapsed={collapsed} onNavigate={onNavigate} />
+
+      {menuOpen ? (
+        <>
+          {/* Click-away. A menu that only closes by clicking its own button is a trap. */}
+          <button
+            type="button"
+            aria-label="关闭菜单"
+            className="absolute inset-0 z-20 cursor-default"
+            onClick={() => setMenuOpen(false)}
+          />
+          <MenuPanel onNavigate={onNavigate} />
+        </>
+      ) : null}
 
       {/* footer */}
       <div className="shrink-0 border-t border-subtle p-2">
-        {/* No settings entry here any more. It is one of the four main entries,
-            and a second copy made the short list read as a long one — which is the
-            complaint this restructure answers. */}
         <div className={cn('flex items-center gap-1', collapsed && 'flex-col')}>
+          <IconButton
+            label="菜单"
+            size="xs"
+            data-testid="open-app-menu"
+            onClick={() => setMenuOpen((v) => !v)}
+          >
+            <Settings className="size-3.5" />
+          </IconButton>
           <IconButton label="切换主题" size="xs" onClick={toggleTheme}>
             {theme === 'dark' ? <Sun className="size-3.5" /> : <Moon className="size-3.5" />}
           </IconButton>

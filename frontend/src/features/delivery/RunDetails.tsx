@@ -37,7 +37,22 @@ const TIER_LABELS: Record<string, string> = {
   general: '通用路径',
 }
 
-export function RunDetailsFold({ run, steps }: { run: BuildRun; steps: PlanStep[] }) {
+export function RunDetailsFold({
+  run,
+  steps,
+  retrieval,
+}: {
+  run: BuildRun
+  steps: PlanStep[]
+  /**
+   * Which rung of the retrieval ladder answered, when the caller already knows.
+   *
+   * A `start` message carries it from the understanding layer's own retrieval, so the
+   * fold shows the tier without asking again — one retrieval, one place it is recorded,
+   * and no second request that could disagree with the first.
+   */
+  retrieval?: { tier?: string; explanation?: string }
+}) {
   const [open, setOpen] = useState(false)
 
   const context = useQuery({
@@ -48,9 +63,12 @@ export function RunDetailsFold({ run, steps }: { run: BuildRun; steps: PlanStep[
   const tiers = useQuery({
     queryKey: ['retrieval', 'tiers', run.goal],
     queryFn: () => contextApi.tiers(run.goal),
-    enabled: open && run.goal.trim().length > 0,
+    enabled: open && !retrieval?.tier && run.goal.trim().length > 0,
     staleTime: 60_000,
   })
+
+  const tier = retrieval?.tier ?? tiers.data?.tier
+  const tierExplanation = retrieval?.explanation ?? tiers.data?.explanation
 
   const expanded = open || run.status === 'EXECUTING'
 
@@ -131,12 +149,17 @@ export function RunDetailsFold({ run, steps }: { run: BuildRun; steps: PlanStep[
 
         <section data-testid="panel-context">
           <p className="mb-1.5 text-[11px] uppercase tracking-wide text-faint">本次上下文</p>
-          {tiers.data && (
+          {tier && (
             <p className="mb-1.5 text-[11.5px] text-muted">
-              这次由「{TIER_LABELS[tiers.data.tier] ?? tiers.data.tier}」回答
-              {tiers.data.tier !== 'general' && (
+              这次由「{TIER_LABELS[tier] ?? tier}」回答
+              {tier !== 'general' && (
                 <span className="text-faint"> —— 没有走通用推理，用的是你自己的东西</span>
               )}
+            </p>
+          )}
+          {tierExplanation && (
+            <p className="mb-1.5 text-[11px] text-faint" data-testid="tier-explanation">
+              {tierExplanation}
             </p>
           )}
           {context.isLoading ? (

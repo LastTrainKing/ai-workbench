@@ -16,6 +16,7 @@ import { api } from '@/lib/api'
 import { cn } from '@/lib/utils'
 import { useUiStore } from '@/store/ui'
 import { IconButton } from '@/components/ui/Button'
+import { isConversation } from './nav'
 
 /** Honest status pill: the offline engine is always surfaced, never hidden. */
 export function ProviderBadge({ className }: { className?: string }) {
@@ -79,13 +80,16 @@ export function TopBar() {
   const toggleRightPanel = useUiStore((state) => state.toggleRightPanel)
   const setCommandPalette = useUiStore((state) => state.setCommandPalette)
 
-  // The conversation screen gets a minimal bar: model status, theme, settings. The
-  // global search box and the command-palette button are still there on every other
-  // page, and Ctrl+K still opens the palette from anywhere — this is the top bar
-  // matching the one screen that is supposed to feel like a chat window, not the
-  // search going away.
+  // The conversation screens get a minimal bar: model status, theme, settings. The global
+  // search box and the command-palette button are still there on every other page, and
+  // Ctrl+K still opens the palette from anywhere — this is the top bar matching the
+  // screens that are supposed to feel like a chat window, not the search going away.
+  //
+  // `isConversation`, not `pathname === '/'`: `/c/:id` is the same screen with a
+  // conversation open, and testing only the root brought the whole bar back the moment you
+  // reopened something from the list.
   const { pathname } = useLocation()
-  const minimal = pathname === '/'
+  const minimal = isConversation(pathname)
 
   const [query, setQuery] = useState('')
   const inputRef = useRef<HTMLInputElement>(null)
