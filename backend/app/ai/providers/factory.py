@@ -19,6 +19,7 @@ from typing import Any
 from app.ai.providers.base import EmbeddingProvider, LLMProvider
 from app.ai.providers.budget import reasoning_budget
 from app.ai.providers.deepseek import DeepSeekProvider
+from app.ai.providers.guard import guard
 from app.ai.providers.heuristic import (
     HeuristicEmbeddingProvider,
     HeuristicLLMProvider,
@@ -70,6 +71,20 @@ def _llm_cache_key(cfg: ResolvedAIConfig) -> str:
 
 
 def build_llm_provider() -> tuple[LLMProvider, ProviderInfo]:
+    """Return the configured chat provider, with the model-call guard applied.
+
+    **This is the public entry point, and the guard is here rather than at the call sites
+    on purpose.** The factory has a dozen returns — offline because there is no key,
+    offline because the provider is disabled, the real thing when it is configured — and a
+    guard applied at each one would be a guard that is missing from whichever branch
+    somebody adds next. Wrapping the single public function means every caller gets the
+    same behaviour without having to remember anything.
+    """
+    provider, info = _build_llm_provider()
+    return guard(provider, kind=info.kind), info
+
+
+def _build_llm_provider() -> tuple[LLMProvider, ProviderInfo]:
     """Return the configured chat provider, degrading honestly when unusable."""
     cfg = resolve()
     cache_key = _llm_cache_key(cfg)

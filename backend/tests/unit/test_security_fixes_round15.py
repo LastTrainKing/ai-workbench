@@ -298,3 +298,97 @@ def test_test_data_guard_allows_the_test_directory() -> None:
     from _test_data_guard import TEST_DATA_DIR, refuse_if_real
 
     assert refuse_if_real(TEST_DATA_DIR, who="test")
+
+
+# ---------------------------------------------------------------- model hard block --
+
+
+def test_the_model_call_guard_is_armed_under_pytest() -> None:
+    """The guard must not depend on a test remembering to set a flag.
+
+    An opt-in guard guards nothing: the run that forgets is the run that spends money.
+    Being under pytest is enough.
+    """
+    from app.ai.providers.guard import is_armed
+
+    assert is_armed(), "running under pytest and the model-call guard is not armed"
+
+
+@pytest.mark.asyncio
+async def test_the_offline_engine_is_not_blocked() -> None:
+    """The offline engine performs no network call, so it is not a model call.
+
+    The first version of the guard wrapped it too, and three integration tests that drive
+    the whole agent loop against the offline engine failed — correctly, because the guard
+    was blocking arithmetic. What must be blocked is anything that can leave the machine.
+    """
+    from app.ai.providers.factory import build_llm_provider
+    from app.ai.providers.guard import BlockedProvider
+
+    provider, info = build_llm_provider()
+    if info.kind == "offline":
+        assert not isinstance(provider, BlockedProvider), "the offline engine was blocked"
+    else:  # pragma: no cover - depends on the machine's configuration
+        assert isinstance(provider, BlockedProvider), "a network provider was not blocked"
+
+
+@pytest.mark.asyncio
+async def test_a_real_call_is_blocked_at_the_provider_boundary() -> None:
+    """`model_call_count.py` counts rows; this prevents the call.
+
+    A counter is evidence taken after the fact — a call that fails before writing its row
+    is invisible to it, and a script that posts to the API directly never touches the
+    table at all. The guard raises before any transport is touched.
+    """
+    from app.ai.providers.guard import ModelCallBlocked, blocked_count, guard
+
+    before = blocked_count()
+
+    class _NetworkProvider:
+        name = "deepseek"
+        model = "deepseek-chat"
+
+        async def chat(self, *args, **kwargs):  # pragma: no cover - must not be reached
+            raise AssertionError("the network provider was reached")
+
+    provider = guard(_NetworkProvider(), kind="deepseek")
+
+    with pytest.raises(ModelCallBlocked) as excinfo:
+        await provider.chat([])
+
+    assert "MODEL_CALL_BLOCKED" in str(excinfo.value)
+    assert blocked_count() == before + 1, "the attempt was not recorded"
+
+
+def test_the_guard_wraps_every_branch_of_the_factory() -> None:
+    """The guard is on the public entry point, not on each `return`.
+
+    The factory degrades to the offline provider for several different reasons and returns
+    the configured one otherwise. Wrapping each return would be a guard missing from
+    whichever branch is added next, so the wrapper is around the function.
+    """
+    from app.ai.providers import factory
+
+    source = inspect.getsource(factory.build_llm_provider)
+    assert "guard(provider, kind=info.kind)" in source
+    assert "_build_llm_provider()" in source, "the public function no longer delegates"
+
+
+def test_the_guard_does_not_fake_a_response() -> None:
+    """Blocked means blocked — not "answered from a canned string".
+
+    A guard that returns a plausible answer makes a blocked call look like a successful
+    one, which is the failure this project keeps writing comments about.
+
+    Checked through the mechanism rather than by looking for the word `raise` in `chat`:
+    `chat` delegates to `_refuse`, and it is `_refuse` that raises. The first version of
+    this test asserted on `chat`'s source and failed on its own indirection.
+    """
+    from app.ai.providers import guard as guard_module
+
+    chat_source = inspect.getsource(guard_module.BlockedProvider.chat)
+    assert "_refuse()" in chat_source, "chat no longer refuses"
+    assert "return" not in chat_source, "chat returns something instead of refusing"
+
+    refuse_source = inspect.getsource(guard_module.BlockedProvider._refuse)
+    assert "raise ModelCallBlocked" in refuse_source, "_refuse does not raise"
