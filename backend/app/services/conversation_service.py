@@ -278,6 +278,18 @@ class ConversationService:
             for conversation in conversations
         ]
 
+    async def all_conversation_ids(self) -> list[uuid.UUID]:
+        """Every conversation id this user owns, without the list endpoint's page size.
+
+        `list_conversations` is paged because the sidebar is paged. Deleting is not: 「一键
+        清空」 has to mean the whole set, and asking the client to page through first would
+        make "empty the list" a loop the client can get wrong.
+        """
+        rows = await self.session.execute(
+            select(Conversation.id).where(Conversation.user_id == self.user_id)
+        )
+        return list(rows.scalars())
+
     # ----------------------------------------------------------------- deletes --
     async def delete_conversations(self, conversation_ids: list[uuid.UUID]) -> dict[str, Any]:
         """Delete conversations and everything that only existed because of them.

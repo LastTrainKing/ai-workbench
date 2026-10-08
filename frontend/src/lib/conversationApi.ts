@@ -125,10 +125,10 @@ export const conversationApi = {
    * own button, a selection, and 全选 all end up here. The response carries the counts so
    * the screen can say what happened.
    */
-  remove: (ids: string[]) =>
+  remove: (ids: string[], all = false) =>
     requestResult<DeleteSummary>('/conversations/delete', {
       method: 'POST',
-      body: { ids },
+      body: { ids, all },
     }),
 
   /** 「就按你说的做」 — the same thing as sending that sentence, decided server-side. */

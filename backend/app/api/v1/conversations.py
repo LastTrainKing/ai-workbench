@@ -20,6 +20,7 @@ from fastapi import APIRouter, Query
 from pydantic import BaseModel, Field
 
 from app.api.deps import CurrentUser, DbSession
+from app.core.errors import ValidationError
 from app.core.response import ok
 from app.services.conversation_service import CONFIRM_PHRASE, ConversationService
 
@@ -41,9 +42,18 @@ class ConversationDelete(BaseModel):
     #: selection, and 全选. A single-delete route plus a bulk route would be two code
     #: paths for one operation, and the "select all" case is just a longer list.
     #:
-    #: `min_length=1` because an empty list is a client bug, not a no-op: it would return
-    #: "deleted 0" and look like a success.
-    ids: list[uuid.UUID] = Field(min_length=1, max_length=500)
+    #: `min_length=1` unless `all` is set — an empty list with no flag is a client bug, not
+    #: a no-op: it would return "deleted 0" and look like a success.
+    ids: list[uuid.UUID] = Field(default_factory=list, max_length=500)
+
+    #: Delete every conversation this user has.
+    #:
+    #: 「全选删除：列表顶部一个"全选"，选中后一键清空」 — and it did not clear. The list
+    #: endpoint returns 50 by default, so the client's 全选 could only ever select what it
+    #: had loaded, and a user with 60 conversations ended up with 10 left and no way to see
+    #: why. The alternative was to raise the page size, which moves the cliff rather than
+    #: removing it. The client asks for "all" and the server decides what all means.
+    all: bool = False
 
 
 @router.get("/conversations", summary="List conversations")
@@ -73,7 +83,12 @@ async def delete_conversations(
     than what it hoped happened.
     """
     service = ConversationService(session, user_id=user.id)
-    return ok(await service.delete_conversations(payload.ids))
+    ids = payload.ids
+    if payload.all:
+        ids = await service.all_conversation_ids()
+    if not ids:
+        raise ValidationError("No conversations were named and 'all' was not set")
+    return ok(await service.delete_conversations(ids))
 
 
 @router.post("/conversations", status_code=201, summary="Start a conversation")

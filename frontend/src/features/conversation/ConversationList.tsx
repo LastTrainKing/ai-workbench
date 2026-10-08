@@ -86,8 +86,10 @@ export function ConversationList({
   })
 
   const remove = useMutation({
-    mutationFn: (ids: string[]) => conversationApi.remove(ids),
-    onSuccess: (result, ids) => {
+    mutationFn: (input: { ids: string[]; all?: boolean }) =>
+      conversationApi.remove(input.ids, input.all ?? false),
+    onSuccess: (result, input) => {
+      const ids = input.ids
       setFailure(null)
       setSelecting(false)
       setSelected(new Set())
@@ -135,7 +137,15 @@ export function ConversationList({
       cancelLabel: '算了',
       tone: 'danger',
     })
-    if (agreed) remove.mutate(ids)
+    if (agreed) {
+      // **「全选」 means the whole set, not the loaded page.** The list endpoint returns 50
+      // by default, so selecting everything the client had ever seen left the rest behind —
+      // a user with 60 conversations clicked 全选 → 一键清空 and kept 10, with nothing on
+      // screen to explain it. When everything loaded is selected, the server is asked to
+      // delete everything it has for this user.
+      const everything = ids.length === items.length && items.length > 0
+      remove.mutate({ ids, all: everything })
+    }
   }
 
   const toggle = (id: string) => {

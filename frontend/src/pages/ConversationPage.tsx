@@ -599,6 +599,8 @@ export default function ConversationPage() {
   const failPending = useConversationStore((state) => state.failPending)
   const retryPending = useConversationStore((state) => state.retryPending)
   const dropPending = useConversationStore((state) => state.dropPending)
+  const attachServerId = useConversationStore((state) => state.attachServerId)
+  const bindPending = useConversationStore((state) => state.bindPending)
 
   const conversation = useQuery({
     queryKey: ['conversation', id],
@@ -645,8 +647,12 @@ export default function ConversationPage() {
   const send = useMutation({
     mutationFn: (input: { conversationId: string; text: string; localId: string }) =>
       conversationApi.send(input.conversationId, input.text),
-    onSuccess: (_result, input) => {
+    onSuccess: (result, input) => {
       setNotice(null)
+      // Record **which** message the server accepted. The local bubble is dropped when the
+      // server's list contains this id, not when the list merely got longer — the count
+      // version dropped the second of two messages sent together, while it was in flight.
+      attachServerId(input.localId, result.data.message.id)
       void queryClient.invalidateQueries({ queryKey: ['conversation', input.conversationId] })
       void queryClient.invalidateQueries({ queryKey: ['conversations'] })
       void queryClient.invalidateQueries({ queryKey: ['delivery'] })
@@ -684,6 +690,9 @@ export default function ConversationPage() {
     try {
       const created = await conversationApi.create()
       void queryClient.invalidateQueries({ queryKey: ['conversations'] })
+      // Bind before navigating. Until this line the queued message has no conversation, so
+      // it was shown in every conversation and a retry from another one sent it there.
+      bindPending(localId, created.data.id)
       navigate(`/c/${created.data.id}`, { replace: true })
       send.mutate({ conversationId: created.data.id, text, localId })
     } catch (exc) {
@@ -692,20 +701,34 @@ export default function ConversationPage() {
   }
 
   const handleRetry = (item: PendingMessage) => {
-    const target = item.conversationId ?? id
-    if (!target) return
+    // **Never `?? id`.** That fallback sent the text to whatever conversation the user
+    // happened to be looking at, which is how a message could land somewhere its author
+    // never put it. A message with no conversation can only be retried once it has one,
+    // and `bindPending` gives it one the moment the server creates it.
+    const target = item.conversationId
+    if (!target) {
+      setNotice('这条消息还在建立会话，稍后再试。')
+      return
+    }
     retryPending(item.id)
     send.mutate({ conversationId: target, text: item.text, localId: item.id })
   }
 
   const messages = conversation.data?.messages ?? []
   const pending = stats.data?.candidates_pending ?? 0
-  const serverUserCount = messages.filter((m) => m.role === 'user').length
+  // `serverUserCount` used to be computed here and compared against each queued message to
+  // decide when the local copy had been superseded. That comparison is gone — it dropped
+  // the second of two messages sent together — and with it the need for this value.
 
-  // Only this conversation's outstanding messages: one sent in another conversation
-  // must not appear here, and must not be judged against this one's message count.
-  const outstanding = outstandingPending(pendingAll, serverUserCount).filter(
-    (item) => !item.conversationId || item.conversationId === id,
+  // Only this conversation's outstanding messages. A message with no conversation id yet
+  // belongs to the one being created, so it is shown while `id` is still undefined and
+  // once `id` matches the binding — never in an unrelated conversation.
+  const serverMessageIds = useMemo(
+    () => new Set(messages.map((message) => message.id)),
+    [messages],
+  )
+  const outstanding = outstandingPending(pendingAll, serverMessageIds).filter((item) =>
+    item.conversationId ? item.conversationId === id : !id,
   )
   const thinking = outstanding.some((item) => item.state === 'sending')
 
@@ -715,9 +738,12 @@ export default function ConversationPage() {
   useEffect(() => {
     for (const item of pendingAll) {
       if (item.conversationId && item.conversationId !== id) continue
-      if (item.state === 'sending' && item.serverUserCount < serverUserCount) dropPending(item.id)
+      // Exact: the server's list contains the id it gave back for this message.
+      if (item.state === 'sending' && item.serverMessageId && serverMessageIds.has(item.serverMessageId)) {
+        dropPending(item.id)
+      }
     }
-  }, [serverUserCount, pendingAll, dropPending, id])
+  }, [serverMessageIds, pendingAll, dropPending, id])
 
   // Land at the bottom, where the newest thing is. Counted on the local messages too,
   // so the view follows the optimistic bubble rather than waiting for the reply.

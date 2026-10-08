@@ -34,15 +34,31 @@ export interface PendingMessage {
   /**
    * How many user messages the server had already recorded when this was sent.
    *
-   * This is what makes the handover from the local copy to the server's copy exact.
-   * Once the server's list contains one more user message than this, the server has
-   * recorded this one and the local copy is dropped — so the two are never on screen
-   * together, and there is never a gap either.
-   *
-   * Counting rather than matching on text: the same sentence can legitimately be sent
-   * twice, and matching on content would silently drop the second one.
+   * Kept for display ordering only. **It is no longer what decides when to drop the local
+   * copy** — see `serverMessageId`.
    */
   serverUserCount: number
+
+  /**
+   * The server's id for this message, once the POST has come back.
+   *
+   * ## Why this replaced a count
+   *
+   * The handover used to be `item.serverUserCount < serverUserCount` — "the server's list
+   * has grown past where I was sent, so it has me". That is true for one message in
+   * flight and false for two: both are sent when the server has N messages, both carry
+   * `serverUserCount = N`, and the moment the *first* lands the server has N+1 and **both
+   * are dropped** — including the one the server has not received yet.
+   *
+   * Measured, with the source predicate:
+   *
+   *     just sent two, server has 3  ->  screen: [ '第一条', '第二条' ]
+   *     first one landed, server 4   ->  screen: []          <-- second is still in flight
+   *
+   * The file's own header says a message that disappears while in flight is the exact
+   * failure it exists to prevent. Counting cannot express "this specific one"; an id can.
+   */
+  serverMessageId?: string
 }
 
 interface ConversationState {
@@ -55,6 +71,18 @@ interface ConversationState {
   retryPending: (id: string) => void
   /** Remove it — the server's copy has taken over. */
   dropPending: (id: string) => void
+  /** Attach the server's id, once the POST has answered. */
+  attachServerId: (id: string, serverMessageId: string) => void
+  /**
+   * Bind a message to the conversation the server just created for it.
+   *
+   * A message sent from `/` is queued before its conversation exists, so it starts with
+   * `conversationId: null` — and it used to stay that way forever. Two consequences, both
+   * real: the bubble was shown in **every** conversation (the filter keeps anything with
+   * no conversation id), and a retry from a different conversation sent the text to
+   * **that** conversation.
+   */
+  bindPending: (id: string, conversationId: string) => void
 }
 
 let sequence = 0
@@ -90,6 +118,22 @@ export const useConversationStore = create<ConversationState>((set) => ({
   dropPending(id) {
     set((state) => ({ pending: state.pending.filter((item) => item.id !== id) }))
   },
+
+  attachServerId(id, serverMessageId) {
+    set((state) => ({
+      pending: state.pending.map((item) =>
+        item.id === id ? { ...item, serverMessageId } : item,
+      ),
+    }))
+  },
+
+  bindPending(id, conversationId) {
+    set((state) => ({
+      pending: state.pending.map((item) =>
+        item.id === id ? { ...item, conversationId } : item,
+      ),
+    }))
+  },
 }))
 
 /**
@@ -102,9 +146,16 @@ export const useConversationStore = create<ConversationState>((set) => ({
  */
 export function outstandingPending(
   pending: PendingMessage[],
-  serverUserCount: number,
+  serverMessageIds: ReadonlySet<string>,
 ): PendingMessage[] {
-  return pending.filter(
-    (item) => item.state === 'failed' || item.serverUserCount >= serverUserCount,
-  )
+  return pending.filter((item) => {
+    // A failed one always stays: it is the only copy the user has of something the server
+    // never received.
+    if (item.state === 'failed') return true
+    // Sending: drop it only when the server's own list contains **this** message. Not
+    // "the list got longer" — that is the count comparison that dropped the second of two
+    // messages sent together.
+    if (item.serverMessageId) return !serverMessageIds.has(item.serverMessageId)
+    return true
+  })
 }
