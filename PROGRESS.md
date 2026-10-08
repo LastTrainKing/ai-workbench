@@ -2,6 +2,9 @@
 
 工作区：`C:\Users\user\Desktop\ai-workbench`
 交付物对应 commit：安装包 `b617372` · 源码包 `b617372`
+（本文件与 3 张记忆清理截图在 `b617372` 之后单独提交，那次提交只动这两样东西 ——
+所以源码包里的 `PROGRESS.md` 会比仓库里的旧一版，`entries` 540 对的是 `b617372`
+那一刻的 `git ls-files`，不是现在的 543。要重新对齐就重建源码包。）
 
 > **读完这一页就能开工。** 已完成的阶段不再写"下一步"——下面只有当前真实状态。
 
@@ -148,9 +151,10 @@ verify-run-completes.py           PASS（终态 COMPLETED，2 份产出物全过
 | 安装包 | `build/installer/AI-Workbench-Setup.exe` | 97,176,954 B | payload 8,707 文件 / 443.5 MB | `eb2f025bc7bdfab2291fbf1149e4084713c2a9306e57f000e81fce5b5975d8d4` |
 | 源码包 | `archive/releases/AI-Workbench-b617372-final.zip` | 9,957,900 B | 540 条目 | `1b0d0c4ffdab6f644431307bb0eb37d037da42fef011eeecde28926e8b03156b` |
 
-两者都对应 `b617372`。源码包由 `git ls-files` 生成 —— 540 个跟踪文件全部纳入、
-0 个被策略排除，自带的凭据扫描 PASS。判断包新不新，读 `entries` 与
-`git ls-files | wc -l` 是否一致（现在都是 540）。
+两者都对应 `b617372`。源码包由 `git ls-files` 生成 —— 该 commit 的 540 个跟踪文件
+全部纳入、0 个被策略排除，自带的凭据扫描 PASS。判断包新不新，读 `entries` 与
+**那个 commit 的** `git ls-files | wc -l` 是否一致（`b617372` 都是 540；
+`1012d2a` 之后是 543，因为多了 3 张截图，那 3 张不在包里）。
 
 **重建链**（顺序不能变，第 3 步必须在第 2 步之后）：
 
