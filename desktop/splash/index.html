@@ -1,23 +1,37 @@
 <!doctype html>
-<html lang="en">
+<html lang="zh-CN" data-theme="dark">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>AI Workbench</title>
     <!--
-      Startup screen for the desktop shell.
+      What the window shows while the services come up.
 
-      This file is what the WebView2 window shows while the backend boots. It is
-      replaced by the real application as soon as the API answers a health check,
-      so it exists to do three things and nothing else:
+      **It is a chat screen, not a progress bar.** The user's complaint was exact:
 
-        * show that something is happening (a real phase, a real elapsed time)
-        * show a real error with the log path if startup fails, instead of a blank
-          window or a silent exit
-        * look like the product, so the transition into the app is not jarring
+          不要"Starting"那一屏挡在前面。窗口打开 → 直接是聊天框，能看见、能打字。
+          底下一行小的状态就行（"正在启动服务…"），就绪之前发送按钮置灰并说明，
+          不许拿一整屏遮住用户。
 
-      It is a plain file with no bundler and no network access beyond the shell's
-      events, so it cannot fail to load.
+      So there is no full-page checklist and no modal spinner. There is the product's own
+      shape — sidebar, conversation area, composer — with the composer **live**: the
+      textarea accepts text from the first frame, the send button is greyed with a reason,
+      and one small line at the bottom says what is happening.
+
+      Typing is not thrown away. Every keystroke is pushed to the shell
+      (`set_startup_draft`), and when the backend answers the shell navigates to the real
+      app with `?draft=…`, where the composer picks it up. A screen that let you type and
+      then discarded it would be worse than one that never offered.
+
+      Two things this file deliberately does **not** do:
+
+        * it does not duplicate the app's logic. It is chrome and a textarea. The moment
+          the real UI is reachable, this file stops existing.
+        * it does not claim progress it cannot see. The service rows and the activity line
+          come from the shell's real probes and from `startup.log`.
+
+      It is a plain file with no bundler and no network access beyond the shell's events,
+      so it cannot fail to load.
     -->
     <style>
       :root {
@@ -28,7 +42,9 @@
         --accent-dim: #0e7490;
         --text: #e6edf7;
         --muted: #7c8ba1;
+        --faint: #55647a;
         --danger: #f87171;
+        --ok: #3fb950;
       }
       * { box-sizing: border-box; }
       html, body {
@@ -38,196 +54,215 @@
         font: 14px/1.5 "Segoe UI Variable Display", "Segoe UI", system-ui, sans-serif;
         -webkit-font-smoothing: antialiased;
         overflow: hidden;
-        user-select: none;
       }
-      /* Ambient light, matching the app's own background treatment. */
       body::before {
         content: "";
         position: fixed; inset: 0;
         background:
-          radial-gradient(1100px 620px at 50% -10%, rgba(34, 211, 238, .13), transparent 62%),
-          radial-gradient(760px 460px at 12% 108%, rgba(56, 118, 255, .10), transparent 60%);
+          radial-gradient(1100px 620px at 50% -10%, rgba(34, 211, 238, .10), transparent 62%),
+          radial-gradient(760px 460px at 12% 108%, rgba(56, 118, 255, .08), transparent 60%);
         pointer-events: none;
       }
-      .wrap {
-        position: relative;
-        height: 100%;
-        display: flex; flex-direction: column;
-        align-items: center; justify-content: center;
-        gap: 34px; padding: 48px;
-      }
-      .mark { display: flex; align-items: center; gap: 18px; }
-      .mark svg { width: 62px; height: 62px; filter: drop-shadow(0 0 22px rgba(34,211,238,.35)); }
-      .mark h1 { margin: 0; font-size: 27px; font-weight: 600; letter-spacing: .2px; }
-      .mark p { margin: 3px 0 0; color: var(--muted); font-size: 13px; }
 
-      .card {
-        width: min(660px, 100%);
-        background: linear-gradient(180deg, rgba(17,26,43,.92), rgba(9,14,24,.92));
-        border: 1px solid var(--edge);
-        border-radius: 16px;
-        padding: 26px 28px;
-        box-shadow: 0 30px 70px -30px rgba(0,0,0,.9), inset 0 1px 0 rgba(255,255,255,.04);
-        backdrop-filter: blur(12px);
-      }
-      .phase { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; }
-      .phase .label { font-size: 15px; font-weight: 500; }
-      .phase .elapsed { color: var(--muted); font-variant-numeric: tabular-nums; font-size: 12px; }
+      .app { position: relative; height: 100%; display: grid; grid-template-columns: 248px 1fr; }
 
-      .track { margin-top: 16px; height: 4px; border-radius: 999px; background: #101a2b; overflow: hidden; }
-      .track > i {
-        display: block; height: 100%; width: 30%;
-        background: linear-gradient(90deg, var(--accent-dim), var(--accent));
-        border-radius: 999px;
-        animation: sweep 1.5s ease-in-out infinite;
+      /* ------------------------------------------------------------ sidebar -- */
+      .side {
+        border-right: 1px solid var(--edge);
+        background: rgba(11, 17, 28, .72);
+        padding: 14px 10px;
+        display: flex; flex-direction: column; gap: 10px;
       }
-      @keyframes sweep {
-        0%   { transform: translateX(-110%); }
-        100% { transform: translateX(360%); }
+      .brand { display: flex; align-items: center; gap: 9px; padding: 2px 6px 6px; }
+      .brand svg { width: 22px; height: 22px; }
+      .brand span { font-size: 13.5px; font-weight: 600; letter-spacing: .01em; }
+      .newchat {
+        display: flex; align-items: center; gap: 8px;
+        border: 1px solid var(--edge); border-radius: 10px;
+        background: #0e1626; color: var(--faint);
+        padding: 8px 10px; font-size: 13px;
+      }
+      .side-note {
+        margin: 6px 6px 0; font-size: 11.5px; line-height: 1.7; color: var(--faint);
       }
 
-      ol.steps { margin: 22px 0 0; padding: 0; list-style: none; display: grid; gap: 9px; }
-      ol.steps li {
+      /* --------------------------------------------------------------- main -- */
+      .main { display: flex; flex-direction: column; min-width: 0; }
+      .top {
+        height: 46px; flex: none;
         display: flex; align-items: center; gap: 10px;
-        color: var(--muted); font-size: 13px;
-        transition: color .2s ease;
+        padding: 0 20px; border-bottom: 1px solid var(--edge);
+        color: var(--muted); font-size: 12.5px;
       }
-      ol.steps li .dot {
-        width: 7px; height: 7px; border-radius: 50%;
-        background: #23324a; flex: none;
-        transition: background .2s ease, box-shadow .2s ease;
+      .stream {
+        flex: 1; min-height: 0; overflow: hidden;
+        display: flex; align-items: center; justify-content: center;
+        padding: 24px;
       }
-      ol.steps li.active { color: var(--text); }
-      ol.steps li.active .dot { background: var(--accent); box-shadow: 0 0 0 4px rgba(34,211,238,.15); }
-      ol.steps li.done { color: #9fb3c8; }
-      ol.steps li.done .dot { background: #34d399; }
+      .intro { text-align: center; max-width: 460px; }
+      .intro h1 {
+        margin: 0 0 10px; font-size: 19px; font-weight: 600; letter-spacing: .01em;
+        display: flex; align-items: center; justify-content: center; gap: 10px;
+      }
+      .intro p { margin: 0; font-size: 13px; line-height: 1.8; color: var(--muted); }
+      .spin {
+        width: 15px; height: 15px; flex: none; border-radius: 50%;
+        border: 2px solid rgba(34, 211, 238, .25); border-top-color: var(--accent);
+        animation: aw-spin .8s linear infinite;
+      }
+      @keyframes aw-spin { to { transform: rotate(360deg); } }
 
-      .error { display: none; }
-      .error.show { display: block; }
-      .error h2 { margin: 0 0 8px; font-size: 16px; color: var(--danger); }
+      /* ----------------------------------------------------------- composer -- */
+      .composer { flex: none; padding: 0 20px 16px; }
+      .box {
+        display: flex; align-items: flex-end; gap: 8px;
+        border: 1px solid var(--edge); border-radius: 14px;
+        background: #0a1220; padding: 10px 10px 10px 14px;
+      }
+      .box textarea {
+        flex: 1; min-height: 22px; max-height: 120px; resize: none;
+        border: 0; outline: 0; background: transparent;
+        color: var(--text); font: inherit; line-height: 1.5;
+      }
+      .box textarea::placeholder { color: var(--faint); }
+      .box button {
+        flex: none; display: inline-flex; align-items: center; gap: 6px;
+        border: 1px solid var(--edge); border-radius: 9px;
+        background: #101a2c; color: var(--faint);
+        padding: 7px 13px; font: inherit; font-size: 13px; cursor: not-allowed;
+      }
+      .why { margin: 8px 4px 0; font-size: 11.5px; color: var(--faint); }
+      .statusline {
+        display: flex; align-items: center; gap: 8px;
+        margin: 0 4px 8px; font-size: 11.5px; color: var(--muted);
+      }
+      .statusline .pip {
+        width: 7px; height: 7px; flex: none; border-radius: 50%;
+        background: var(--accent); animation: aw-pulse 1.2s ease-in-out infinite;
+      }
+      .statusline[data-state="ready"] .pip { background: var(--ok); animation: none; }
+      .statusline[data-state="failed"] .pip { background: var(--danger); animation: none; }
+      @keyframes aw-pulse { 0%, 100% { opacity: .3; } 50% { opacity: 1; } }
+      .statusline .what { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .statusline .elapsed { margin-left: auto; flex: none; font-variant-numeric: tabular-nums; color: var(--faint); }
+
+      /* -------------------------------------------------------------- error -- */
+      .error {
+        position: fixed; inset: 0; display: none;
+        align-items: center; justify-content: center; padding: 40px;
+        background: rgba(5, 7, 13, .93);
+      }
+      .error.show { display: flex; }
+      .error .card {
+        max-width: 620px; width: 100%;
+        border: 1px solid rgba(248, 113, 113, .35); border-radius: 14px;
+        background: var(--panel); padding: 22px;
+      }
+      .error h2 { margin: 0 0 10px; font-size: 16px; color: var(--danger); }
+      .error p { margin: 0 0 12px; font-size: 13px; color: var(--muted); }
       .error pre {
-        margin: 14px 0 0; padding: 13px 15px;
-        background: #060a12; border: 1px solid #23324a; border-radius: 10px;
-        color: #b9c7da; font: 12px/1.6 "Cascadia Mono", Consolas, monospace;
-        white-space: pre-wrap; word-break: break-word; max-height: 190px; overflow: auto;
+        margin: 0 0 16px; padding: 11px; max-height: 210px; overflow: auto;
+        border: 1px solid var(--edge); border-radius: 9px; background: #070d18;
+        color: var(--muted); font-size: 11.5px; line-height: 1.6; white-space: pre-wrap;
       }
-      .actions { margin-top: 18px; display: flex; gap: 10px; }
-      button {
-        font: inherit; font-size: 13px; cursor: pointer;
-        padding: 9px 17px; border-radius: 9px;
-        border: 1px solid var(--edge); background: #111a2b; color: var(--text);
-        transition: border-color .15s ease, background .15s ease;
+      .error .actions { display: flex; gap: 9px; }
+      .error button {
+        border: 1px solid var(--edge); border-radius: 9px;
+        background: #101a2c; color: var(--text);
+        padding: 8px 15px; font: inherit; font-size: 13px; cursor: pointer;
       }
-      button:hover { border-color: #2b405f; background: #16223a; }
-      button.primary { background: var(--accent-dim); border-color: transparent; color: #04121a; font-weight: 600; }
-      button.primary:hover { background: #0d8fa8; }
-      .hint { margin-top: 14px; color: var(--muted); font-size: 12px; }
-    
-      .services { list-style: none; margin: 0 0 18px; padding: 0; display: grid; gap: 6px; }
-      .services li { display: flex; align-items: center; gap: 10px; font-size: 13px; color: var(--muted); }
-      .services li .name { min-width: 96px; color: var(--text); }
-      .services li .state { margin-left: auto; letter-spacing: 0.04em; font-variant-numeric: tabular-nums; }
-      .services li .pip { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); flex: none; }
-      .services li[data-state="ready"] .pip { background: #3fb950; }
-      .services li[data-state="ready"] .state { color: #3fb950; }
-      .services li[data-state="failed"] .pip { background: #f85149; }
-      .services li[data-state="failed"] .state { color: #f85149; }
-      /* "starting" is its own state, not a shade of "pending": it means the script has
-         begun work on this service. The row lights up and pulses while it is happening,
-         so the screen shows motion from the first second instead of five grey dots that
-         read as frozen. */
-      .services li[data-state="starting"] .pip { background: var(--accent); }
-      .services li[data-state="starting"] .state { color: var(--accent); }
-      .services li[data-state="pending"] .pip,
-      .services li[data-state="starting"] .pip { animation: aw-pulse 1.2s ease-in-out infinite; }
-      @keyframes aw-pulse { 0%, 100% { opacity: 0.35; } 50% { opacity: 1; } }
-
-      /* What it is doing right now, taken from the startup log rather than a timer. */
-      .activity {
-        margin: 14px 0 0; padding: 9px 12px;
-        border-left: 2px solid var(--accent-dim);
-        background: rgba(34, 211, 238, .05);
-        border-radius: 0 8px 8px 0;
-        color: #9fb3c8; font-size: 12.5px;
-        min-height: 18px;
-        white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-      }
-      .activity:empty { display: none; }
-</style>
+      .error button.primary { border-color: var(--accent-dim); background: rgba(34, 211, 238, .13); color: var(--accent); }
+      .error .hint { margin: 14px 0 0; font-size: 11.5px; color: var(--faint); }
+    </style>
   </head>
   <body>
-    <div class="wrap">
-      <div class="mark">
-        <svg viewBox="0 0 64 64" fill="none" aria-hidden="true">
-          <rect x="3" y="3" width="58" height="58" rx="15" stroke="#22d3ee" stroke-opacity=".55" stroke-width="2"/>
-          <path d="M32 18 L19 45 M32 18 L45 45 M19 45 L45 45" stroke="#22d3ee" stroke-width="2.2" stroke-linecap="round"/>
-          <circle cx="32" cy="18" r="6" fill="#8b5cf6"/>
-          <circle cx="32" cy="18" r="2.4" fill="#e6edf7"/>
-          <circle cx="19" cy="45" r="5" fill="#8b5cf6"/>
-          <circle cx="45" cy="45" r="5" fill="#8b5cf6"/>
-        </svg>
-        <div>
-          <h1>AI Workbench</h1>
-          <p>Private AI computer agent</p>
+    <div class="app">
+      <aside class="side">
+        <div class="brand">
+          <svg viewBox="0 0 32 32" fill="none" aria-hidden="true">
+            <path d="M6 20.5 16 4l10 16.5" stroke="#22d3ee" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>
+            <path d="M10.5 25.5h11" stroke="#0e7490" stroke-width="2.4" stroke-linecap="round"/>
+          </svg>
+          <span>AI Workbench</span>
         </div>
-      </div>
+        <div class="newchat">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+            <path d="M12 5v14M5 12h14" stroke-linecap="round"/>
+          </svg>
+          新对话
+        </div>
+        <p class="side-note">服务起来之后，这里的会话列表就出来了。</p>
+      </aside>
 
-      <div class="card" id="card">
-        <div id="progress">
-          <div class="phase">
-            <span class="label" id="phaseLabel">Starting</span>
+      <main class="main">
+        <header class="top" id="topLine">正在启动服务…</header>
+
+        <section class="stream">
+          <div class="intro" id="intro">
+            <h1><span class="spin"></span>正在启动服务…</h1>
+            <p id="introDetail">数据库 · 缓存 · 向量库 · 接口</p>
+          </div>
+        </section>
+
+        <footer class="composer">
+          <!-- One small line. This is the whole of the "progress UI". -->
+          <div class="statusline" id="statusline" data-state="pending">
+            <span class="pip"></span>
+            <span class="what" id="activity">正在启动…</span>
             <span class="elapsed" id="elapsed">0s</span>
           </div>
-          <div class="track"><i></i></div>
-          <!-- Per-service readiness. Every row comes from a TCP or HTTP probe in
-               the shell, not from a timer: a checklist that lights up on schedule
-               would lie exactly when the user is looking for truth. The third state,
-               "starting", comes from the startup script's own log, so a row shows
-               that work has begun on that service rather than staying grey. -->
-          <ul class="services" id="services"></ul>
-          <p class="activity" id="activity"></p>
 
-          <ol class="steps" id="steps">
-            <li data-phase="launching"><span class="dot"></span>Starting PostgreSQL, Redis and Qdrant</li>
-            <li data-phase="waiting"><span class="dot"></span>Waiting for the API to report healthy</li>
-            <li data-phase="ready"><span class="dot"></span>Opening AI Workbench</li>
-          </ol>
-        </div>
+          <div class="box">
+            <!-- A real textarea. Enabled from the first frame on purpose: the point of
+                 this screen is that the user can start working before the backend is
+                 up, and the draft is carried into the app. -->
+            <textarea
+              id="draft"
+              rows="1"
+              data-testid="startup-draft"
+              placeholder="先把想说的话打在这里也行，服务好了会带过去"
+            ></textarea>
+            <button id="send" disabled type="button" data-testid="startup-send">发送</button>
+          </div>
+          <p class="why" id="why">服务还在启动，好了就能发。你先打字，不会丢。</p>
+        </footer>
+      </main>
+    </div>
 
-        <div class="error" id="error">
-          <h2 id="errorTitle">Startup failed</h2>
-          <div id="errorDetail" style="color: var(--muted)"></div>
-          <pre id="errorLog"></pre>
-          <div class="actions">
-            <button class="primary" id="retry">Try again</button>
-            <button id="logs">Open log folder</button>
-          </div>
-          <div class="hint">
-            Full sequence: <code>.runtime\logs\startup.log</code> &nbsp;·&nbsp;
-            errors: <code>.runtime\logs\startup-error.log</code>
-          </div>
+    <div class="error" id="error">
+      <div class="card">
+        <h2 id="errorTitle">启动失败</h2>
+        <p id="errorDetail"></p>
+        <pre id="errorLog"></pre>
+        <div class="actions">
+          <button class="primary" id="retry" type="button">重试</button>
+          <button id="logs" type="button">打开日志目录</button>
         </div>
+        <p class="hint">如果重试还是不行，把上面的内容发给开发者。</p>
       </div>
     </div>
 
     <script>
-      // The shell injects a narrow API here (see tauri.conf.json
-      // `withGlobalTauri`). Only event listening and the four lifecycle
-      // commands are used — this page never asks the OS to run anything.
+      // The shell injects a narrow API here (see tauri.conf.json `withGlobalTauri`).
+      // Only event listening and the lifecycle commands are used — this page never asks
+      // the OS to run anything.
       const api = window.__TAURI__ || {};
       const started = Date.now();
 
       const els = {
-        phaseLabel: document.getElementById("phaseLabel"),
+        intro: document.getElementById("intro"),
+        introDetail: document.getElementById("introDetail"),
+        topLine: document.getElementById("topLine"),
+        statusline: document.getElementById("statusline"),
+        activity: document.getElementById("activity"),
         elapsed: document.getElementById("elapsed"),
-        steps: Array.from(document.querySelectorAll("#steps li")),
-        progress: document.getElementById("progress"),
+        why: document.getElementById("why"),
+        draft: document.getElementById("draft"),
+        send: document.getElementById("send"),
         error: document.getElementById("error"),
         errorTitle: document.getElementById("errorTitle"),
         errorDetail: document.getElementById("errorDetail"),
         errorLog: document.getElementById("errorLog"),
-        services: document.getElementById("services"),
-        activity: document.getElementById("activity"),
         retry: document.getElementById("retry"),
         logs: document.getElementById("logs"),
       };
@@ -236,79 +271,94 @@
         els.elapsed.textContent = Math.round((Date.now() - started) / 1000) + "s";
       }, 250);
 
-      function markSteps(phase) {
-        const order = ["launching", "waiting", "ready"];
-        const at = order.indexOf(phase);
-        els.steps.forEach((li) => {
-          const i = order.indexOf(li.dataset.phase);
-          li.classList.toggle("active", i === at);
-          li.classList.toggle("done", at > -1 && i < at);
-        });
+      /* -------------------------------------------------- the draft survives -- */
+      //
+      // Pushed to the shell on every keystroke rather than read out of this page when the
+      // app is ready: the shell navigates from its own thread the instant `/health`
+      // answers, and asking a page for a value at that moment is a race. See
+      // `set_startup_draft` in `commands.rs`.
+      let draftTimer = null;
+      els.draft.addEventListener("input", () => {
+        // Grow to fit, up to the CSS max-height. A one-line box that hides what you typed
+        // is a box that discourages typing.
+        els.draft.style.height = "auto";
+        els.draft.style.height = Math.min(els.draft.scrollHeight, 120) + "px";
+        // Debounced: this crosses the IPC boundary, and one message per keystroke for a
+        // long paste is wasteful. 120 ms is under the gap between deliberate keystrokes.
+        if (draftTimer) clearTimeout(draftTimer);
+        draftTimer = setTimeout(pushDraft, 120);
+      });
+      // Also on blur and before unload, so nothing typed in the last 120 ms is lost.
+      els.draft.addEventListener("blur", pushDraft);
+      window.addEventListener("beforeunload", pushDraft);
+
+      function pushDraft() {
+        if (!api.core || !api.core.invoke) return;
+        api.core.invoke("set_startup_draft", { text: els.draft.value }).catch(() => {});
       }
 
-      const STATE_LABEL = { ready: "READY", failed: "FAILED", starting: "STARTING", pending: "..." };
+      els.draft.focus();
 
-      function renderServices(list) {
-        if (!Array.isArray(list) || !list.length) return;
-        els.services.innerHTML = "";
-        list.forEach((service) => {
-          const li = document.createElement("li");
-          li.dataset.state = service.state || "pending";
-          li.innerHTML = '<span class="pip"></span><span class="name"></span><span class="state"></span>';
-          // textContent, not innerHTML: these strings come from the shell and
-          // must never be able to inject markup into the window.
-          li.querySelector(".name").textContent = service.name || "";
-          li.querySelector(".state").textContent = STATE_LABEL[service.state] || "...";
-          els.services.appendChild(li);
-        });
-      }
+      /* ---------------------------------------------------------- the status -- */
+      function apply(status) {
+        if (!status) return;
 
-      function showProgress(status) {
-        els.progress.style.display = "";
+        if (status.phase === "failed") {
+          showError(status);
+          return;
+        }
+
         els.error.classList.remove("show");
-        els.phaseLabel.textContent = status.message || "Starting";
-        els.activity.textContent = status.detail || "";
-        renderServices(status.services);
-        markSteps(status.phase);
+
+        if (status.ok && status.finished) {
+          // The shell navigates on its own; this is only so the last frame is not a lie.
+          els.statusline.dataset.state = "ready";
+          els.activity.textContent = "服务好了，正在打开…";
+          els.topLine.textContent = "服务好了，正在打开…";
+          els.intro.innerHTML = '<h1 style="display:block">服务好了，正在打开…</h1>';
+          els.why.textContent = "你打的话会带过去。";
+          return;
+        }
+
+        // The message is the product's own words for this phase, and the activity line is
+        // the last thing the startup script wrote — a real fact from the log, not a
+        // sentence invented to fill the space.
+        els.statusline.dataset.state = "pending";
+        els.topLine.textContent = status.message || "正在启动服务…";
+        els.intro.querySelector("h1").lastChild.textContent = status.message || "正在启动服务…";
+        if (status.detail) els.introDetail.textContent = status.detail;
+        els.activity.textContent = status.detail || status.message || "正在启动…";
+
+        // Say *why* the button is greyed, per service, rather than one generic sentence:
+        // "PostgreSQL 还没起来" is actionable, "服务未就绪" is not.
+        const pending = (status.services || []).filter((s) => s.state !== "ready").map((s) => s.name);
+        els.why.textContent = pending.length
+          ? `还在等：${pending.join('、')}。好了就能发，你先打字不会丢。`
+          : "马上就好，你先打字不会丢。";
       }
 
       function showError(status) {
-        els.progress.style.display = "none";
         els.error.classList.add("show");
-        els.errorTitle.textContent = status.message || "Startup failed";
-        els.errorDetail.textContent = status.detail ? "" : "No further detail was reported.";
+        els.statusline.dataset.state = "failed";
+        els.errorTitle.textContent = status.message || "启动失败";
+        els.errorDetail.textContent = status.detail ? "" : "没有更多细节。";
         els.errorLog.textContent = status.detail || "";
-      }
-
-      function apply(status) {
-        if (!status) return;
-        if (status.ok && status.finished) {
-          els.phaseLabel.textContent = "Ready";
-          els.activity.textContent = "";
-          renderServices(status.services);
-          markSteps("ready");
-          return;
-        }
-        if (status.phase === "failed") showError(status);
-        else showProgress(status);
       }
 
       if (api.event && api.event.listen) {
         api.event.listen("startup://status", (event) => apply(event.payload));
       }
 
-      // Pull the current state once: the first events may have fired before this
-      // page finished loading.
+      // Pull the current state once: the first events may have fired before this page
+      // finished loading.
       if (api.core && api.core.invoke) {
         api.core.invoke("startup_status").then(apply).catch(() => {});
       }
 
       els.retry.addEventListener("click", () => {
         els.error.classList.remove("show");
-        els.progress.style.display = "";
-        els.phaseLabel.textContent = "Restarting...";
-        els.activity.textContent = "";
-        markSteps("launching");
+        els.statusline.dataset.state = "pending";
+        els.activity.textContent = "正在重试…";
         if (api.core && api.core.invoke) {
           api.core.invoke("restart_backend").catch(() => {});
         }

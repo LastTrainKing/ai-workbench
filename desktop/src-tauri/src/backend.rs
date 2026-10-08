@@ -247,6 +247,15 @@ pub struct BackendState {
     cancelled: AtomicBool,
     project_root: Mutex<Option<PathBuf>>,
     status: Mutex<StartupStatus>,
+    /// What the user typed on the startup screen, before the app was reachable.
+    ///
+    /// Pushed in on every keystroke by `commands::set_startup_draft`, and read once by
+    /// `navigate_to_app`. See that function for why it is not read out of the page.
+    ///
+    /// `pub(crate)` because `commands` is a sibling module, not a child: a private field
+    /// is reachable from the defining module and its descendants only, and `commands.rs`
+    /// is neither.
+    pub(crate) draft: Mutex<String>,
 }
 
 impl BackendState {
@@ -258,6 +267,7 @@ impl BackendState {
             cancelled: AtomicBool::new(false),
             project_root: Mutex::new(None),
             status: Mutex::new(StartupStatus::progress("boot", "Starting", None)),
+            draft: Mutex::new(String::new()),
         }
     }
 
@@ -554,7 +564,7 @@ pub fn spawn_startup(app: AppHandle, state: Arc<BackendState>) {
             });
             state.ready.store(true, Ordering::SeqCst);
             emit(&app, state.status());
-            navigate_to_app(&app);
+            navigate_to_app(&app, &state);
             return;
         }
 
@@ -648,7 +658,7 @@ pub fn spawn_startup(app: AppHandle, state: Arc<BackendState>) {
                     services: probe_services(Some(&root)),
                 });
                 emit(&app, state.status());
-                navigate_to_app(&app);
+                navigate_to_app(&app, &state);
                 return;
             }
             // One second, not five. The per-service rows and the activity line come from
@@ -685,11 +695,46 @@ pub fn spawn_startup(app: AppHandle, state: Arc<BackendState>) {
     });
 }
 
-fn navigate_to_app(app: &AppHandle) {
-    let url = format!("http://{API_HOST}:{API_PORT}/");
+fn navigate_to_app(app: &AppHandle, state: &BackendState) {
+    // Carry over whatever the user typed while the services were starting.
+    //
+    // The window now opens on the chat screen rather than a full-page "Starting" panel,
+    // and that screen's textarea is a real one — so somebody can type their first message
+    // while PostgreSQL is still coming up. Throwing that away at the moment the app
+    // becomes ready would make "能打字" a lie, and it is the one thing that would be
+    // worse than not offering it.
+    //
+    // The draft is pushed into the shell on every keystroke rather than read out of the
+    // page here: this function runs on the shell's own thread, and asking the webview for
+    // a value at this instant would be a race against the navigation itself.
+    let draft = state.draft.lock().map(|value| value.clone()).unwrap_or_default();
+    let url = if draft.trim().is_empty() {
+        format!("http://{API_HOST}:{API_PORT}/")
+    } else {
+        format!("http://{API_HOST}:{API_PORT}/?draft={}", percent_encode(&draft))
+    };
     if let Some(window) = app.get_webview_window("main") {
         if let Ok(parsed) = url.parse() {
             let _ = window.navigate(parsed);
         }
     }
+}
+
+/// Percent-encode a query-string value.
+///
+/// Hand-rolled rather than adding a dependency for one call. Unreserved characters are
+/// passed through and everything else becomes `%XX` over the UTF-8 bytes, which is what
+/// RFC 3986 asks for. Deliberately **not** form encoding: `+` means a space there and a
+/// literal plus here, and a draft containing a `+` would come back changed.
+fn percent_encode(value: &str) -> String {
+    let mut out = String::with_capacity(value.len() * 3);
+    for byte in value.as_bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(*byte as char);
+            }
+            _ => out.push_str(&format!("%{byte:02X}")),
+        }
+    }
+    out
 }

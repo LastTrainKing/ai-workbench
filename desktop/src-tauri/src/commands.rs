@@ -40,6 +40,32 @@ pub fn startup_status(state: State<'_, Arc<BackendState>>) -> StartupStatus {
     state.status()
 }
 
+/// Hold on to what the user typed before the application was reachable.
+///
+/// This is the one command here that carries text from the page, and it is worth saying
+/// why it is safe and why it is necessary.
+///
+/// **Safe:** the string is stored and later appended to the application URL as a query
+/// value. It is percent-encoded on the way out (`percent_encode`), it is never executed,
+/// never written to a file, and never passed to the operating system. The scope rule at
+/// the top of this file is about *reaching the machine*, and a query parameter does not.
+///
+/// **Necessary:** the startup screen is a chat screen with a working textarea, so that
+/// the window opens on the product rather than on a progress bar. Somebody can type
+/// their first sentence while PostgreSQL is still starting. `navigate_to_app` runs on the
+/// shell's thread at the moment the backend answers, and reading the page's textarea from
+/// there would race the navigation; pushing it in on each keystroke cannot.
+#[tauri::command]
+pub fn set_startup_draft(state: State<'_, Arc<BackendState>>, text: String) {
+    // Bounded: a draft is a sentence, and this is a value that ends up in a URL. A
+    // megabyte of pasted text would produce a URL no browser will navigate to, and the
+    // failure would look like "the app never opened".
+    let trimmed: String = text.chars().take(2000).collect();
+    if let Ok(mut draft) = state.draft.lock() {
+        *draft = trimmed;
+    }
+}
+
 /// The page reports that the application UI has finished loading.
 ///
 /// Used only to dismiss the splash reliably, rather than guessing from a timer.
