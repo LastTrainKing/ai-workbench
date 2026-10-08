@@ -205,12 +205,20 @@ export interface TierAttempt {
   tier: 'memory' | 'skill' | 'knowledge' | 'general'
   hit: boolean
   elapsed_ms: number
+  /** With milliseconds and thresholds in it. For logs and tuning, not for the screen. */
   detail: string
+  /** The same fact said to a person. This is the one that is rendered. */
+  summary: string
 }
 
 export interface TierResult {
   tier: TierAttempt['tier']
+  /** The tier's name in the user's language — 「知识库」, not `knowledge`. */
+  tier_label: string
   total_ms: number
+  /** The sentence to show: 「由「知识库」回答，用了 1 段你的资料」. */
+  summary: string
+  /** Kept in the payload, deliberately not rendered. See `RunDetails.tsx`. */
   explanation: string
   attempts: TierAttempt[]
 }

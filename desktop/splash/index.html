@@ -132,8 +132,27 @@
       .services li[data-state="ready"] .state { color: #3fb950; }
       .services li[data-state="failed"] .pip { background: #f85149; }
       .services li[data-state="failed"] .state { color: #f85149; }
-      .services li[data-state="pending"] .pip { animation: aw-pulse 1.2s ease-in-out infinite; }
+      /* "starting" is its own state, not a shade of "pending": it means the script has
+         begun work on this service. The row lights up and pulses while it is happening,
+         so the screen shows motion from the first second instead of five grey dots that
+         read as frozen. */
+      .services li[data-state="starting"] .pip { background: var(--accent); }
+      .services li[data-state="starting"] .state { color: var(--accent); }
+      .services li[data-state="pending"] .pip,
+      .services li[data-state="starting"] .pip { animation: aw-pulse 1.2s ease-in-out infinite; }
       @keyframes aw-pulse { 0%, 100% { opacity: 0.35; } 50% { opacity: 1; } }
+
+      /* What it is doing right now, taken from the startup log rather than a timer. */
+      .activity {
+        margin: 14px 0 0; padding: 9px 12px;
+        border-left: 2px solid var(--accent-dim);
+        background: rgba(34, 211, 238, .05);
+        border-radius: 0 8px 8px 0;
+        color: #9fb3c8; font-size: 12.5px;
+        min-height: 18px;
+        white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+      }
+      .activity:empty { display: none; }
 </style>
   </head>
   <body>
@@ -162,8 +181,11 @@
           <div class="track"><i></i></div>
           <!-- Per-service readiness. Every row comes from a TCP or HTTP probe in
                the shell, not from a timer: a checklist that lights up on schedule
-               would lie exactly when the user is looking for truth. -->
+               would lie exactly when the user is looking for truth. The third state,
+               "starting", comes from the startup script's own log, so a row shows
+               that work has begun on that service rather than staying grey. -->
           <ul class="services" id="services"></ul>
+          <p class="activity" id="activity"></p>
 
           <ol class="steps" id="steps">
             <li data-phase="launching"><span class="dot"></span>Starting PostgreSQL, Redis and Qdrant</li>
@@ -205,6 +227,7 @@
         errorDetail: document.getElementById("errorDetail"),
         errorLog: document.getElementById("errorLog"),
         services: document.getElementById("services"),
+        activity: document.getElementById("activity"),
         retry: document.getElementById("retry"),
         logs: document.getElementById("logs"),
       };
@@ -223,6 +246,8 @@
         });
       }
 
+      const STATE_LABEL = { ready: "READY", failed: "FAILED", starting: "STARTING", pending: "..." };
+
       function renderServices(list) {
         if (!Array.isArray(list) || !list.length) return;
         els.services.innerHTML = "";
@@ -233,8 +258,7 @@
           // textContent, not innerHTML: these strings come from the shell and
           // must never be able to inject markup into the window.
           li.querySelector(".name").textContent = service.name || "";
-          li.querySelector(".state").textContent =
-            service.state === "ready" ? "READY" : service.state === "failed" ? "FAILED" : "...";
+          li.querySelector(".state").textContent = STATE_LABEL[service.state] || "...";
           els.services.appendChild(li);
         });
       }
@@ -243,6 +267,7 @@
         els.progress.style.display = "";
         els.error.classList.remove("show");
         els.phaseLabel.textContent = status.message || "Starting";
+        els.activity.textContent = status.detail || "";
         renderServices(status.services);
         markSteps(status.phase);
       }
@@ -259,6 +284,7 @@
         if (!status) return;
         if (status.ok && status.finished) {
           els.phaseLabel.textContent = "Ready";
+          els.activity.textContent = "";
           renderServices(status.services);
           markSteps("ready");
           return;
@@ -281,6 +307,7 @@
         els.error.classList.remove("show");
         els.progress.style.display = "";
         els.phaseLabel.textContent = "Restarting...";
+        els.activity.textContent = "";
         markSteps("launching");
         if (api.core && api.core.invoke) {
           api.core.invoke("restart_backend").catch(() => {});

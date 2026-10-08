@@ -17,6 +17,21 @@ import type { Deliverable } from './deliveryApi'
 
 export type TurnOutcome = 'answer' | 'clarify' | 'start'
 
+/**
+ * What answered, and why — the same shape wherever it appears.
+ *
+ * `summary` is what a person reads. `explanation` carries the per-tier milliseconds and
+ * is kept because the startup log and `scripts/sample_relevance.py` read it; nothing on
+ * screen renders it. The user's rule: 「用户看得懂的留，看不懂的删」.
+ */
+export interface Retrieval {
+  tier?: string
+  tier_label?: string
+  summary?: string
+  explanation?: string
+  total_ms?: number
+}
+
 export interface ConversationQuestion {
   question: string
   /**
@@ -39,7 +54,7 @@ export interface ConversationMessage {
   questions: ConversationQuestion[]
   build_run_id: string | null
   decided_for_you: string[]
-  retrieval: { tier?: string; explanation?: string; total_ms?: number }
+  retrieval: Retrieval
   /** True while it is the user's turn to reply. */
   waiting: boolean
   created_at: string
@@ -63,7 +78,7 @@ export interface Turn {
   message: ConversationMessage
   build_run_id: string | null
   decided_for_you: string[]
-  retrieval: { tier?: string; explanation?: string; total_ms?: number }
+  retrieval: Retrieval
 }
 
 /* ------------------------------------------------------------- the client -- */

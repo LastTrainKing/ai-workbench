@@ -46,7 +46,11 @@ const POLL_INTERVAL: Duration = Duration::from_millis(700);
 #[derive(Debug, Clone, Serialize)]
 pub struct ServiceStatus {
     pub name: String,
-    /// "pending" | "ready" | "failed"
+    /// "pending" | "starting" | "ready" | "failed"
+    ///
+    /// `starting` exists so a row can light up when the work on it begins. Reporting a
+    /// service that is being started as "pending" is what made the splash screen read
+    /// as frozen for the first eleven seconds.
     pub state: String,
     pub detail: String,
 }
@@ -65,11 +69,101 @@ pub struct StartupStatus {
 /// The services the startup script brings up, with the port that proves it.
 const SERVICES: [(&str, u16); 3] = [("PostgreSQL", 5432), ("Redis", 6379), ("Qdrant", 6333)];
 
+/// How much of `startup.log` to read for the "what is it doing now" line.
+///
+/// The tail only: the file is append-only and grows across launches, and the last few
+/// lines are the only ones that describe the current run.
+const STARTUP_LOG_TAIL_BYTES: u64 = 8 * 1024;
+
+/// One service's state as the *script* reports it, keyed by the name in the log.
+///
+/// The states here are deliberately the script's own vocabulary (`STARTING`, `READY`,
+/// `SKIPPED`, `FAILED`) rather than a parallel set invented for the UI: two vocabularies
+/// for one fact is one too many, and the log is the record the user is told to read.
+fn log_states(root: &Path) -> std::collections::HashMap<String, String> {
+    let mut states = std::collections::HashMap::new();
+    let path = root.join(".runtime").join("logs").join("startup.log");
+    let Ok(mut file) = std::fs::File::open(&path) else {
+        return states;
+    };
+
+    // Read the tail rather than the file. `read_to_string` is not usable at all here:
+    // `start-desktop.bat` writes its own lines with `echo`, which cmd.exe encodes as
+    // ANSI, so the file contains bytes that are not valid UTF-8 (the localised weekday
+    // in `2026/10/08 周四 09:16:24`). Decoding lossily keeps the lines that matter.
+    let length = file.metadata().map(|m| m.len()).unwrap_or(0);
+    if length > STARTUP_LOG_TAIL_BYTES {
+        use std::io::Seek;
+        let _ = file.seek(std::io::SeekFrom::End(-(STARTUP_LOG_TAIL_BYTES as i64)));
+    }
+    let mut bytes = Vec::new();
+    let _ = file.read_to_end(&mut bytes);
+    let text = String::from_utf8_lossy(&bytes);
+
+    for line in text.lines() {
+        let mut parts = line.split_whitespace();
+        // `YYYY-MM-DD HH:MM:SS Service STATE - detail`. The .bat's lines have a different
+        // shape (`2026/10/08 ...`) and simply do not match, which is correct: they are
+        // milestones, not service states.
+        let (Some(date), Some(_time), Some(service), Some(state)) =
+            (parts.next(), parts.next(), parts.next(), parts.next())
+        else {
+            continue;
+        };
+        if date.len() != 10 || date.as_bytes()[4] != b'-' {
+            continue;
+        }
+        if !matches!(state, "STARTING" | "READY" | "FAILED" | "SKIPPED" | "STOPPED") {
+            continue;
+        }
+        states.insert(service.to_string(), state.to_string());
+    }
+    states
+}
+
+/// The last thing the startup script said, so the window can show it.
+///
+/// Read from the log rather than guessed from elapsed time: a splash that says
+/// "starting PostgreSQL" on a timer would lie exactly when the user is looking for
+/// truth — which is the complaint this addresses.
+fn last_activity(root: &Path) -> String {
+    let path = root.join(".runtime").join("logs").join("startup.log");
+    let Ok(mut file) = std::fs::File::open(&path) else {
+        return String::new();
+    };
+    let length = file.metadata().map(|m| m.len()).unwrap_or(0);
+    if length > STARTUP_LOG_TAIL_BYTES {
+        use std::io::Seek;
+        let _ = file.seek(std::io::SeekFrom::End(-(STARTUP_LOG_TAIL_BYTES as i64)));
+    }
+    let mut bytes = Vec::new();
+    let _ = file.read_to_end(&mut bytes);
+    let text = String::from_utf8_lossy(&bytes);
+    let Some(line) = text.lines().rev().find(|l| !l.trim().is_empty()) else {
+        return String::new();
+    };
+    // Drop the timestamp so what is left is the sentence a person reads.
+    let trimmed = line.trim();
+    let body = match trimmed.find(" - ") {
+        Some(at) => &trimmed[at + 3..],
+        None => trimmed,
+    };
+    let body = body.rsplit(" - ").next().unwrap_or(body);
+    body.trim().chars().take(160).collect()
+}
+
 /// Probe every service. Cheap TCP connects; called on each poll tick.
 ///
 /// The API is not in this list because it is checked over HTTP elsewhere and a
 /// port being open is not the same as the API being ready to answer.
-fn probe_services() -> Vec<ServiceStatus> {
+///
+/// The TCP result wins when it says "listening" — that is a measurement. When it does
+/// not, the script's own log says whether the service has *started* yet, which is the
+/// difference between "nothing has happened" and "this one is being worked on right
+/// now". Without that, every row is grey for the whole launch and the screen reads as
+/// frozen, which is what the user reported at the eleven-second mark.
+fn probe_services(root: Option<&Path>) -> Vec<ServiceStatus> {
+    let states = root.map(log_states).unwrap_or_default();
     let mut out: Vec<ServiceStatus> = SERVICES
         .iter()
         .map(|(name, port)| {
@@ -80,41 +174,61 @@ fn probe_services() -> Vec<ServiceStatus> {
                 Duration::from_millis(400),
             )
             .is_ok();
+            let logged = states.get(*name).map(String::as_str).unwrap_or("");
+            let state = if open {
+                "ready"
+            } else {
+                match logged {
+                    "STARTING" => "starting",
+                    "FAILED" => "failed",
+                    _ => "pending",
+                }
+            };
             ServiceStatus {
                 name: (*name).to_string(),
-                state: if open { "ready" } else { "pending" }.into(),
+                state: state.into(),
                 detail: format!("127.0.0.1:{port}"),
             }
         })
         .collect();
+
+    let api_logged = states.get("api").map(String::as_str).unwrap_or("");
     out.push(ServiceStatus {
         name: "API".into(),
-        state: if backend_is_healthy() { "ready" } else { "pending" }.into(),
+        state: if backend_is_healthy() {
+            "ready".into()
+        } else if api_logged == "STARTING" {
+            "starting".into()
+        } else if api_logged == "FAILED" {
+            "failed".into()
+        } else {
+            "pending".into()
+        },
         detail: format!("http://{API_HOST}:{API_PORT}"),
     });
     out
 }
 
 impl StartupStatus {
-    fn progress(phase: &str, message: &str) -> Self {
+    fn progress(phase: &str, message: &str, root: Option<&Path>) -> Self {
         Self {
             phase: phase.into(),
             message: message.into(),
-            detail: String::new(),
+            detail: root.map(last_activity).unwrap_or_default(),
             ok: false,
             finished: false,
-            services: probe_services(),
+            services: probe_services(root),
         }
     }
 
-    fn failed(message: &str, detail: &str) -> Self {
+    fn failed(message: &str, detail: &str, root: Option<&Path>) -> Self {
         Self {
             phase: "failed".into(),
             message: message.into(),
             detail: detail.into(),
             ok: false,
             finished: true,
-            services: probe_services(),
+            services: probe_services(root),
         }
     }
 }
@@ -143,7 +257,7 @@ impl BackendState {
             ready: AtomicBool::new(false),
             cancelled: AtomicBool::new(false),
             project_root: Mutex::new(None),
-            status: Mutex::new(StartupStatus::progress("boot", "Starting")),
+            status: Mutex::new(StartupStatus::progress("boot", "Starting", None)),
         }
     }
 
@@ -353,8 +467,11 @@ fn backend_is_healthy() -> bool {
 /// window instead of only in a file the user has to find.
 fn error_log_tail(root: &Path) -> String {
     let path = root.join(".runtime").join("logs").join("startup-error.log");
-    match std::fs::read_to_string(&path) {
-        Ok(text) => {
+    match std::fs::read(&path) {
+        // Lossy, because `start-desktop.bat` writes ANSI and `read_to_string` would
+        // return nothing at all for the whole file over one unmappable byte.
+        Ok(bytes) => {
+            let text = String::from_utf8_lossy(&bytes);
             let lines: Vec<&str> = text.lines().rev().take(6).collect();
             lines.into_iter().rev().collect::<Vec<_>>().join("\n")
         }
@@ -377,6 +494,19 @@ pub fn spawn_startup(app: AppHandle, state: Arc<BackendState>) {
         }
 
         lifecycle::log("startup: begin");
+
+        // Say something immediately, before anything slow happens.
+        //
+        // The window shows this file from the moment it opens, and the first event used
+        // to be emitted only after the project had been located and the launcher
+        // spawned. In between, the page fell back to its own initial state — every row
+        // grey, no activity line — which is the "reads as frozen" the user reported.
+        state.set_status(StartupStatus::progress(
+            "launching",
+            "Starting PostgreSQL, Redis, Qdrant and the API...",
+            None,
+        ));
+        emit(&app, state.status());
 
         // Create the job object before any branch is taken.
         //
@@ -403,6 +533,7 @@ pub fn spawn_startup(app: AppHandle, state: Arc<BackendState>) {
             lifecycle::log("startup: backend already healthy, returning early");
             // Still point the log at the project so the shutdown that follows is
             // recorded next to everything else rather than in the temp folder.
+            let mut early_root: Option<PathBuf> = None;
             if let Some(root) = lifecycle::locate_project_root() {
                 lifecycle::set_log_root(&root);
                 lifecycle::log("startup: log root set on the early-return path");
@@ -411,6 +542,7 @@ pub fn spawn_startup(app: AppHandle, state: Arc<BackendState>) {
                 // rather than to any job. Adopt it here too, or this instance's force-kill
                 // would leave the database behind even though it never started it.
                 lifecycle::adopt_escaped_services(state.job.lock().unwrap().as_ref(), &root);
+                early_root = Some(root);
             }
             state.set_status(StartupStatus {
                 phase: "ready".into(),
@@ -418,7 +550,7 @@ pub fn spawn_startup(app: AppHandle, state: Arc<BackendState>) {
                 detail: format!("http://{API_HOST}:{API_PORT}"),
                 ok: true,
                 finished: true,
-                services: probe_services(),
+                services: probe_services(early_root.as_deref()),
             });
             state.ready.store(true, Ordering::SeqCst);
             emit(&app, state.status());
@@ -434,6 +566,7 @@ pub fn spawn_startup(app: AppHandle, state: Arc<BackendState>) {
                     "Project directory not found",
                     "The shell could not locate scripts\\start-desktop.bat. \
                      Set AI_WORKBENCH_HOME to the project directory and start again.",
+                    None,
                 );
                 state.set_status(status.clone());
                 emit(&app, status);
@@ -449,6 +582,7 @@ pub fn spawn_startup(app: AppHandle, state: Arc<BackendState>) {
         state.set_status(StartupStatus::progress(
             "launching",
             "Starting PostgreSQL, Redis, Qdrant and the API...",
+            Some(&root),
         ));
         emit(&app, state.status());
 
@@ -483,6 +617,7 @@ pub fn spawn_startup(app: AppHandle, state: Arc<BackendState>) {
                 let status = StartupStatus::failed(
                     "Could not run the startup script",
                     &format!("{}: {exc}", launcher.display()),
+                    Some(&root),
                 );
                 state.set_status(status.clone());
                 emit(&app, status);
@@ -510,20 +645,24 @@ pub fn spawn_startup(app: AppHandle, state: Arc<BackendState>) {
                     detail: format!("http://{API_HOST}:{API_PORT}"),
                     ok: true,
                     finished: true,
-                    services: probe_services(),
+                    services: probe_services(Some(&root)),
                 });
                 emit(&app, state.status());
                 navigate_to_app(&app);
                 return;
             }
-            // Reassure the user that something is happening, without pretending
-            // it is finished: the elapsed time is real, the state is not "ready".
-            if last_note.elapsed() >= Duration::from_secs(5) {
+            // One second, not five. The per-service rows and the activity line come from
+            // the startup log, and at a five-second cadence a service that starts and
+            // becomes ready in between never appeared at all — the row jumped from grey
+            // to green with nothing in between. One second is under the shortest service
+            // this machine starts (Redis, measured at 0.3–1 s) and costs one file tail
+            // read plus four TCP connects.
+            if last_note.elapsed() >= Duration::from_secs(1) {
                 last_note = Instant::now();
-                let elapsed = STARTUP_TIMEOUT.as_secs() - deadline.saturating_duration_since(Instant::now()).as_secs();
                 let status = StartupStatus::progress(
                     "waiting",
-                    &format!("Waiting for the backend... {elapsed}s"),
+                    "Starting PostgreSQL, Redis, Qdrant and the API...",
+                    Some(&root),
                 );
                 state.set_status(status.clone());
                 emit(&app, status);
@@ -539,6 +678,7 @@ pub fn spawn_startup(app: AppHandle, state: Arc<BackendState>) {
             } else {
                 &detail
             },
+            Some(&root),
         );
         state.set_status(status.clone());
         emit(&app, status);

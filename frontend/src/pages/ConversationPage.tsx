@@ -39,6 +39,7 @@ import {
   KeyRound,
   Loader2,
   MessageSquare,
+  RotateCcw,
   Sparkles,
 } from 'lucide-react'
 
@@ -46,7 +47,7 @@ import { Button } from '@/components/ui/Button'
 import { EmptyState, ErrorState, InlineAlert, LoadingBlock } from '@/components/ui/feedback'
 import { Badge } from '@/components/ui/primitives'
 import { DeliverableCard } from '@/features/delivery/DeliverableCard'
-import { RunDetailsFold, type PlanStep } from '@/features/delivery/RunDetails'
+import { RunDetailsFold, RetrievalLine, type PlanStep } from '@/features/delivery/RunDetails'
 import { conversationApi, type ConversationMessage } from '@/lib/conversationApi'
 import {
   deliveryApi,
@@ -58,6 +59,7 @@ import {
 } from '@/lib/deliveryApi'
 import { contextApi } from '@/lib/contextApi'
 import { api, toApiError } from '@/lib/api'
+import { outstandingPending, useConversationStore, type PendingMessage } from '@/store/conversation'
 import { cn } from '@/lib/utils'
 
 /* --------------------------------------------------------------- the gate -- */
@@ -101,6 +103,80 @@ function UserBubble({ message }: { message: ConversationMessage }) {
     <div className="flex justify-end" data-testid="message-user">
       <div className="max-w-[85%] rounded-2xl rounded-br-md border border-accent/25 bg-accent-soft/50 px-3.5 py-2.5">
         <p className="whitespace-pre-wrap text-[13.5px] text-text">{message.content}</p>
+      </div>
+    </div>
+  )
+}
+
+/**
+ * Something the user said that the server has not confirmed yet.
+ *
+ * Drawn the instant the send button is pressed, from the local queue — the user's own
+ * sentence must not wait for a round trip that can take eleven seconds. `sending` is
+ * always moving (three staggered dots), never a static label: "正在想…" with nothing
+ * moving is indistinguishable from a frozen window, which is what the user reported.
+ *
+ * A failure keeps the bubble on screen with the reason and a retry. It is never removed
+ * silently — the only copy of what they typed is right here.
+ */
+function PendingBubble({
+  item,
+  onRetry,
+}: {
+  item: PendingMessage
+  onRetry: (item: PendingMessage) => void
+}) {
+  const failed = item.state === 'failed'
+  return (
+    <div className="flex flex-col items-end gap-1" data-testid="message-pending">
+      <div
+        className={cn(
+          'max-w-[85%] rounded-2xl rounded-br-md border px-3.5 py-2.5',
+          failed
+            ? 'border-danger/50 bg-danger-soft/30'
+            : 'border-accent/25 bg-accent-soft/40 opacity-80',
+        )}
+      >
+        <p className="whitespace-pre-wrap text-[13.5px] text-text">{item.text}</p>
+      </div>
+      {failed ? (
+        <div className="flex items-center gap-2" data-testid="pending-failed">
+          <span className="text-[11.5px] text-danger">{item.error ?? '没发出去'}</span>
+          <button
+            type="button"
+            data-testid="pending-retry"
+            onClick={() => onRetry(item)}
+            className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-0.5 text-[11.5px] text-muted transition-colors hover:border-accent/40 hover:text-text"
+          >
+            <RotateCcw className="size-3" />
+            重发
+          </button>
+        </div>
+      ) : (
+        <span className="text-[11.5px] text-faint">发送中…</span>
+      )}
+    </div>
+  )
+}
+
+/** It is working on the answer. Always animating; see `PendingBubble`. */
+function ThinkingRow() {
+  return (
+    <div className="flex gap-2.5" data-testid="thinking">
+      <span className="mt-1 flex size-6 shrink-0 items-center justify-center rounded-full bg-elevated">
+        <Sparkles className="size-3.5 text-muted" />
+      </span>
+      <div className="flex items-center gap-2 pt-1">
+        <span className="flex items-center gap-1">
+          {[0, 1, 2].map((index) => (
+            <span
+              key={index}
+              className="size-1.5 animate-bounce rounded-full bg-accent"
+              style={{ animationDelay: `${index * 140}ms` }}
+            />
+          ))}
+        </span>
+        <span className="text-[12.5px] text-muted">正在想…</span>
       </div>
     </div>
   )
@@ -485,6 +561,14 @@ export default function ConversationPage() {
     retry: false,
   })
 
+  // The local queue of what has been said but not yet confirmed. Outside the component
+  // on purpose — see `store/conversation.ts`.
+  const pendingAll = useConversationStore((state) => state.pending)
+  const addPending = useConversationStore((state) => state.addPending)
+  const failPending = useConversationStore((state) => state.failPending)
+  const retryPending = useConversationStore((state) => state.retryPending)
+  const dropPending = useConversationStore((state) => state.dropPending)
+
   const conversation = useQuery({
     queryKey: ['conversation', id],
     queryFn: () => conversationApi.get(id!),
@@ -528,18 +612,20 @@ export default function ConversationPage() {
   }, [conversation.data])
 
   const send = useMutation({
-    mutationFn: async ({ conversationId, text }: { conversationId: string; text: string }) => {
-      const result = await conversationApi.send(conversationId, text)
-      return { conversationId, turn: result.data }
-    },
-    onSuccess: ({ conversationId, turn }) => {
+    mutationFn: (input: { conversationId: string; text: string; localId: string }) =>
+      conversationApi.send(input.conversationId, input.text),
+    onSuccess: (_result, input) => {
       setNotice(null)
-      void queryClient.invalidateQueries({ queryKey: ['conversation', conversationId] })
+      void queryClient.invalidateQueries({ queryKey: ['conversation', input.conversationId] })
       void queryClient.invalidateQueries({ queryKey: ['conversations'] })
       void queryClient.invalidateQueries({ queryKey: ['delivery'] })
-      if (turn.outcome === 'start') setNotice(null)
     },
-    onError: (exc) => setNotice(toApiError(exc).message),
+    onError: (exc, input) => {
+      // The bubble stays on screen with the reason and a retry. Dropping it would
+      // silently lose the only copy of what the user typed, and "静默消失" is the
+      // behaviour they called out by name.
+      failPending(input.localId, toApiError(exc).message)
+    },
   })
 
   const confirm = useMutation({
@@ -555,31 +641,63 @@ export default function ConversationPage() {
 
   /** Sending from `/` starts the conversation first — one user action, not two. */
   const handleSend = async (text: string) => {
+    const localId = addPending({
+      conversationId: id ?? null,
+      text,
+      serverUserCount: messages.filter((m) => m.role === 'user').length,
+    })
     if (id) {
-      send.mutate({ conversationId: id, text })
+      send.mutate({ conversationId: id, text, localId })
       return
     }
     try {
       const created = await conversationApi.create()
       void queryClient.invalidateQueries({ queryKey: ['conversations'] })
       navigate(`/c/${created.data.id}`, { replace: true })
-      send.mutate({ conversationId: created.data.id, text })
+      send.mutate({ conversationId: created.data.id, text, localId })
     } catch (exc) {
-      setNotice(toApiError(exc).message)
+      failPending(localId, toApiError(exc).message)
     }
+  }
+
+  const handleRetry = (item: PendingMessage) => {
+    const target = item.conversationId ?? id
+    if (!target) return
+    retryPending(item.id)
+    send.mutate({ conversationId: target, text: item.text, localId: item.id })
   }
 
   const messages = conversation.data?.messages ?? []
   const pending = stats.data?.candidates_pending ?? 0
+  const serverUserCount = messages.filter((m) => m.role === 'user').length
 
-  // Land at the bottom, where the newest thing is.
+  // Only this conversation's outstanding messages: one sent in another conversation
+  // must not appear here, and must not be judged against this one's message count.
+  const outstanding = outstandingPending(pendingAll, serverUserCount).filter(
+    (item) => !item.conversationId || item.conversationId === id,
+  )
+  const thinking = outstanding.some((item) => item.state === 'sending')
+
+  // Hand a confirmed message over from the local copy to the server's copy, exactly
+  // once. Counted rather than matched on text, because the same sentence can be sent
+  // twice on purpose and matching would drop the second one.
+  useEffect(() => {
+    for (const item of pendingAll) {
+      if (item.conversationId && item.conversationId !== id) continue
+      if (item.state === 'sending' && item.serverUserCount < serverUserCount) dropPending(item.id)
+    }
+  }, [serverUserCount, pendingAll, dropPending, id])
+
+  // Land at the bottom, where the newest thing is. Counted on the local messages too,
+  // so the view follows the optimistic bubble rather than waiting for the reply.
   const bottom = useRef<HTMLDivElement>(null)
   const landed = useRef(0)
   useEffect(() => {
-    if (messages.length === landed.current) return
-    landed.current = messages.length
+    const total = messages.length + outstanding.length
+    if (total === landed.current) return
+    landed.current = total
     bottom.current?.scrollIntoView({ block: 'end' })
-  }, [messages.length])
+  }, [messages.length, outstanding.length])
 
   if (id && conversation.isError) {
     return (
@@ -614,7 +732,7 @@ export default function ConversationPage() {
 
         {id && conversation.isLoading ? (
           <LoadingBlock label="读取对话…" />
-        ) : messages.length === 0 ? (
+        ) : messages.length === 0 && outstanding.length === 0 ? (
           <div className="py-10">
             <EmptyState
               icon={<MessageSquare className="size-5" />}
@@ -623,43 +741,60 @@ export default function ConversationPage() {
             />
           </div>
         ) : (
-          messages.map((message) => (
-            <div key={message.id} className="space-y-2">
-              {message.role === 'user' ? (
-                <UserBubble message={message} />
-              ) : (
-                <div className="flex gap-2.5">
-                  <span className="mt-1 flex size-6 shrink-0 items-center justify-center rounded-full bg-elevated">
-                    <Sparkles className="size-3.5 text-muted" />
-                  </span>
-                  <div className="min-w-0 flex-1 space-y-2">
-                    <AssistantBubble message={message} />
+          <>
+            {messages.map((message) => (
+              <div key={message.id} className="space-y-2">
+                {message.role === 'user' ? (
+                  <UserBubble message={message} />
+                ) : (
+                  <div className="flex gap-2.5">
+                    <span className="mt-1 flex size-6 shrink-0 items-center justify-center rounded-full bg-elevated">
+                      <Sparkles className="size-3.5 text-muted" />
+                    </span>
+                    <div className="min-w-0 flex-1 space-y-2">
+                      <AssistantBubble message={message} />
 
-                    {message.kind === 'clarify' && (
-                      <ClarifyCard
-                        message={message}
-                        pending={confirm.isPending}
-                        onConfirm={() => confirm.mutate(message.conversation_id)}
-                      />
-                    )}
+                      {/* 「它凭什么这么说」, on the reply itself. A `start` message
+                          shows the same sentence on its fold, so it is not repeated
+                          here — one fact, one place. */}
+                      {message.kind !== 'start' && (
+                        <RetrievalLine retrieval={message.retrieval} />
+                      )}
 
-                    {message.kind === 'start' &&
-                      (message.build_run_id && byRun.get(message.build_run_id) ? (
-                        <RunTurn
-                          run={byRun.get(message.build_run_id)!}
-                          deliverables={deliverablesByRun.get(message.build_run_id) ?? []}
-                          blockedReason={blockedReason}
-                          decidedForYou={message.decided_for_you}
-                          retrieval={message.retrieval}
+                      {message.kind === 'clarify' && (
+                        <ClarifyCard
+                          message={message}
+                          pending={confirm.isPending}
+                          onConfirm={() => confirm.mutate(message.conversation_id)}
                         />
-                      ) : (
-                        <p className="text-[12.5px] text-faint">正在开始…</p>
-                      ))}
+                      )}
+
+                      {message.kind === 'start' &&
+                        (message.build_run_id && byRun.get(message.build_run_id) ? (
+                          <RunTurn
+                            run={byRun.get(message.build_run_id)!}
+                            deliverables={deliverablesByRun.get(message.build_run_id) ?? []}
+                            blockedReason={blockedReason}
+                            decidedForYou={message.decided_for_you}
+                            retrieval={message.retrieval}
+                          />
+                        ) : (
+                          <p className="text-[12.5px] text-faint">正在开始…</p>
+                        ))}
+                    </div>
                   </div>
-                </div>
-              )}
-            </div>
-          ))
+                )}
+              </div>
+            ))}
+
+            {/* What the user just said, before the server has confirmed it, and the
+                sign that it is being worked on. Both are the difference between
+                "thinking" and "frozen". */}
+            {outstanding.map((item) => (
+              <PendingBubble key={item.id} item={item} onRetry={handleRetry} />
+            ))}
+            {thinking && <ThinkingRow />}
+          </>
         )}
 
         <div ref={bottom} />
@@ -668,7 +803,11 @@ export default function ConversationPage() {
       <Composer
         blockedReason={blockedReason}
         onSend={(text) => void handleSend(text)}
-        pending={send.isPending}
+        // One message in flight at a time. The handover from the local copy to the
+        // server's copy counts user messages, and two overlapping sends would make the
+        // first reply's arrival look like the second message had been recorded. The
+        // input stays enabled either way, so typing the next thing is never blocked.
+        pending={thinking}
         notice={notice}
       />
     </div>

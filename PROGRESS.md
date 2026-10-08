@@ -30,7 +30,7 @@
 
 ---
 
-## 二、状态：第 1–8 步完成，之后又修了三轮用户实测问题
+## 二、状态：第 1–8 步完成，之后又修了四轮用户实测问题
 
 | 轮次 | 内容 | 状态 |
 |---|---|---|
@@ -40,6 +40,7 @@
 | 第 11 轮 | 记忆让用户做质检员（候选不去重 · 测试垃圾进库 · 没有清理） | **完成** |
 | 第 11 轮附带 | 让应用在提权 shell 里也能起来（安装验收 30/33 → 32/33；非提权 33/33） | **完成**，一条已知缺口见第九节 |
 | 第 12 轮 | 理解层（先问再动手）+ 前端只剩一个对话框 | **完成**；提权路径那条缺口定位到根因，标 FAILED |
+| 第 13 轮 | 启动 46 秒 · 发消息界面不动 · 详情塞满调试信息 · 记忆召回不分相关 | **完成**，一条未复现的缺口见第九节 |
 
 ### 第 10 轮（用户装上软件实测）
 
@@ -104,13 +105,95 @@ Python/Java 的信号）。
          └─ 2 条真正不同的       封面信息 / 报告完整性 —— 一条都没被合并
 ```
 
+### 启动时序（第 13 轮，开发树，同一台机器）
+
+改之前（`startup.log` 原文）：
+
+```
+15:05:56 PostgreSQL STARTING - port 5432
+15:05:57 PostgreSQL READY - 0.1s via pg_isready      ← 到这里只用了 1 秒
+                                                      ← 12 秒空白
+15:06:08 Redis STARTING - port 6379
+15:06:08 Redis READY - 0s
+                                                      ← 7 秒空白
+15:06:15 Qdrant STARTING - port 6333
+15:06:16 Qdrant READY - 1s
+```
+
+改之后：
+
+```
+15:32:43 PostgreSQL STARTING - port 5432
+15:32:44 PostgreSQL READY - 0.1s via pg_isready, schema 0.1s (already set up)
+15:32:44 Redis STARTING - port 6379
+15:32:44 Qdrant STARTING - port 6333
+15:32:45 Redis READY - 0s
+15:32:45 Qdrant READY - 1s
+15:32:45 Infrastructure READY - 4.1s total
+```
+
+**基础设施 21s → 4.1s。** 两处空白都量到了根因：
+
+| 空白 | 根因 | 量出来的证据 |
+|---|---|---|
+| PG READY 后 12s | 每条 `psql` 都没带 `-h`，默认连 `localhost` → 先试 `::1`，而 PG 只听 `127.0.0.1`，回退花 **2.06s/次**；provisioning 有 4-5 次 | `psql -U postgres -tAc "SELECT 1"` **2.13s** vs 加 `-h 127.0.0.1` **0.07s** |
+| Redis READY 后 7s | `Test-QdrantReady` 对**关闭的端口**探 3 个路径，每个等超时 | 端口先问一次（TCP 连接被拒 ~1ms），没在听就直接起 |
+
+**API 那一层也量了**（用户问「看时间花在哪」）：
+
+```
+import app.main               3.08–5.70s  →  1.81–1.86s   ← 只把 qdrant_client 改成按需导入
+_bootstrap_schema             0.29s
+_reconcile_interrupted_runs   0.01s
+Worker()                      0.00s
+```
+
+`import qdrant_client` 本身 1.19s，而启动路径上没有任何东西需要它（建表不碰向量库、
+worker 也不碰）。它被 `api.v1.ai → ai_services → rag.pipeline → retriever →
+vector_store` 这条链在**每次启动**都拉进来。
+
+### 一句话的三种结果，各自的真实耗时
+
+`scripts/measure_turn_timings.py`，打的是运行中的 API：
+
+```
+场景                        结果       耗时      回复字数   建了 run
+打招呼「你好」                answer    4.31s        54     False
+问知识「解释一下什么是死锁」      answer    3.42s       654     False
+要一段文字「写个 300 字雨后小故事」 answer    4.25s       362     False   ← 用户报的那句
+要澄清「帮我做一个 java 的指引」  clarify   2.84s        30     False
+要文件「…小故事，做成 Word」     start     2.32s        35     True
+```
+
+用户报的 **11.7 秒 + 答了又开工**，现在是 **4.25 秒、只回答、0 个 run**；
+要文件那条走 `start`，回复 **35 字**（一句状态，不是那 300 字正文）。
+
+### 记忆召回的阈值也是**测出来的**
+
+`scripts/sample_memory_relevance.py` 打 16 个请求 × 3 条真实记忆 = 48 对，9 对相关：
+
+```
+信号                      相关            无关             漏召  误召
+overlap 计数 >= 1         1–4             0                 0     5
+idf 加权和                1.4–4.2         0–1.4             2     1
+最稀有的共享词 rarity      1.000           0 / 0.500 / 1.0   0     1  ← 选它
+```
+
+**「不相关的宁可召回 0 条」这条规则在测出来之前是不成立的**：阈值为 0（也就是原来
+`ContextAssembler` 的做法 —— 按 confidence + recency 取前 N 条，从不看请求）时，
+48 对里 **39 对全命中**。
+
+`RARITY_FLOOR = 0.6` 是**能去掉全部 5 个误召的最小值**（0.5 会放回 4 个）。
+剩一个误召是「答辩 PPT 的封面要写什么」也召回「PPT 页数」那条 —— 两条都真的相关，
+排除它才是错的，所以留着。
+
 ### 自检（本轮全部重跑）
 
 ```
 verify_installer_static.py        41/41
-verify_installer.py --apply       33/33  ← 非提权运行（用户真实路径，见下方说明）
-                                  32/33  ← 提权运行：唯一失败是强杀后 5432 未释放（根因已定位，见第九节）
-verify-understanding-ui.mjs       18/18   ← 本轮新增：三种结果 + 先问的闸门
+verify_installer.py --apply       见下方「安装验收」一节（本轮重跑，原文贴在交付物之后）
+verify-understanding-ui.mjs       18/18
+verify-send-and-details.mjs       23/23   ← 本轮新增：乐观更新 + 详情只说人话
 verify-conversation-ui.mjs        23/23
 verify-delivery-ui.mjs            46/46
 verify-sidebar.mjs                15/15
@@ -127,22 +210,26 @@ verify-agent-ui.mjs               26/26
 verify-memory-cleanup-ui.mjs      19/19
 verify-no-test-litter.py          PASS
 verify-run-completes.py           PASS（终态 COMPLETED，2 份产出物全过）
-后端测试                          605 收集，605 通过，exit 0
-前端单测                          121 通过 / 10 跳过 · tsc 0 · lint 0 error
+后端测试                          635 收集，635 通过，exit 0（+30：懒加载 4 / 提示词同步 6 / 记忆召回 19 / 隔离 1）
+后端 ruff                         All checks passed（本轮第一次把后端也纳入 lint 门槛）
+前端单测                          121 通过 / 10 跳过 · tsc 0 · lint 0 error（6 条 warning 全是既有文件）
 旧路由                            18/18（verify-sidebar / verify-conversation-ui / verify-delivery-ui 各走一遍）
 ```
 
-> **安装验收要按用户的方式跑。** 用户是双击快捷方式启动的，shell **不提权**。
-> 本 agent 宿主是提权的，那是一条不同的路径（PostgreSQL 必须以受限令牌启动），
-> 所以在本机直接跑会得到 32/33。按用户的方式跑：
->
-> ```powershell
-> # 先 scripts\stop.bat，再用受限令牌启动验收
-> runas /trustlevel:0x20000 "powershell.exe -NoProfile -ExecutionPolicy Bypass -File <项目>\.runtime\_run_acceptance_unelevated.ps1"
-> # 结果在 .runtime\logs\acceptance-unelevated.log
-> ```
->
-> 实测 `elevated=False` → **33/33**，含 `[PASS] PostgreSQL port 5432 released`。
+> **这一轮把后端 ruff 也纳入了门槛**，顺手修掉 3 处历史遗留（2 处 import 顺序、
+> 1 处未使用变量）。**但 ruff 的自动修里有一个坑**：它把
+> `app/ai/memory/lifecycle.py` 里三个「重导出」的 import 当成未使用删掉了 ——
+> 其中 `_terms` 是 `scripts/sample_memory_similarity.py` 在用的，而 ruff 只扫
+> `app/` 和 `tests/`，看不见。现在它们进了 `__all__`（并加了 `noqa: RUF022` 说明
+> 为什么故意不按字母序），**删了脚本会坏**。
+
+> **关于「安装验收要按用户的方式跑」这条，本轮的事实变了。**
+> 之前写的是"本 agent 宿主是提权的"，**现在不是**：本会话的两个 shell 都是
+> UAC 过滤令牌（`whoami /groups`：`BUILTIN\Administrators … 只用于拒绝`、
+> `Mandatory Label\Medium Mandatory Level`），`Test-IsElevated` 返回 False，
+> 基础设施走的是直接启动那条路（postgres 正常起来，0.1s READY）。
+> 所以**本轮跑不出提权那条路径**，第九节里那条 FAILED 与关停超时都无法在本会话复现。
+> 结论照旧成立：**用户是双击快捷方式启动的，不提权**，所以按用户的方式跑才是有效的验收。
 
 ---
 
@@ -245,6 +332,29 @@ cd .. && .venv/Scripts/python.exe scripts/build_installer.py --build
 - **不要并发跑浏览器测试和 pytest。** 两者共用同一个 Qdrant 实例，同时跑会让
   `test_knowledge_ingest` / `test_ingestion_and_rag` 报 6 个 ERROR（单独跑全过）。
   这是我自己的操作失误，不是产品问题 —— 但下次别踩。
+- **`psql` / `pg_isready` 一律带 `-h 127.0.0.1`。** 不带时 libpq 默认连 `localhost`，
+  本机先解析到 `::1`，而 PostgreSQL 只听 `127.0.0.1`，回退要 **2.06 秒**。
+  实测：`psql -U postgres -tAc "SELECT 1"` **2.13s**，加 `-h` 后 **0.07s**。
+  启动时跑了 4-5 条，就是那 12 秒空白。统一走 `lib.ps1` 的 `Get-PgClientArgs`。
+- **模块级 `__getattr__` 服务不了函数里的全局查找。** PEP 562 的 `__getattr__` 只在
+  `模块.名字` 这种属性访问上生效；模块里**函数体**里的 `models.Filter(...)` 和
+  `except UnexpectedResponse` 是 `LOAD_GLOBAL`，不走它 → `NameError`。
+  **我按这个思路改过一次，是测试把它抓回来的**（`tests/unit/test_lazy_qdrant.py`）。
+  要按需导入就在每个用到的方法里做**局部 import**。
+- **内置提示词改了不会自动生效。** `ensure_seeded` 原来只插入「数据库里没有的」，
+  所以第一次播种之后，改 `builtin.py` 永远不起作用 —— `conversation_turn` 和
+  `agent_system` 都在这上面静默失联过。现在：system 播种的版本内容不一致就插新版本
+  （不覆盖旧版本，run 记录靠它）；`created_by` 不是 system 的（人改过的）永不碰。
+- **失败原因不许丢。** `Stop-Pg` 原来把 `pg_ctl` 的退出码和输出扔掉、直接等 60 秒，
+  日志只剩 `PostgreSQL FAILED - shutdown timeout` —— 这一句同时兼容三种完全不同的
+  故障，而唯一能区分它们的那行字被丢了。**外层工具的输出要么记下来，要么别调用它。**
+- **无条件等待 = 白等。** `Stop-ProjectProcess` 里「等端口释放」的 25×400ms 循环
+  原本无条件跑：端口被本项目**故意不动**的进程占着时，它等的是一件永远不会发生的事。
+  两个服务 = 21.9s 里的 20s。**先问「我等的这件事有可能发生吗」。**
+- **改了 `frontend/src` 之后要 `npm run build` 才会在浏览器测试里生效。** API 托管的是
+  `frontend/dist`，`BASE=http://127.0.0.1:8000` 的验证脚本读的是**构建产物**，不是
+  `:5173` 的 dev server。本轮在这上面白花了一轮调试：乐观更新"没生效"，其实是
+  dist 是旧的。
 - **从提权的 shell 启动 PostgreSQL 会失败**（`Execution of PostgreSQL by a user with
   administrative permissions is not permitted`）。`scripts/infra-start.ps1` 检测到提权后
   会依次试三种降权启动，每一种都在别的场合失败过，实测记录在
@@ -400,8 +510,68 @@ build_run_id = None
 
 ---
 
+### 第 13 轮：启动、发消息、详情、召回（三份提示词）
+
+用户这一轮给的是三份实测报告，每份都带着自己的日志。三条线，每条都先量再改。
+
+**① 启动 46 秒。** 三处根因，都在"真实数字"一节里有原始输出：
+
+- **`psql` 缺 `-h`**：默认 `localhost` → 先试 `::1` → 回退，**2.06s/次**，provisioning
+  跑 4-5 次 = 那 12 秒。加 `-h 127.0.0.1` 并把四次检查合成一次（以**应用自己的角色**
+  连一次，一个问题同时回答"角色在不在 / 库在不在 / 密码对不对 / 有没有建表权限"）。
+- **对关闭的端口探针**：`Test-QdrantReady` 探 3 个 HTTP 路径，每个等超时 = 7 秒。
+  改成先问一次 TCP（被拒约 1ms），没在听就直接起。
+- **Redis 和 Qdrant 并发起**，不再一个等完再起另一个。
+- **`qdrant_client` 改成按需导入**：`import app.main` 3.08–5.70s → **1.81–1.86s**。
+- **启动画面**：桌面壳原来 5 秒才发一帧状态，而且不说在做什么。现在立刻发第一帧、
+  1 秒一帧，并且**读 `startup.log`** 把每个服务的真实状态和"现在在做什么"那一行显示出来
+  （新增 `starting` 状态：工作开始就点亮，不是灰点）。
+
+**顺带修掉一个真的问题**：`infra-stop.ps1` 里"等端口释放"的循环无条件跑，
+端口被本项目**故意不动**的进程占着时白等 10 秒 ×2 —— **关停 21.9s → 2.4s**。
+
+**② 发消息界面不动，而且它同时做了两件矛盾的事。** 前端加乐观更新（`store/conversation.ts`）：
+按下发送 **44ms** 就在屏幕上看到自己那句话，配一个持续动的"正在想"，回复到了替换占位，
+失败留在屏幕上可重发（浏览器验证里用 `page.route` 真的把请求打断来测这一条）。
+后端把三种结果做成**互斥**：判据写进提示词（**要不要文件**，不是字数），
+`start` 的 `reply` 超过 120 字就换成服务端自己那句并记一条 warning ——
+用户报的"答了 + 开工了同时为真"就是这么来的。
+
+**③ 详情塞满调试信息，而且召回本身就是错的。**
+
+- 删掉 `memory=未命中(7ms) · skill=未命中(6ms) · knowledge=命中(44ms)` 和
+  `约 69 tokens`（`TierAttempt` 现在有 `detail` 和 `summary` 两个字段，各给各的读者）。
+- 没计划就**整栏不渲染**，不再显示"还没有生成计划"。
+- **"为什么"挪到默认可见的那一行**：折叠着也写着「由「知识库」回答，用了 1 段你的资料」。
+- **召回**：`ContextAssembler._memory_block` 原来按 confidence + recency 取前 N 条，
+  **从不看请求** —— 用户那句"写个 300 字雨后小故事"拿到的是讲 PPT 页数、报告结构、
+  答辩封面的三条。新增 `ai/memory/relevance.py`（一处实现，检索阶梯和装配器共用），
+  阈值 `RARITY_FLOOR = 0.6` 是测出来的（48 对样本，见"真实数字"）。
+
+---
+
 ## 九、仍然 NOT VERIFIED / FAILED
 
+- **NOT VERIFIED：关窗时 `PostgreSQL FAILED - shutdown timeout` 没有复现，也没有被证明修好。**
+  用户报的是安装版 09:18 那一次（`startup.log` 原文：`09:17:39 Application STOPPED` →
+  `09:18:40 PostgreSQL FAILED - shutdown timeout`，61 秒）。**我复现不出来**：
+  同一个数据目录（`%LOCALAPPDATA%\AI Workbench Data`）现在 `pg_ctl -m fast` **0.2 秒
+  exit 0**，端口释放；开发树也一样（0.1s）。本会话的两个 shell 都是 UAC 过滤令牌
+  （`whoami /groups` 显示 Administrators 为 deny-only、Medium 完整性），**跑不出提权那条路**。
+  **能确定的是两件与它直接相关的事实，都改了**：
+  ① 失败路径把 `pg_ctl` 的退出码和输出**扔掉了**，日志只剩一句同时兼容三种故障的话 ——
+  现在先记原因再动作；② `pg_ctl` 放弃之后还要再等 60 秒（等一个只有成功的 `pg_ctl`
+  才会删的 pid 文件），**那 60 秒是白等的** —— 现在 5 秒内确认、然后升级到 `-m immediate`，
+  再不行就如实报「还占着 5432」。**修法未经真实故障验证，不许当成通过。**
+- **「每次都 initdb」是否定的，有证据。** 安装版第二次启动的日志是
+  `PostgreSQL STARTING - port 5432`（**没有** `initialising cluster`），0.1 秒 READY。
+  用户看到那一次是因为 `verify_installer.py` **每次都删掉数据目录**
+  （源码第 147-148 行 `shutil.rmtree(INSTALL_DIR / DATA_ASIDE)`），所以验收跑的
+  永远是"装完第一次"。判据 `Test-Path $PgData\PG_VERSION` 没写错。
+- **`RARITY_FLOOR = 0.6` 是在 3 条记忆的语料上测的。** 公式 `1 - log(df)/log(N+1)`
+  按语料规模归一化，但**语料变大之后没有重测过** —— 和知识库那条 `RELEVANCE_FLOOR`
+  一样，属于"能用的阈值，不是有余量的阈值"。重测就一条命令
+  （`scripts/sample_memory_relevance.py`）。
 - **FAILED：提权启动时，强杀窗口不会带走 PostgreSQL**（验收唯一一条红的：
   `[FAIL] PostgreSQL port 5432 released`）。**根因已定位，不是未定位**：PG 在任务计划
   服务自己的 job 里（`inAnyJob=YES`），而已经在某个 job 里的进程只能加入嵌套的 job，
