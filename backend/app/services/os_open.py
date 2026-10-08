@@ -48,7 +48,7 @@ def _launch(path: Path) -> str:
     if sys.platform == "win32":
         # Raises OSError when the extension has no association, which is the
         # failure worth surfacing rather than swallowing.
-        os.startfile(str(path))  # noqa: S606 - deliberate, documented above
+        os.startfile(str(path))
         return "os.startfile"
 
     if sys.platform == "darwin":

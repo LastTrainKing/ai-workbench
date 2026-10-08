@@ -186,24 +186,16 @@ class AssembledContext:
         }
 
 
-def _memory_score(entry: MemoryEntry, *, now: datetime) -> float:
-    """Rank a memory by how useful it is likely to be right now.
-
-    Relevance is approximated by recency and by how often the memory has actually
-    been used. ``use_count`` matters because a memory that has never influenced
-    anything is, empirically, not useful — and a store that keeps growing while
-    its entries never fire is the failure mode this whole layer exists to avoid.
-    """
-    age_days = 0.0
-    reference = entry.last_used_at or entry.created_at or now
-    if reference.tzinfo is None:
-        reference = reference.replace(tzinfo=UTC)
-    age_days = max(0.0, (now - reference).total_seconds() / 86400)
-
-    recency = 1.0 / (1.0 + age_days / 30.0)
-    usage = min(1.0, entry.use_count / 5.0)
-    return 0.45 * entry.confidence + 0.30 * recency + 0.25 * usage
-
+# `_memory_score` used to live here: 0.45*confidence + 0.30*recency + 0.25*usage, used
+# to pick the top `MAX_MEMORIES` for every run.
+#
+# It is gone rather than unused, because keeping it would leave the next person one
+# plausible-looking way to answer "which memories go in", and that way is the bug: it
+# ranks memories by how *good* they are and never asks whether they are about the
+# request. It is why a request to write a short story was given memories about slide
+# counts, report structure and thesis covers. Recency and usage are still recorded —
+# `use_count` and `last_used_at` are bumped by `record_memory_usage` — they are simply
+# not what decides inclusion any more. `relevance.rank` does, and it is measured.
 
 class ContextAssembler:
     """Builds the context package for one call."""
@@ -231,7 +223,24 @@ class ContextAssembler:
         name = f"用户：{profile.display_name}。" if profile.display_name else ""
         return ContextBlock(kind="profile", text=f"{name}{digest}")
 
-    async def _memory_block(self, *, limit: int = MAX_MEMORIES) -> ContextBlock:
+    async def _memory_block(self, *, goal: str = "", limit: int = MAX_MEMORIES) -> ContextBlock:
+        """The memories that bear on `goal`, and none when none do.
+
+        **`goal` is not optional in spirit.** The first version of this method ranked the
+        user's memories by confidence and recency and never looked at the request, so
+        every run was given the same handful regardless of what it was about. Measured,
+        on the user's own report:
+
+            这次任务是「写个 300 字雨后小故事，做成 Word」。
+            而它塞进上下文的三条记忆是：讲 PPT 页数的、讲报告结构的、讲答辩封面的。
+
+        The user's diagnosis was exact — 「收起来也还是错的：错的是召回，不是展示」 — and
+        the fix is here rather than in the fold. See `relevance.py` for the measured
+        signal, and `scripts/sample_memory_relevance.py` for the distribution it was
+        chosen from.
+        """
+        from app.ai.memory.relevance import rank
+
         rows = list(
             (
                 await self.session.execute(
@@ -244,10 +253,22 @@ class ContextAssembler:
         if not rows:
             return ContextBlock(kind="memory", text="")
 
-        now = datetime.now(UTC)
-        ranked = sorted(rows, key=lambda entry: _memory_score(entry, now=now), reverse=True)
-        chosen = ranked[:limit]
+        if goal.strip():
+            relevant = rank(goal, rows, limit=limit)
+        else:
+            # No request to be relevant to. Returning the top-ranked memories here is
+            # exactly the bug above, so it returns nothing and says so in the log —
+            # a caller that wants memories must say what they are for.
+            logger.warning(
+                "memory_block_assembled_without_a_goal",
+                extra={"available": len(rows), "effect": "no memories injected"},
+            )
+            relevant = []
 
+        if not relevant:
+            return ContextBlock(kind="memory", text="")
+
+        chosen = [entry for _, entry in relevant]
         lines = [f"- {entry.content}" for entry in chosen]
         return ContextBlock(
             kind="memory",
@@ -299,12 +320,18 @@ class ContextAssembler:
     async def assemble(
         self,
         *,
+        goal: str = "",
         knowledge_chunks: list[dict[str, Any]] | None = None,
         project_digest: str = "",
         include_knowledge: bool = True,
     ) -> AssembledContext:
-        """Build the package, trimming by priority if it exceeds the budget."""
-        memory_block = await self._memory_block()
+        """Build the package, trimming by priority if it exceeds the budget.
+
+        `goal` is what the memories are filtered against. It is a keyword with a default
+        only so the signature stays readable; a caller that has a request must pass it,
+        and `_memory_block` logs when none was given.
+        """
+        memory_block = await self._memory_block(goal=goal)
         blocks = [
             await self._profile_block(),
             ContextBlock(kind="project", text=project_digest) if project_digest else ContextBlock(kind="project", text=""),

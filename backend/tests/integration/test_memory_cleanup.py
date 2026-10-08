@@ -301,7 +301,6 @@ async def test_the_evidence_count_survives_the_fold():
         assert keeper is not None
         keeper.structured = {"evidence_count": 5}
         await session.flush()
-        keeper_id = str(keeper.id)
 
     planner = ScriptedPlanner(
         {"duplicates": [], "litter": [], "candidate_duplicates": [{"keep": 1, "merge": [2], "why": "x"}]}

@@ -40,6 +40,8 @@ from app.ai.memory.similarity import (
     named_tokens,
     same_thing,
     similarity,
+)
+from app.ai.memory.similarity import (
     terms as _terms,
 )
 from app.core.logging import get_logger
@@ -465,7 +467,15 @@ async def memory_stats(session: AsyncSession, *, user_id: uuid.UUID) -> dict[str
     }
 
 
-__all__ = [
+# `noqa: RUF022` — `_terms` is deliberately first and outside the alphabetical order.
+#
+# It is a **re-export**: `scripts/sample_memory_similarity.py` imports it from this
+# module. Ruff only lints `app/` and `tests/`, so it cannot see that use, and its F401
+# fix on 2026-10-08 deleted the re-export and broke the script. Listing it in `__all__`
+# is what keeps it alive, and putting it first is what keeps it visible to the next
+# person who wonders why an unused import is sitting there.
+__all__ = [  # noqa: RUF022
+    "_terms",
     "DECAY_AFTER_DAYS",
     "DECAY_CONFIDENCE_BELOW",
     "MERGE_THRESHOLD",
@@ -474,6 +484,7 @@ __all__ = [
     "MergeGroup",
     "apply_merge",
     "consolidate",
+    "containment",
     "decay_stale",
     "find_conflicts",
     "find_merge_groups",
@@ -481,6 +492,7 @@ __all__ = [
     "is_forgotten",
     "is_stale",
     "memory_stats",
+    "named_tokens",
     "purge",
     "raise_conflict_candidates",
     "similarity",

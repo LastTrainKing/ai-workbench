@@ -496,7 +496,7 @@ async def preview_context(
     the budget each block takes.
     """
     assembler = ContextAssembler(session, user_id=user.id, budget_tokens=budget)
-    assembled = await assembler.assemble()
+    assembled = await assembler.assemble(goal=query)
     payload = assembled.as_dict()
     payload["query"] = query
     payload["budget_tokens"] = budget
@@ -509,6 +509,7 @@ async def preview_context_post(
 ) -> dict[str, Any]:
     assembler = ContextAssembler(session, user_id=user.id)
     assembled = await assembler.assemble(
+        goal=payload.query,
         knowledge_chunks=payload.knowledge_chunks,
         project_digest=payload.project_digest,
     )

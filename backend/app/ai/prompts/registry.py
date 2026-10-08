@@ -81,38 +81,92 @@ def _builtin_resolved(name: str) -> ResolvedPrompt:
 
 
 async def ensure_seeded(session: AsyncSession) -> int:
-    """Insert any built-in template that has no database row yet."""
-    existing = set(
-        (await session.execute(select(Prompt.name))).scalars().all()
-    )
-    created = 0
+    """Insert built-in templates that have no row, and upgrade ones the code has changed.
+
+    Both halves matter, and the second one was missing.
+
+    The first version only inserted templates with **no** database row, so editing a
+    prompt in `builtin.py` did nothing at all: the row seeded on the very first run kept
+    winning forever. Measured — `conversation_turn` was rewritten to make `answer` and
+    `start` mutually exclusive, the tests passed against the module, and the running
+    application went on using the old text because version 1 had been written to the
+    database long before. A prompt edit that silently does not take effect is worse than
+    no prompt registry: the code says one thing and the product does another.
+
+    Two rules make it safe to do automatically:
+
+    * **A new version is inserted; the old one is not edited.** Run rows record which
+      version produced them, and rewriting a version's content would turn that record
+      into a lie.
+    * **A version a person edited is never touched.** `created_by` is what separates
+      "seeded from the code" from "written by someone in the UI", and it is the whole
+      reason this can be automatic rather than a prompt.
+    """
+    rows = (
+        await session.execute(select(Prompt, PromptVersion).join(PromptVersion))
+    ).all()
+    by_name: dict[str, list[tuple[Prompt, PromptVersion]]] = {}
+    for prompt, version in rows:
+        by_name.setdefault(prompt.name, []).append((prompt, version))
+
+    changed = 0
     for template in PROMPT_INVENTORY:
-        if template.name in existing:
+        existing = by_name.get(template.name, [])
+        if not existing:
+            prompt = Prompt(
+                name=template.name,
+                description=template.description,
+                category=template.category,
+                is_active=True,
+            )
+            session.add(prompt)
+            await session.flush()
+            session.add(
+                PromptVersion(
+                    prompt_id=prompt.id,
+                    version=1,
+                    content=template.content,
+                    variables=template.variables or detect_variables(template.content),
+                    change_note="initial seed from built-in template",
+                    is_current=True,
+                    created_by="system",
+                )
+            )
+            changed += 1
             continue
-        prompt = Prompt(
-            name=template.name,
-            description=template.description,
-            category=template.category,
-            is_active=True,
+
+        current = next((v for _, v in existing if v.is_current), existing[-1][1])
+        if current.created_by != "system":
+            # Someone edited it in the UI. The code does not get to overwrite that.
+            continue
+        if current.content == template.content:
+            continue
+
+        logger.info(
+            "prompt_builtin_changed",
+            extra={"prompt_name": template.name, "from_version": current.version},
         )
-        session.add(prompt)
-        await session.flush()
+        current.is_current = False
         session.add(
             PromptVersion(
-                prompt_id=prompt.id,
-                version=1,
+                prompt_id=current.prompt_id,
+                version=current.version + 1,
                 content=template.content,
                 variables=template.variables or detect_variables(template.content),
-                change_note="initial seed from built-in template",
+                change_note="built-in template changed in the code",
                 is_current=True,
                 created_by="system",
             )
         )
-        created += 1
-    if created:
+        changed += 1
+
+    if changed:
         await session.flush()
-        logger.info("prompts_seeded", extra={"count": created})
-    return created
+        # The cached resolution is keyed on the namespace version, so a change is
+        # invisible until this moves — which is the same trap in a different place.
+        await bump_namespace(NS)
+        logger.info("prompts_seeded", extra={"count": changed})
+    return changed
 
 
 async def get_prompt(session: AsyncSession, name: str) -> ResolvedPrompt:

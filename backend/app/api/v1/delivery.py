@@ -326,7 +326,7 @@ async def register_deliverable(
     from app.ai.memory import ContextAssembler
 
     assembler = ContextAssembler(session, user_id=user.id)
-    assembled = await assembler.assemble(include_knowledge=False)
+    assembled = await assembler.assemble(goal=run.goal, include_knowledge=False)
 
     item = await service.record_deliverable(
         run=run,

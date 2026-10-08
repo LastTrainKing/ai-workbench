@@ -476,7 +476,7 @@ class AutonomousAgent:
             parts.append(rendered)
         return "\n\n".join(parts)
 
-    async def _personal_context(self, *, purpose: str = "agent") -> str:
+    async def _personal_context(self, *, purpose: str = "agent", goal: str = "") -> str:
         """Assemble the personal block and record what was injected.
 
         Returns an empty string when there is nothing to say — a new user with no
@@ -489,7 +489,7 @@ class AutonomousAgent:
             from app.ai.memory import ContextAssembler
 
             assembler = ContextAssembler(self.session, user_id=self.owner_id)
-            assembled = await assembler.assemble()
+            assembled = await assembler.assemble(goal=goal)
             if assembled.is_empty:
                 return ""
             await assembler.persist(assembled, run_id=self.controller.run_id, purpose=purpose)
@@ -516,7 +516,7 @@ class AutonomousAgent:
         # The personal block goes into the planner as well as the executor, so
         # the plan itself reflects who is asking: language, depth, whether to
         # confirm first, which working directory to prefer.
-        personal = await self._personal_context(purpose="planner")
+        personal = await self._personal_context(purpose="planner", goal=goal)
         combined = "\n\n".join(part for part in (personal, context) if part.strip()) or "（无）"
 
         system = prompt.render(tools=catalogue, goal=goal, context=combined)
@@ -626,7 +626,7 @@ class AutonomousAgent:
     # ================================================================= execute ==
     async def _run_tools_for_step(self, step: PlanStep, plan: ExecutionPlan) -> list[dict[str, Any]]:
         """Let the model work on one step until it stops calling tools."""
-        personal = await self._personal_context(purpose="executor")
+        personal = await self._personal_context(purpose="executor", goal=plan.goal)
         history = render_attempt_history(step)
         requirements = self._requirements_block()
         system = (

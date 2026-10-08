@@ -32,6 +32,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai.agent.plan import RunState
+
 # The set lives with the registry that knows which capabilities exist — see the
 # note there. Re-exported below so existing importers keep working.
 from app.ai.tools.registry import ARTIFACT_TOOLS

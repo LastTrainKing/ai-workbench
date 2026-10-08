@@ -22,10 +22,10 @@ import pytest
 
 from app.core.config import settings
 from app.core.errors import NotFoundError, ValidationError
-from app.models.delivery import BuildRun, Deliverable
-from app.models.user import User
 from app.core.security import hash_password
 from app.infrastructure.database import session_scope
+from app.models.delivery import BuildRun, Deliverable
+from app.models.user import User
 from app.services.os_open import open_path
 
 

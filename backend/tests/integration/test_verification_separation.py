@@ -30,7 +30,7 @@ import pytest
 from app.core.config import settings
 from app.core.security import hash_password
 from app.infrastructure.database import session_scope
-from app.models.delivery import BuildRun, Deliverable, BuildStatus, describe_run_state
+from app.models.delivery import BuildRun, BuildStatus, Deliverable, describe_run_state
 from app.models.user import User
 from app.services.delivery_service import DeliveryService
 

@@ -125,7 +125,7 @@ class DeliveryService:
         string; the run proceeds exactly as it would otherwise.
         """
         assembler = ContextAssembler(self.session, user_id=run.user_id)
-        assembled = await assembler.assemble()
+        assembled = await assembler.assemble(goal=run.goal)
         snapshot = await assembler.persist(assembled, run_id=str(run.id), purpose=purpose)
         run.context_snapshot_id = snapshot.id
         await self.session.flush()

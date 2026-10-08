@@ -157,7 +157,7 @@ class ChatService:
         # pipeline, so the knowledge part is added there; this contributes the
         # profile, the memories and the preferences.
         assembler = ContextAssembler(self.session, user_id=owner_id)
-        assembled = await assembler.assemble(include_knowledge=False)
+        assembled = await assembler.assemble(goal=question, include_knowledge=False)
         await assembler.persist(assembled, purpose="rag")
 
         answer = await self.pipeline.answer(
@@ -256,6 +256,7 @@ class PlannerService:
         # than a stored preference nobody reads.
         assembler = ContextAssembler(session, user_id=owner_id)
         assembled = await assembler.assemble(
+            goal=goal,
             knowledge_chunks=[
                 {
                     "document_title": c.document_title,

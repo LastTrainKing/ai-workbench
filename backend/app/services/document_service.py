@@ -532,7 +532,13 @@ class DocumentService:
         personal = ""
         try:
             assembler = ContextAssembler(self.session, user_id=owner_id)
-            assembled = await assembler.assemble(include_knowledge=False)
+            # The request here is the document being analysed, so the document's
+            # title is what the memories are filtered against — a paper about
+            # databases should not be summarised against preferences learned from
+            # slide decks.
+            assembled = await assembler.assemble(
+                goal=f"{document.title} {' '.join(wanted)}", include_knowledge=False
+            )
             if not assembled.is_empty:
                 await assembler.persist(assembled, purpose="document")
                 personal = assembled.render()

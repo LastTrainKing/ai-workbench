@@ -44,11 +44,17 @@ logger = get_logger(__name__)
 #: Tier names, cheapest first. Order is the whole design.
 TIERS = ("memory", "skill", "knowledge", "general")
 
-#: Below this many matching terms, a memory is not considered relevant to the question.
-#: Deliberately low: memories are short, and a single distinctive term ("毕设", "部长")
-#: is often the entire signal. Raising it would make tier 1 miss on exactly the
-#: questions it exists to answer.
-MIN_TERM_OVERLAP = 1
+#: How each tier is named to a person. The interface never shows the internal word.
+#:
+#: `general` is the one that matters most: it is the only tier that is not personalised,
+#: and saying "通用推理" is the difference between "your library answered this" and "this
+#: came from nowhere in particular" — a distinction the user has to be able to see.
+TIER_LABELS: dict[str, str] = {
+    "memory": "记忆",
+    "skill": "Skill",
+    "knowledge": "知识库",
+    "general": "通用推理",
+}
 
 #: How relevant a retrieved chunk has to be before the library counts as having answered.
 #:
@@ -100,6 +106,15 @@ class TierAttempt:
     hit: bool
     elapsed_ms: float
     detail: str = ""
+    #: The same fact as `detail`, said to a person instead of to whoever tunes this.
+    #:
+    #: Two fields rather than one because the audiences are genuinely different. The
+    #: user's rule: 「用户看得懂的留，看不懂的删。毫秒数和 token 数是给你调优用的」.
+    #: `detail` keeps the milliseconds and the thresholds — that is what
+    #: `sample_relevance.py` and the startup logs are read for — and `summary` is what
+    #: appears on screen. Collapsing them into one string is how the screen ended up
+    #: showing `knowledge=命中(44ms)`.
+    summary: str = ""
 
 
 @dataclass
@@ -119,12 +134,15 @@ class TieredResult:
         return self.tier
 
     def explain(self) -> str:
-        """One line a person can read: which tier answered, and what the others said.
+        """One line for a log or a tuning session: which tier, and what the others said.
 
         The detail is included, not just hit-or-miss. "knowledge=未命中(24ms)" says a tier
         was consulted and declined; *why* it declined — no material, or material that
         scored below the threshold — is the part that tells a reader whether the
         threshold is set correctly.
+
+        **Not for the interface.** It carries milliseconds and thresholds, which answer a
+        question the user did not ask. `summary()` is the sentence that goes on screen.
         """
         parts = []
         for attempt in self.attempts:
@@ -133,42 +151,61 @@ class TieredResult:
             parts.append(f"{attempt.tier}={mark}({attempt.elapsed_ms:.0f}ms){reason}")
         return f"由「{self.tier}」回答 · " + " · ".join(parts)
 
+    def summary(self) -> str:
+        """The sentence a person reads: what answered this, in their words.
+
+        Answers the question 「它凭什么这么说」 and nothing else. What did *not* answer is
+        left out on purpose — a list of misses reads as a performance report, and the
+        only thing that changes a person's behaviour is knowing whether the answer came
+        from their own material.
+        """
+        label = TIER_LABELS.get(self.tier, self.tier)
+        winner = next((a for a in self.attempts if a.tier == self.tier and a.hit), None)
+        if self.tier == "general":
+            return "这次没用到你的东西，走的是通用推理"
+        detail = winner.summary if winner and winner.summary else ""
+        return f"由「{label}」回答，{detail}" if detail else f"由「{label}」回答"
+
     def as_dict(self) -> dict[str, Any]:
         return {
             "tier": self.tier,
+            "tier_label": TIER_LABELS.get(self.tier, self.tier),
             "total_ms": round(self.total_ms, 1),
+            # What the interface shows by default.
+            "summary": self.summary(),
+            # Kept in the payload but not rendered: it is what the startup log and the
+            # tuning scripts read, and dropping it would make this endpoint useless for
+            # the one job it is genuinely good at.
             "explanation": self.explain(),
             "attempts": [
-                {"tier": a.tier, "hit": a.hit, "elapsed_ms": round(a.elapsed_ms, 1), "detail": a.detail}
+                {
+                    "tier": a.tier,
+                    "hit": a.hit,
+                    "elapsed_ms": round(a.elapsed_ms, 1),
+                    "detail": a.detail,
+                    "summary": a.summary,
+                }
                 for a in self.attempts
             ],
         }
 
 
-def _terms(text: str) -> set[str]:
-    """Crude but predictable tokenisation for CJK and latin alike.
-
-    Deliberately not a tokeniser dependency: this decides *whether to look closer*, not
-    how to score. Every character bigram for CJK, every word for latin. A false positive
-    costs one extra retrieval; a false negative sends a question that the user's own
-    memory could answer down the expensive path, which is the failure this whole module
-    exists to prevent.
-    """
-    lowered = text.lower()
-    words = {w for w in "".join(c if c.isalnum() else " " for c in lowered).split() if len(w) > 1}
-    cjk = [c for c in lowered if "\u4e00" <= c <= "\u9fff"]
-    words |= {cjk[i] + cjk[i + 1] for i in range(len(cjk) - 1)}
-    return words
-
-
 async def _try_memory(session: AsyncSession, user_id: uuid.UUID, question: str) -> tuple[TierAttempt, str, list[str]]:
     """Tier 1: is there a stored fact about this user that bears on the question?
 
-    Scored by term overlap rather than vector distance on purpose. The memory table is
+    Scored by term rarity rather than vector distance on purpose. The memory table is
     the *structured* store — the design says so — and an indexed scan over a user's few
     hundred memories is faster than any embedding call, which matters because this tier
     is the one that is supposed to be fastest.
+
+    The relevance rule lives in `app.ai.memory.relevance`, shared with the context
+    assembler. It used to be a local `overlap >= 1` here, which is not a rule at all:
+    Chinese bigrams like 「内容」 appear in several memories, so one shared term said
+    nothing about *which* memory was about the request. See that module for the measured
+    comparison.
     """
+    from app.ai.memory.relevance import rank
+
     started = time.perf_counter()
     rows = list(
         (
@@ -181,31 +218,37 @@ async def _try_memory(session: AsyncSession, user_id: uuid.UUID, question: str) 
     )
     if not rows:
         return (
-            TierAttempt("memory", False, (time.perf_counter() - started) * 1000, "没有记忆"),
+            TierAttempt(
+                "memory",
+                False,
+                (time.perf_counter() - started) * 1000,
+                "没有记忆",
+                "还没有关于你的记忆",
+            ),
             "",
             [],
         )
 
-    wanted = _terms(question)
-    scored: list[tuple[int, MemoryEntry]] = []
-    for row in rows:
-        overlap = len(wanted & _terms(row.content))
-        if overlap >= MIN_TERM_OVERLAP:
-            scored.append((overlap, row))
-
+    scored = rank(question, rows, limit=5)
     if not scored:
         return (
-            TierAttempt("memory", False, (time.perf_counter() - started) * 1000, f"{len(rows)} 条记忆都不相关"),
+            TierAttempt(
+                "memory",
+                False,
+                (time.perf_counter() - started) * 1000,
+                f"{len(rows)} 条记忆都不相关",
+                "没有和这件事相关的记忆",
+            ),
             "",
             [],
         )
 
-    scored.sort(key=lambda pair: pair[0], reverse=True)
-    picked = [row for _, row in scored[:5]]
+    picked = [row for _, row in scored]
     text = "\n".join(f"- {row.content}" for row in picked)
     detail = f"命中 {len(picked)} 条（共 {len(rows)} 条）"
+    summary = f"用了 {len(picked)} 条关于你的记忆"
     return (
-        TierAttempt("memory", True, (time.perf_counter() - started) * 1000, detail),
+        TierAttempt("memory", True, (time.perf_counter() - started) * 1000, detail, summary),
         text,
         [str(row.id) for row in picked],
     )
@@ -225,18 +268,33 @@ async def _try_skill(
         # not "nothing matched", and reporting the second would be a lie told by a list
         # that is empty for a different reason.
         return (
-            TierAttempt("skill", False, (time.perf_counter() - started) * 1000, "skill 层尚未建立"),
+            TierAttempt(
+                "skill",
+                False,
+                (time.perf_counter() - started) * 1000,
+                "skill 层尚未建立",
+                "还没有可用的 Skill",
+            ),
             [],
         )
 
     matches = await find_matching_skills(session, user_id=user_id, question=question)
     elapsed = (time.perf_counter() - started) * 1000
     if not matches:
-        return TierAttempt("skill", False, elapsed, "没有匹配的 skill"), []
+        return (
+            TierAttempt("skill", False, elapsed, "没有匹配的 skill", "没有匹配的 Skill"),
+            [],
+        )
 
     names = "、".join(m.name for m in matches[:3])
     return (
-        TierAttempt("skill", True, elapsed, f"匹配 {len(matches)} 个：{names}"),
+        TierAttempt(
+            "skill",
+            True,
+            elapsed,
+            f"匹配 {len(matches)} 个：{names}",
+            f"用了 Skill「{names}」",
+        ),
         [{"id": m.id, "name": m.name, "score": m.score} for m in matches],
     )
 
@@ -257,14 +315,29 @@ async def _try_knowledge(
         # difference between "I have no material on this" and "I could not look".
         logger.warning("tier_knowledge_failed", extra={"error": f"{type(exc).__name__}: {exc}"})
         return (
-            TierAttempt("knowledge", False, (time.perf_counter() - started) * 1000, f"检索失败：{exc}"),
+            TierAttempt(
+                "knowledge",
+                False,
+                (time.perf_counter() - started) * 1000,
+                f"检索失败：{exc}",
+                "没能查到你的资料（检索出错了）",
+            ),
             [],
         )
 
     chunks = list(result.chunks or [])
     elapsed = (time.perf_counter() - started) * 1000
     if not chunks:
-        return TierAttempt("knowledge", False, elapsed, "知识库里没有相关资料"), []
+        return (
+            TierAttempt(
+                "knowledge",
+                False,
+                elapsed,
+                "知识库里没有相关资料",
+                "你的资料里没有相关的",
+            ),
+            [],
+        )
 
     def relevance(chunk: Any) -> float:
         """The combined absolute signal, on one scale. See RELEVANCE_FLOOR."""
@@ -286,22 +359,32 @@ async def _try_knowledge(
                 False,
                 elapsed,
                 f"检索到 {len(chunks)} 段，最相关的一段相关度 {top_score:.2f}，低于 {RELEVANCE_FLOOR} —— 视为没有相关资料",
+                "你的资料里没有相关的",
             ),
             [],
         )
 
     kept = [c for score, c in scored if score >= RELEVANCE_FLOOR]
-    return TierAttempt("knowledge", True, elapsed, f"命中 {len(kept)} 段（相关度 {top_score:.2f}）"), [
-        {
-            "chunk_id": c.chunk_id,
-            "document_id": c.document_id,
-            "document_title": c.document_title,
-            "text": c.content,
-            "score": c.score,
-            "relevance": round(relevance(c), 3),
-        }
-        for c in kept
-    ]
+    return (
+        TierAttempt(
+            "knowledge",
+            True,
+            elapsed,
+            f"命中 {len(kept)} 段（相关度 {top_score:.2f}）",
+            f"用了 {len(kept)} 段你的资料",
+        ),
+        [
+            {
+                "chunk_id": c.chunk_id,
+                "document_id": c.document_id,
+                "document_title": c.document_title,
+                "text": c.content,
+                "score": c.score,
+                "relevance": round(relevance(c), 3),
+            }
+            for c in kept
+        ],
+    )
 
 
 async def resolve(
@@ -348,10 +431,16 @@ async def resolve(
     # Nothing personal answered it. Tier 4 is the general path, and the result says so
     # rather than presenting a general answer as though it came from the user's material.
     result.attempts.append(
-        TierAttempt("general", True, (time.perf_counter() - started) * 1000, "前三层都没有，走通用路径")
+        TierAttempt(
+            "general",
+            True,
+            (time.perf_counter() - started) * 1000,
+            "前三层都没有，走通用路径",
+            "没有用到你的东西",
+        )
     )
     result.total_ms = (time.perf_counter() - started) * 1000
     return result
 
 
-__all__ = ["TIERS", "TierAttempt", "TieredResult", "resolve"]
+__all__ = ["TIERS", "TIER_LABELS", "TierAttempt", "TieredResult", "resolve"]

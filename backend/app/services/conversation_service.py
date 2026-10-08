@@ -61,9 +61,9 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.ai.prompts.registry import get_prompt
 from app.ai.providers.budget import reasoning_budget
 from app.ai.providers.factory import build_llm_provider
-from app.ai.prompts.registry import get_prompt
 from app.ai.types import ChatMessage
 from app.core.errors import AIError, NotFoundError, ValidationError
 from app.core.logging import get_logger
@@ -91,6 +91,27 @@ CONFIRM_PHRASE = "别问了，就按你说的办，你看着办就行。"
 #: The opening line of an empty conversation. It speaks first, briefly, the way a new
 #: colleague would — and it does not introduce itself at length or thank anyone.
 GREETING = "在的。你想让我做什么？一句话说清就行，不清楚的地方我来问你。"
+
+#: What the assistant says instead of a `start` reply that was actually the deliverable.
+START_REPLY_FALLBACK = "好，开始做。"
+
+#: A `start` reply is a status line, not the work.
+#:
+#: The prompt says so. This is what happens when it does not: measured, on the user's
+#: own sentence 「写个300字雨后小故事」, the model returned `decision: start` **and** put
+#: the finished ~300-character story in `reply`. The user waited 11.7 seconds and got
+#: the same text twice — once in the conversation, once as a file — which is the
+#: "答了 + 开工了同时为真" the user reported.
+#:
+#: 120 characters is the boundary between a sentence and a document, not a tuned
+#: constant: measured status lines for `start` run 8–30 characters, and the story that
+#: caused this was 312. Anything longer is the deliverable arriving in the wrong
+#: channel, and substituting the server's own line is the only option that keeps the
+#: content out of a place it does not belong.
+#:
+#: The substitution is logged rather than silent, so the prompt can be judged on
+#: whether it needed to happen.
+MAX_START_REPLY = 120
 
 
 class Outcome(StrEnum):
@@ -403,6 +424,18 @@ class ConversationService:
         if raw not in {member.value for member in Outcome}:
             raise AIError(f"理解层返回了无法识别的决定：{raw or '(空)'}")
 
+        # Recorded for every turn, not only for the bad ones: `MAX_START_REPLY` is a
+        # number chosen against a distribution, and this is the line that shows the
+        # distribution. Without it the next person changing that constant is guessing.
+        logger.info(
+            "conversation_turn_decided",
+            extra={
+                "outcome": raw,
+                "reply_chars": len(str(decision.get("reply") or "").strip()),
+                "questions": len(decision.get("questions") or []),
+            },
+        )
+
         if raw == Outcome.ANSWER.value:
             return await self._answer(conversation, decision, retrieval)
         if raw == Outcome.CLARIFY.value:
@@ -469,6 +502,18 @@ class ConversationService:
             str(item).strip() for item in (decision.get("assumptions") or []) if str(item).strip()
         ]
 
+        reply = str(decision.get("reply") or "").strip()
+        if len(reply) > MAX_START_REPLY:
+            # It answered and started at the same time. The work goes on either way —
+            # refusing here would turn a prompt problem into a failed request — but the
+            # text does not go into the conversation, because that is the thing the user
+            # asked for and it is about to arrive as a file.
+            logger.warning(
+                "conversation_start_reply_was_the_work",
+                extra={"reply_chars": len(reply), "limit": MAX_START_REPLY, "goal": goal[:120]},
+            )
+            reply = START_REPLY_FALLBACK
+
         delivery = DeliveryService(self.session)
         run = await delivery.create_build_run(
             owner_id=self.user_id, goal=goal, deliverable_kind=kind
@@ -476,7 +521,7 @@ class ConversationService:
         message = await self.append(
             conversation,
             role=MessageRole.ASSISTANT,
-            content=str(decision.get("reply") or "").strip(),
+            content=reply,
             kind=MessageKind.START,
             build_run_id=run.id,
             decided_for_you=assumptions,
@@ -499,6 +544,8 @@ __all__ = [
     "GREETING",
     "HISTORY_MESSAGES",
     "MAX_QUESTIONS",
+    "MAX_START_REPLY",
+    "START_REPLY_FALLBACK",
     "ConversationService",
     "Outcome",
     "Turn",

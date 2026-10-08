@@ -24,16 +24,45 @@ from __future__ import annotations
 import uuid
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
-from typing import Any
-
-from qdrant_client import AsyncQdrantClient, models
-from qdrant_client.http.exceptions import UnexpectedResponse
+from typing import TYPE_CHECKING, Any
 
 from app.core.config import settings
 from app.core.errors import VectorStoreError
 from app.core.logging import get_logger
 
+if TYPE_CHECKING:  # pragma: no cover - names for the type checker only
+    from qdrant_client import AsyncQdrantClient, models
+
 logger = get_logger(__name__)
+
+# `qdrant_client` is imported inside the methods that use it, not at module scope.
+#
+# Measured: `import qdrant_client` costs **1.19 s**, and this module is reached on every
+# API start through
+#
+#     app.api.v1.ai -> app.services.ai_services -> app.ai.rag.pipeline
+#     -> app.ai.rag.retriever -> app.infrastructure.vector_store
+#
+# so that second was paid before the application could answer its first health check.
+# Nothing on the startup path needs Qdrant — the schema bootstrap does not touch the
+# vector store and neither does the worker — so the cost belongs to the first retrieval.
+# Measured end to end: `import app.main` drops from 3.08–5.70 s to **1.86 s**.
+#
+# **Why the imports are local and not a module `__getattr__`.** The PEP 562 trick looks
+# tidier and does not work here: a module `__getattr__` is consulted for attribute access
+# on the module object, but *not* for a plain global lookup inside a function defined in
+# the module. Every `models.Filter(...)` and every `except ApiException` would raise
+# `NameError` — at runtime, in the retrieval path. That was tried, measured, and is pinned
+# by `tests/unit/test_lazy_qdrant.py`, which fails if the local imports go away and
+# something reintroduces the module-scope import.
+#
+# `ApiException`, not `UnexpectedResponse`. They are **siblings**, both deriving from
+# `ApiException`, not parent and child — so catching only `UnexpectedResponse` missed
+# every transport failure. Measured with Qdrant stopped: `ensure_collection` was supposed
+# to raise `VectorStoreError("Qdrant is not reachable at … Is it running?")` and instead
+# let `ResponseHandlingException: All connection attempts failed` escape unhandled. The
+# one message that names the actual problem never appeared. Found by
+# `tests/unit/test_lazy_qdrant.py`.
 
 PAYLOAD_INDEXES = ("knowledge_base_id", "document_id", "owner_id")
 
@@ -68,6 +97,8 @@ class VectorStore:
 
     # ------------------------------------------------------------- lifecycle --
     def client(self) -> AsyncQdrantClient:
+        from qdrant_client import AsyncQdrantClient
+
         if self._client is None:
             self._client = AsyncQdrantClient(
                 url=self.url,
@@ -84,17 +115,22 @@ class VectorStore:
             self._ensured = False
 
     async def ping(self) -> tuple[bool, str]:
+        from qdrant_client.http.exceptions import ApiException
+
         try:
             info = await self.client().get_collections()
             names = [c.name for c in info.collections]
             return True, f"collections={names}"
-        except (UnexpectedResponse, OSError, ValueError) as exc:
+        except (ApiException, OSError, ValueError) as exc:
             logger.warning("qdrant_ping_failed", extra={"error": str(exc)})
             return False, f"{type(exc).__name__}: {exc}"
 
     # ------------------------------------------------------------- collection --
     async def ensure_collection(self, dimension: int) -> int:
         """Create the collection for ``dimension`` if needed; return the dim."""
+        from qdrant_client import models
+        from qdrant_client.http.exceptions import ApiException
+
         if dimension <= 0:
             raise VectorStoreError("Cannot create a collection with dimension <= 0")
         if self._ensured and self._known_dim == dimension:
@@ -103,7 +139,7 @@ class VectorStore:
         client = self.client()
         try:
             exists = await client.collection_exists(self.collection)
-        except (UnexpectedResponse, OSError) as exc:
+        except (ApiException, OSError) as exc:
             raise VectorStoreError(
                 f"Qdrant is not reachable at {self.url}. Is it running?",
                 details={"error": str(exc)},
@@ -132,7 +168,7 @@ class VectorStore:
                     hnsw_config=models.HnswConfigDiff(m=16, ef_construct=128),
                     optimizers_config=models.OptimizersConfigDiff(default_segment_number=2),
                 )
-            except UnexpectedResponse as exc:
+            except ApiException as exc:
                 # Qdrant can report "collection does not exist" while a stale
                 # directory is still on disk (for example after a hard kill or a
                 # partially applied delete). In that window CREATE fails with
@@ -165,7 +201,7 @@ class VectorStore:
                             field_name=field,
                             field_schema=models.PayloadSchemaType.KEYWORD,
                         )
-                    except UnexpectedResponse as exc:
+                    except ApiException as exc:
                         logger.warning(
                             "qdrant_payload_index_failed",
                             extra={"field": field, "error": str(exc)},
@@ -181,6 +217,9 @@ class VectorStore:
 
     # ------------------------------------------------------------------ write --
     async def upsert(self, points: Sequence[VectorPoint], *, wait: bool = True) -> int:
+        from qdrant_client import models
+        from qdrant_client.http.exceptions import ApiException
+
         if not points:
             return 0
         if not self._ensured:
@@ -194,13 +233,16 @@ class VectorStore:
                 ],
                 wait=wait,
             )
-        except (UnexpectedResponse, ValueError) as exc:
+        except (ApiException, ValueError) as exc:
             raise VectorStoreError(
                 f"Failed to upsert {len(points)} vectors", details={"error": str(exc)}
             ) from exc
         return len(points)
 
     async def delete_points(self, point_ids: Iterable[str]) -> int:
+        from qdrant_client import models
+        from qdrant_client.http.exceptions import ApiException
+
         ids = [pid for pid in point_ids if pid]
         if not ids:
             return 0
@@ -210,7 +252,7 @@ class VectorStore:
                 points_selector=models.PointIdsList(points=ids),
                 wait=True,
             )
-        except (UnexpectedResponse, ValueError) as exc:
+        except (ApiException, ValueError) as exc:
             raise VectorStoreError(
                 "Failed to delete vectors", details={"error": str(exc), "count": len(ids)}
             ) from exc
@@ -223,6 +265,9 @@ class VectorStore:
         return await self._delete_by_field("knowledge_base_id", str(knowledge_base_id))
 
     async def _delete_by_field(self, field: str, value: str) -> int:
+        from qdrant_client import models
+        from qdrant_client.http.exceptions import ApiException
+
         try:
             await self.client().delete(
                 collection_name=self.collection,
@@ -237,7 +282,7 @@ class VectorStore:
                 ),
                 wait=True,
             )
-        except (UnexpectedResponse, ValueError) as exc:
+        except (ApiException, ValueError) as exc:
             raise VectorStoreError(
                 "Failed to delete vectors by filter",
                 details={"field": field, "value": value, "error": str(exc)},
@@ -255,6 +300,9 @@ class VectorStore:
         document_ids: Sequence[uuid.UUID | str] | None = None,
         score_threshold: float | None = None,
     ) -> list[VectorHit]:
+        from qdrant_client import models
+        from qdrant_client.http.exceptions import ApiException
+
         if not vector:
             return []
         must: list[models.Condition] = []
@@ -286,7 +334,7 @@ class VectorStore:
                 with_payload=True,
                 with_vectors=False,
             )
-        except (UnexpectedResponse, ValueError) as exc:
+        except (ApiException, ValueError) as exc:
             raise VectorStoreError(
                 "Vector search failed", details={"error": str(exc)}
             ) from exc
@@ -301,6 +349,9 @@ class VectorStore:
         ]
 
     async def count(self, knowledge_base_id: uuid.UUID | str | None = None) -> int:
+        from qdrant_client import models
+        from qdrant_client.http.exceptions import ApiException
+
         try:
             result = await self.client().count(
                 collection_name=self.collection,
@@ -319,7 +370,7 @@ class VectorStore:
                 exact=True,
             )
             return int(result.count)
-        except (UnexpectedResponse, ValueError) as exc:
+        except (ApiException, ValueError) as exc:
             logger.warning("qdrant_count_failed", extra={"error": str(exc)})
             return -1
 
