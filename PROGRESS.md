@@ -1,10 +1,10 @@
 # PROGRESS — 断点
 
 工作区：`C:\Users\user\Desktop\ai-workbench`
-交付物对应 commit：安装包 `b617372` · 源码包 `b617372`
-（本文件与 3 张记忆清理截图在 `b617372` 之后单独提交，那次提交只动这两样东西 ——
-所以源码包里的 `PROGRESS.md` 会比仓库里的旧一版，`entries` 540 对的是 `b617372`
-那一刻的 `git ls-files`，不是现在的 543。要重新对齐就重建源码包。）
+交付物对应 commit：安装包 `0642ab4` · 源码包 `0642ab4`
+（本文件在 `0642ab4` 之后单独提交，那次提交只改这一份文件 ——
+所以源码包里的 `PROGRESS.md` 会比仓库里的旧一版，`entries` 556 对的是 `0642ab4`
+那一刻的 `git ls-files`。要重新对齐就重建源码包。）
 
 > **读完这一页就能开工。** 已完成的阶段不再写"下一步"——下面只有当前真实状态。
 
@@ -39,6 +39,7 @@
 | 第 10 轮 | 下载/打开点了没反应 · 任务做不全（PARTIAL）· 界面改对话式 | **完成** |
 | 第 11 轮 | 记忆让用户做质检员（候选不去重 · 测试垃圾进库 · 没有清理） | **完成** |
 | 第 11 轮附带 | 让应用在提权 shell 里也能起来（安装验收 30/33 → 32/33；非提权 33/33） | **完成**，一条已知缺口见第九节 |
+| 第 12 轮 | 理解层（先问再动手）+ 前端只剩一个对话框 | **完成**；提权路径那条缺口定位到根因，标 FAILED |
 
 ### 第 10 轮（用户装上软件实测）
 
@@ -108,12 +109,13 @@ Python/Java 的信号）。
 ```
 verify_installer_static.py        41/41
 verify_installer.py --apply       33/33  ← 非提权运行（用户真实路径，见下方说明）
-                                  32/33  ← 提权运行：唯一失败是强杀后 5432 未释放
-verify-conversation-ui.mjs        22/22   ← 本轮新增
-verify-delivery-ui.mjs            44/44
-verify-sidebar.mjs                12/12
-verify-workbench-layout.mjs        9/9
-verify-deliverable-actions.mjs    15/15   ← 本轮新增
+                                  32/33  ← 提权运行：唯一失败是强杀后 5432 未释放（根因已定位，见第九节）
+verify-understanding-ui.mjs       18/18   ← 本轮新增：三种结果 + 先问的闸门
+verify-conversation-ui.mjs        23/23
+verify-delivery-ui.mjs            46/46
+verify-sidebar.mjs                15/15
+verify-workbench-layout.mjs       10/10
+verify-deliverable-actions.mjs    15/15
 verify-config-gate.mjs            12/12
 verify-shell-behaviour.mjs        21/21
 verify-focus-grid.mjs             17/17
@@ -122,12 +124,12 @@ verify-knowledge-and-memory-ui    13 通过 / 0 失败
 verify-onboarding.mjs             25/25   隔离断言 7/7
 verify-context-ui.mjs             27/27
 verify-agent-ui.mjs               26/26
-verify-memory-cleanup-ui.mjs      19/19   ← 本轮新增
-verify-no-test-litter.py          PASS    ← 本轮新增
+verify-memory-cleanup-ui.mjs      19/19
+verify-no-test-litter.py          PASS
 verify-run-completes.py           PASS（终态 COMPLETED，2 份产出物全过）
-后端测试                          588 收集，588 通过，exit 0
+后端测试                          605 收集，605 通过，exit 0
 前端单测                          121 通过 / 10 跳过 · tsc 0 · lint 0 error
-旧路由                            18/18（verify-conversation-ui 内）
+旧路由                            18/18（verify-sidebar / verify-conversation-ui / verify-delivery-ui 各走一遍）
 ```
 
 > **安装验收要按用户的方式跑。** 用户是双击快捷方式启动的，shell **不提权**。
@@ -148,13 +150,12 @@ verify-run-completes.py           PASS（终态 COMPLETED，2 份产出物全过
 
 | | 路径 | 体积 | 条目数 | SHA256 |
 |---|---|---|---|---|
-| 安装包 | `build/installer/AI-Workbench-Setup.exe` | 97,176,954 B | payload 8,707 文件 / 443.5 MB | `eb2f025bc7bdfab2291fbf1149e4084713c2a9306e57f000e81fce5b5975d8d4` |
-| 源码包 | `archive/releases/AI-Workbench-b617372-final.zip` | 9,957,900 B | 540 条目 | `1b0d0c4ffdab6f644431307bb0eb37d037da42fef011eeecde28926e8b03156b` |
+| 安装包 | `build/installer/AI-Workbench-Setup.exe` | 97,185,773 B | payload 8,710 文件 / 443.6 MB | `6baa4fe1631c039caf38ccfe88cdd5024e2d943fd5a44386aa709eed061bdc83` |
+| 源码包 | `archive/releases/AI-Workbench-0642ab4-final.zip` | 11,238,037 B | 556 条目 | `e71783efc20f8643962df38c8aa07e553c215476b38a101c8beb6ededa85f53c` |
 
-两者都对应 `b617372`。源码包由 `git ls-files` 生成 —— 该 commit 的 540 个跟踪文件
+两者都对应 `0642ab4`。源码包由 `git ls-files` 生成 —— 该 commit 的 556 个跟踪文件
 全部纳入、0 个被策略排除，自带的凭据扫描 PASS。判断包新不新，读 `entries` 与
-**那个 commit 的** `git ls-files | wc -l` 是否一致（`b617372` 都是 540；
-`1012d2a` 之后是 543，因为多了 3 张截图，那 3 张不在包里）。
+**那个 commit 的** `git ls-files | wc -l` 是否一致（`0642ab4` 都是 556）。
 
 **重建链**（顺序不能变，第 3 步必须在第 2 步之后）：
 
@@ -197,8 +198,19 @@ cd .. && .venv/Scripts/python.exe scripts/build_installer.py --build
 14. **进程的清理只能靠 job 对象，不能靠父子关系**（本轮加的）。桌面壳建一个
     `KILL_ON_JOB_CLOSE` 的 job、把启动器放进去，所有后代自动继承 —— 强杀时由操作系统
     收尾。**任何绕开启动器去启动的进程都会漏出这个安全网**：PG 走计划任务降权那条路
-    时就是这样（验收里唯一一条红的）。**已知未修**，见第九节；但那条路只在 shell
-    提权时才走，用户双击启动的路径不受影响。
+    时就是这样（验收里唯一一条红的）。**根因已定位**（见第九节）：任务计划服务把任务
+    放进它自己的 job，而「已经在某个 job 里的进程」只能加入**嵌套**的 job，我们的 job
+    和它是兄弟关系，所以 `AssignProcessToJobObject` 永远 `win32=5`。
+    **「计划任务启动」与「KILL_ON_JOB_CLOSE」互斥**，只能二选一。
+15. **不确定就问，不许猜着开工**（本轮加的）。理解层把「这一句该怎么回应」做成一次
+    模型调用的结果，三种之一：`answer` / `clarify` / `start`。**闸门是结构性的**：
+    只有 `start` 分支会建 BuildRun，`_clarify` 根本没有那条代码 —— 不靠谁记得住。
+16. **问必须带默认值**（本轮加的）。默认值是「你不确定时我打算怎么做」，不是「由你定」。
+    模型没给默认值的问题**保留**并标记为没有建议，**不许丢掉** —— 丢掉就等于把
+    「我该问」偷偷变成「我猜」。
+17. **创建和开始现在是同一个动作，而且是一次请求**（本轮收紧的）。客户端只发
+    `POST /conversations/{id}/messages`；`DeliveryService.start_build_run` 是「开始」的
+    唯一实现者，`/execute` 端点和会话都调它。
 
 ---
 
@@ -224,6 +236,15 @@ cd .. && .venv/Scripts/python.exe scripts/build_installer.py --build
 - **`str.format` 会把提示词里的 JSON 花括号当占位符。** 用 `replace()`。
 - **Playwright/脚本里不要调用 `powershell`/`cmd`** —— 在本环境被安全策略拦，
   而且失败得很安静（`stdout=None` 会被读成"没有新进程"）。枚举进程用 `ctypes`。
+- **服务测试看不见路由的错误。** 本轮 11 条 service 测试全绿，而路由抛
+  `AttributeError: 'Conversation' object has no attribute 'as_dict'` —— service 测试
+  从不序列化响应，而前端只跟路由说话。**路由要有自己的测试。**
+- **一个谓词，不要两处 `pathname === '/'`。** 加了 `/c/:id` 之后，顶栏和右侧面板都还在
+  判 `=== '/'`，于是从列表点开一个会话，控制台（连搜索框）就整片回来了。
+  `isConversation()` 一处定义、两处使用。
+- **不要并发跑浏览器测试和 pytest。** 两者共用同一个 Qdrant 实例，同时跑会让
+  `test_knowledge_ingest` / `test_ingestion_and_rag` 报 6 个 ERROR（单独跑全过）。
+  这是我自己的操作失误，不是产品问题 —— 但下次别踩。
 - **从提权的 shell 启动 PostgreSQL 会失败**（`Execution of PostgreSQL by a user with
   administrative permissions is not permitted`）。`scripts/infra-start.ps1` 检测到提权后
   会依次试三种降权启动，每一种都在别的场合失败过，实测记录在
@@ -232,18 +253,24 @@ cd .. && .venv/Scripts/python.exe scripts/build_installer.py --build
   ② 进程内受限令牌（需要 `SeImpersonatePrivilege`，本机令牌拿不到，`win32=5`）；
   ③ **计划任务 `RunLevel = Limited`** —— 不需要任何特权，在本机唯一可用。
   任务在端口起来后立刻注销，**进程不会被杀掉**（实测：端口仍在听，任务已消失）。
-  **但这也让 PG 离开了 job 对象** —— 它成了计划任务服务的子进程，不再是启动器的后代，
-  于是强杀应用时它活了下来（验收报 `[FAIL] PostgreSQL port 5432 released`，其余端口都释放了）。
-  试过三种修法，**都失败**，别重复走：
-  ① 桌面壳按 `postmaster.pid` 收养 —— `AssignProcessToJobObject` 报 `win32=5`（提权进程
-     给受限令牌进程赋值需要 `SeAssignPrimaryTokenPrivilege`/`SeIncreaseQuotaPrivilege`，
-     本机一个都拿不到）。**这条留在代码里**（`lifecycle::adopt_escaped_services`），
-     每次提权启动都会写一行 `adopt: postgres N is NOT in the job ... win32=5` ——
-     保留它是因为它是这条缺口唯一的运行时信号（"失败可见"）；
-  ② 把 job 命名、由受限令牌的 `_start-postgres.ps1` 先加入 job 再启动 PG —— 同一句话
-     还是 `OpenJobObjectW win32=5`；
-  ③ 换 DACL（`OW` / `AU`）并降强制完整性标签到 Medium —— 仍然是 `win32=5`。
-  结论：**提权进程建的 job，受限令牌就是打不开**，原因未定位。只在提权那条路出现。
+  **但这也让 PG 进了任务计划服务自己的 job，而不是我们的** —— 强杀应用时它活了下来。
+  **根因（已实测，别再猜）**：用 `IsProcessInJob(handle, NULL, &result)`（NULL job handle
+  = 「在不在任何 job 里」）量到：
+
+  ```
+  pid 2460   session=2  inAnyJob=YES  (postgres)
+  pid 20804  session=2  inAnyJob=YES  (redis-server)
+  ```
+
+  PG **在**一个 job 里，只是不是我们的。而**已经在某个 job 里的进程只能加入嵌套的
+  job** —— 任务计划的 job 和桌面壳的 job 是兄弟，不是父子，所以
+  `AssignProcessToJobObject` 必然 `win32=5`（ACCESS_DENIED）。
+  之前试过、**都不管用**，别重复走：① 桌面壳按 pid 收养；② 给 job 命名让受限令牌的
+  helper 先加入；③ 换 DACL（`OW`/`AU`）+ 把强制完整性标签降到 Medium。
+  **结论：「计划任务启动」与「KILL_ON_JOB_CLOSE」互斥，二选一。**
+  选了「计划任务」—— 因为另一条不是「job 赢」，而是**提权时应用根本起不来**
+  （那条路上 `runas` 和进程内令牌都失败）。能跑的、带一条已知限制的应用，
+  好过拒绝启动的应用。非提权路径不受影响：PG 由启动器直接拉起、继承 job、强杀即死。
 
 ---
 
@@ -314,23 +341,85 @@ cd .. && .venv/Scripts/python.exe scripts/build_installer.py --build
 2. **改用计划任务 `RunLevel = Limited`** —— 不需要任何特权，本机唯一可用。
    这一步把验收从 30/33 拉到 32/33：`API healthy`、`serves the UI`、
    `registered a fresh account` 三条由红转绿。
-3. **代价是 PG 离开了 job 对象**，强杀后 5432 不释放 —— 见第六节，三种修法都失败，
-   已知未修。**但用户双击启动的路径不受影响**：非提权跑验收是 33/33。
+3. **代价是 PG 进了任务计划服务自己的 job**，强杀后 5432 不释放 —— 见第六节，
+   根因已定位，标 FAILED，**二选一选了「计划任务」**。
+
+### 第 12 轮：理解层 + 一个对话框
+
+用户原话：
+
+> **"我点开这个软件，就是要和我的数字员工对话，就跟一个老板加了员工微信一样，
+> 他能对话，能做好文件发我。"**
+
+> **"他会问我表单还是 PPT、要目录还是要例子 —— 现在完全没有"**
+
+**理解层（`backend/app/services/conversation_service.py`）。** 以前 `create_build_run`
+拿到一句话就开工，中间没有一步问过用户。现在一次模型调用决定三种结果之一：
+
+```
+answer   不需要文件，直接在对话里回答
+clarify  信息不够，问 1-3 个问题，每个带默认值，等回答   ← 这一轮的核心
+start    信息够了，建并启动 BuildRun
+```
+
+**闸门是结构性的**：只有 `start` 分支会建 BuildRun，`_clarify` 里根本没有那条代码 ——
+不靠谁记得住。测试直接断言这一点：`clarify` 之后数据库里 0 个 run。
+
+**实测（用户那句话，原文照录）：**
+
+```
+outcome = clarify
+reply   = 可以，但先确认三件事，不然我按默认方向直接写。
+  Q1: 你现在的 Java 基础是什么水平？
+  默认: 我按「零基础 → 能独立写出一个小项目」来编排，从环境搭建讲起
+  Q2: 你要的成品是什么形式？
+  默认: 我直接在对话里给你一份 Markdown 指南，带目录和阶段划分，方便你复制修改
+  Q3: 学 Java 是为了什么？
+  默认: 按「自学打基础、能上手做项目」定重点，不堆面试八股
+build_run_id = None
+```
+
+**「别问了，你自己看着办」不是特殊分支** —— 它就是一条消息，提示词本来就会处理。
+按钮发的那句话和提示词里认得的那句话是**同一个常量**（服务端），不会漂。
+它替用户决定了什么，记在消息上并显示出来（看不见的假设没法纠正）。
+
+**会话实体。** 新增 `conversations` / `messages` 两张**新表**（`create_all` 自动建，
+不动任何已有表的列）。上一轮在 `ConversationPage.tsx` 里写过「不需要会话表」——
+那是错的，理由就是用户这句话：一次会话里有问答、有产出、有不需要文件的话，
+而 run 只是其中一部分。
+
+**前端只剩一个对话框。** 左侧是会话列表（按 今天/昨天/更早 分组），
+记忆 / 知识库 / Skill / 设置 / 高级 全收进一个齿轮菜单，**18 条旧路由一条没少**
+（`verify-sidebar.mjs` 从菜单里把它们全走一遍）。对话页和顶栏、右侧面板
+用同一个 `isConversation()` 谓词 —— 之前两处各写 `pathname === '/'`，
+加了 `/c/:id` 之后从列表点开会话，控制台整片回来。
+
+**顺带收紧：创建和开始现在是同一次请求。** 客户端只发
+`POST /conversations/{id}/messages`，服务端一次完成 create + execute，
+都走 `DeliveryService.start_build_run` 这一个实现者。
 
 ---
 
-## 九、仍然 NOT VERIFIED
+## 九、仍然 NOT VERIFIED / FAILED
 
-- **提权启动时，强杀窗口不会带走 PostgreSQL**（验收唯一一条红的：
-  `[FAIL] PostgreSQL port 5432 released`）。原因未定位（见第六节，DACL/完整性标签/
-  访问掩码都排除过了）。**只在提权那条路出现**：非提权跑同一个验收是 **33/33**，
-  含这一条。**不许当成通过。**
+- **FAILED：提权启动时，强杀窗口不会带走 PostgreSQL**（验收唯一一条红的：
+  `[FAIL] PostgreSQL port 5432 released`）。**根因已定位，不是未定位**：PG 在任务计划
+  服务自己的 job 里（`inAnyJob=YES`），而已经在某个 job 里的进程只能加入嵌套的 job，
+  我们的 job 和它是兄弟 → `AssignProcessToJobObject` 必然 `win32=5`。
+  **「计划任务启动」与「KILL_ON_JOB_CLOSE」互斥，二选一；选了前者**，因为后者意味着
+  提权时应用根本起不来。**非提权路径不受影响**：同一个验收 **33/33**，含这一条。
+  **这条是 FAILED，不是"基本完成"。**
+- **理解层的三种结果依赖模型判断**：`clarify` / `answer` / `start` 是模型给的，
+  不是规则算的。实测用户那句话稳定走 `clarify`（连跑多次），但**没有**对
+  「模型明明该问却直接开工」做兜底校验 —— 只在提示词里写死了。
 - **「点打开之后真的弹出了程序窗口」没有验证。** 唯一能证明它的方法是真去启动那个
   程序，而那样每跑一次测试就往用户桌面上扔一个 PowerPoint 窗口——用户明确说过不要。
   现在验证到的是：接口返回 200、解析出的路径就是这个产出物的路径、`os.startfile`
   在 OS 边界被以该路径调用一次、文件不存在时明确报错。**窗口本身没有验证，不许当成通过。**
 - **问题 2 的"拦住"分支（没配模型时不让提交）仍未在浏览器里跑过** —— 本机
   `llm.degraded=false`。
+- **浏览器测试会在开发库里留下会话**（`verify-understanding-ui` / `verify-conversation-ui`
+  各建几个）。它们不喂给任何东西、不影响产品行为，所以没做清理 —— 但会出现在侧栏列表里。
 - **`verify_deepseek.py` 62/62 与冷启动 36/36 是历史值，本轮未重跑。**
 - **skill 层（第 2 级）的毫秒数未测。**
 - **`start.sh` / `stop.sh` 未验证** —— POSIX 路径从未在本机跑过。
