@@ -36,6 +36,16 @@ class MessageCreate(BaseModel):
     content: str = Field(min_length=1, max_length=4000)
 
 
+class ConversationDelete(BaseModel):
+    #: One endpoint for all three ways the user asked for — the row's own button, a
+    #: selection, and 全选. A single-delete route plus a bulk route would be two code
+    #: paths for one operation, and the "select all" case is just a longer list.
+    #:
+    #: `min_length=1` because an empty list is a client bug, not a no-op: it would return
+    #: "deleted 0" and look like a success.
+    ids: list[uuid.UUID] = Field(min_length=1, max_length=500)
+
+
 @router.get("/conversations", summary="List conversations")
 async def list_conversations(
     user: CurrentUser,
@@ -45,6 +55,25 @@ async def list_conversations(
     service = ConversationService(session, user_id=user.id)
     items = await service.list_conversations(limit=limit)
     return ok({"conversations": items, "count": len(items)})
+
+
+@router.post("/conversations/delete", summary="Delete one, several, or all conversations")
+async def delete_conversations(
+    payload: ConversationDelete,
+    user: CurrentUser,
+    session: DbSession,
+) -> dict[str, Any]:
+    """Delete conversations and everything that only existed because of them.
+
+    POST rather than DELETE with a body: a body on DELETE is not reliably supported by
+    clients and proxies, and "select all" needs to send a list. The route is still
+    idempotent in effect — deleting something already gone is not an error.
+
+    The response carries the counts, so the screen can say what actually happened rather
+    than what it hoped happened.
+    """
+    service = ConversationService(session, user_id=user.id)
+    return ok(await service.delete_conversations(payload.ids))
 
 
 @router.post("/conversations", status_code=201, summary="Start a conversation")

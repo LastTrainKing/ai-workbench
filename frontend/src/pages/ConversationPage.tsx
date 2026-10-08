@@ -410,6 +410,29 @@ const EXAMPLES = [
   '分析这些数据并做一张汇总表',
 ]
 
+/**
+ * The sentence the user typed on the startup screen, before the app was reachable.
+ *
+ * The window opens on a chat-shaped startup screen whose textarea is live, and the shell
+ * carries whatever was typed into `?draft=` when it navigates here. The user's words:
+ * 「能看见、能打字」 — and a textarea whose contents are discarded the moment the app
+ * arrives would make that a lie.
+ *
+ * Consumed once, at module scope, rather than read on every render: the query string
+ * stays in the address bar, and a remount (route change, React strict mode) would
+ * otherwise re-inject text the user has since deleted.
+ */
+let startupDraftConsumed = false
+function takeStartupDraft(): string {
+  if (startupDraftConsumed) return ''
+  startupDraftConsumed = true
+  try {
+    return new URLSearchParams(window.location.search).get('draft') ?? ''
+  } catch {
+    return ''
+  }
+}
+
 function Composer({
   blockedReason,
   onSend,
@@ -421,7 +444,7 @@ function Composer({
   pending: boolean
   notice: string | null
 }) {
-  const [text, setText] = useState('')
+  const [text, setText] = useState(takeStartupDraft)
   const [kind, setKind] = useState<DeliverableKind>('pptx')
   const [showOptions, setShowOptions] = useState(false)
 
@@ -501,9 +524,17 @@ function Composer({
             }}
             rows={1}
             data-testid="goal-input"
-            disabled={Boolean(blockedReason)}
+            // **Not disabled when there is no model.** It used to be, and that made the
+            // no-key screen a dead end: the one thing a person wants to do is write down
+            // what they were going to ask. The send button is what gets disabled, with a
+            // reason; the box stays live so the sentence is not lost.
+            //
+            // Found by `scripts/verify-no-api-key.mjs`, which asserts the box is typable —
+            // an assertion that failed on the first run with a real key absent.
             placeholder={
-              blockedReason ? '先配置模型，这里就能用了' : '说点什么…（回车发送，Shift+回车换行）'
+              blockedReason
+                ? '还没配置模型，配好后我才能干活 —— 你可以先把想说的打在这里'
+                : '说点什么…（回车发送，Shift+回车换行）'
             }
             className="max-h-40 min-h-[46px] w-full resize-none rounded-2xl border border-border bg-inset px-4 py-3 text-[14px] text-text outline-none transition-colors placeholder:text-faint focus:border-accent/60 disabled:opacity-60"
           />

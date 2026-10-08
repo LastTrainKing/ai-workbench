@@ -56,9 +56,10 @@ import json
 import uuid
 from dataclasses import dataclass, field
 from enum import StrEnum
+from pathlib import Path
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai.prompts.registry import get_prompt
@@ -251,10 +252,146 @@ class ConversationService:
         for (conversation_id,) in rows.all():
             counts[conversation_id] = counts.get(conversation_id, 0) + 1
 
+        # How many files each conversation produced, so the delete confirmation can say
+        # 「删掉 3 条对话、5 个产出物」 instead of a number the user has to guess at.
+        # Counted through messages → runs → deliverables rather than stored, for the same
+        # reason `deliverables()` walks it: a stored counter is a second thing that can
+        # disagree with the rows it counts.
+        from app.models.delivery import Deliverable
+
+        produced: dict[uuid.UUID, int] = {}
+        deliverable_rows = await self.session.execute(
+            select(Message.conversation_id, func.count(Deliverable.id))
+            .join(Deliverable, Deliverable.build_run_id == Message.build_run_id)
+            .where(Message.conversation_id.in_(ids))
+            .group_by(Message.conversation_id)
+        )
+        for conversation_id, total in deliverable_rows.all():
+            produced[conversation_id] = int(total)
+
         return [
-            {**conversation.as_dict(), "message_count": counts.get(conversation.id, 0)}
+            {
+                **conversation.as_dict(),
+                "message_count": counts.get(conversation.id, 0),
+                "deliverable_count": produced.get(conversation.id, 0),
+            }
             for conversation in conversations
         ]
+
+    # ----------------------------------------------------------------- deletes --
+    async def delete_conversations(self, conversation_ids: list[uuid.UUID]) -> dict[str, Any]:
+        """Delete conversations and everything that only existed because of them.
+
+        The user's ask:
+
+            会话列表：现在堆满了，要能删。
+            删除要二次确认，并说清删的是什么（几条对话、几个产出物）
+
+        Counts are returned rather than a bare status, because the screen shows them
+        **before** the delete (in the confirmation) and again afterwards. A delete that
+        cannot say what it removed is one the user has to take on faith.
+
+        Three rules, each of which is a decision rather than an implementation detail:
+
+        * **Only this user's conversations.** The ids come from the client, so they are
+          filtered against `user_id` first. An id belonging to somebody else is skipped
+          and counted, never deleted — the same guarantee as everywhere else here.
+        * **Deliverable files go with them.** The user is shown a file count, so leaving
+          the files on disk would make that number a half-truth. Files are removed only
+          when they resolve **inside the agent workspace**, so a stored path that escaped
+          it cannot be turned into a delete outside.
+        * **A file that is already gone is not an error.** The user may have removed it
+          themselves; that is not a reason to fail the whole operation, and it is logged
+          rather than swallowed.
+        """
+        from sqlalchemy import delete as sql_delete
+
+        from app.ai.tools.permissions import default_workspace
+        from app.models.delivery import BuildRun, Deliverable
+
+        wanted = list(dict.fromkeys(conversation_ids))
+        owned = list(
+            (
+                await self.session.execute(
+                    select(Conversation.id).where(
+                        Conversation.user_id == self.user_id, Conversation.id.in_(wanted)
+                    )
+                )
+            ).scalars()
+        )
+        skipped = len(wanted) - len(owned)
+        if not owned:
+            logger.warning(
+                "conversation_delete_nothing_owned",
+                extra={"requested": len(wanted), "skipped": skipped},
+            )
+            return {
+                "conversations": 0,
+                "messages": 0,
+                "build_runs": 0,
+                "deliverables": 0,
+                "files_removed": 0,
+                "skipped": skipped,
+            }
+
+        message_count = (
+            await self.session.execute(
+                select(func.count()).select_from(Message).where(Message.conversation_id.in_(owned))
+            )
+        ).scalar_one()
+
+        run_ids = [
+            run_id
+            for run_id in (
+                await self.session.execute(
+                    select(Message.build_run_id).where(
+                        Message.conversation_id.in_(owned), Message.build_run_id.is_not(None)
+                    )
+                )
+            ).scalars()
+            if run_id
+        ]
+
+        paths: list[str] = []
+        deliverable_count = 0
+        if run_ids:
+            rows = (
+                await self.session.execute(
+                    select(Deliverable.path).where(Deliverable.build_run_id.in_(run_ids))
+                )
+            ).scalars()
+            paths = [path for path in rows if path]
+            deliverable_count = len(paths)
+            # Deliverables cascade from the run (`ondelete="CASCADE"`), so this one
+            # statement takes both. Messages are not touched: their `build_run_id` is
+            # `SET NULL`, which is why they can outlive a run at all.
+            await self.session.execute(sql_delete(BuildRun).where(BuildRun.id.in_(run_ids)))
+
+        # Messages cascade from the conversation, so this takes the whole thread.
+        await self.session.execute(sql_delete(Conversation).where(Conversation.id.in_(owned)))
+        await self.session.flush()
+
+        removed = _remove_workspace_files(paths, default_workspace())
+
+        logger.info(
+            "conversations_deleted",
+            extra={
+                "conversations": len(owned),
+                "messages": int(message_count),
+                "build_runs": len(run_ids),
+                "deliverables": deliverable_count,
+                "files_removed": removed,
+                "skipped": skipped,
+            },
+        )
+        return {
+            "conversations": len(owned),
+            "messages": int(message_count),
+            "build_runs": len(run_ids),
+            "deliverables": deliverable_count,
+            "files_removed": removed,
+            "skipped": skipped,
+        }
 
     async def deliverables(self, conversation_id: uuid.UUID) -> list[dict[str, Any]]:
         """Every file this conversation produced, oldest first.
@@ -537,6 +674,44 @@ class ConversationService:
             decided_for_you=assumptions,
             retrieval=retrieval,
         )
+
+
+def _remove_workspace_files(paths: list[str], workspace: Path) -> int:
+    """Delete deliverable files — but only ones inside the agent workspace.
+
+    The paths come out of the database, and a database is not a trust boundary: a row
+    written by a bug, by a migration or by an older version could hold anything at all.
+    Resolving each path and requiring the result to be **inside** the workspace is what
+    stops this function from becoming a way to delete an arbitrary file. It is the same
+    rule `os_open` uses before handing a path to the operating system.
+
+    A file that is already gone is logged, not treated as a failure: the user may have
+    deleted it themselves, and that is not a reason to abandon the rest of the delete.
+    """
+    root = workspace.resolve()
+    removed = 0
+    for raw in paths:
+        try:
+            candidate = Path(raw).resolve()
+        except OSError as exc:
+            logger.warning("deliverable_file_unresolvable", extra={"path": raw, "error": str(exc)})
+            continue
+        if not candidate.is_relative_to(root):
+            logger.warning(
+                "deliverable_file_outside_workspace",
+                extra={"path": raw, "workspace": str(root)},
+            )
+            continue
+        try:
+            candidate.unlink()
+            removed += 1
+        except FileNotFoundError:
+            logger.info("deliverable_file_already_gone", extra={"path": str(candidate)})
+        except OSError as exc:
+            logger.warning(
+                "deliverable_file_not_removed", extra={"path": str(candidate), "error": str(exc)}
+            )
+    return removed
 
 
 __all__ = [

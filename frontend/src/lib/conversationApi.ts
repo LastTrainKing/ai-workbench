@@ -64,8 +64,28 @@ export interface Conversation {
   id: string
   title: string
   message_count: number
+  /**
+   * How many files this conversation produced.
+   *
+   * On the list row rather than fetched when the delete is confirmed, because the
+   * confirmation has to say 「删掉 3 条对话、5 个产出物」 **before** anything is deleted,
+   * and a second round trip at that moment is a round trip that can fail and leave the
+   * user confirming a number they cannot see.
+   */
+  deliverable_count: number
   created_at: string
   updated_at: string
+}
+
+/** What a delete actually removed. Returned so the screen can report facts, not hopes. */
+export interface DeleteSummary {
+  conversations: number
+  messages: number
+  build_runs: number
+  deliverables: number
+  files_removed: number
+  /** Ids that were asked for but are not this user's — skipped, never deleted. */
+  skipped: number
 }
 
 export interface ConversationDetail extends Conversation {
@@ -96,6 +116,19 @@ export const conversationApi = {
     requestResult<Turn>(`/conversations/${id}/messages`, {
       method: 'POST',
       body: { content },
+    }),
+
+  /**
+   * Delete one, several, or all.
+   *
+   * One call for all three because they are one operation with a longer list — the row's
+   * own button, a selection, and 全选 all end up here. The response carries the counts so
+   * the screen can say what happened.
+   */
+  remove: (ids: string[]) =>
+    requestResult<DeleteSummary>('/conversations/delete', {
+      method: 'POST',
+      body: { ids },
     }),
 
   /** 「就按你说的做」 — the same thing as sending that sentence, decided server-side. */
