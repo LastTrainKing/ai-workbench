@@ -406,8 +406,8 @@ def test_the_agent_cannot_write_the_permission_policy() -> None:
     at the doors. `ToolExecutor` sets the flag around every tool call; this asserts the
     protected side reads it.
     """
-    from app.ai.tools.agent_scope import AgentScopeViolation, agent_tool_scope
     from app.ai.tools import policy_store
+    from app.ai.tools.agent_scope import AgentScopeViolation, agent_tool_scope
 
     with agent_tool_scope("http_post"):
         with pytest.raises(AgentScopeViolation) as excinfo:
