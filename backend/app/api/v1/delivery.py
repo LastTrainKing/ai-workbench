@@ -148,18 +148,11 @@ async def execute_build_run_endpoint(
     takes minutes, and holding the request open for it would time out while freezing
     every other request on the same worker.
     """
-    from app.services.build_executor import execute_build_run
-
     service = DeliveryService(session)
     run = await service.get_build_run(owner_id=user.id, build_run_id=build_run_id)
-    if run.status not in (BuildStatus.DRAFT.value, BuildStatus.READY.value):
-        raise ValidationError(f"当前状态（{run.status}）下不能开始执行")
-
-    # Assemble and record what this run will be told about the user, then hand the
-    # same block to the agent — so "what did it know" and "what was it given" are
-    # the same string rather than two things that ought to match.
-    context = await service.attach_context(run)
-    result = await execute_build_run(session, build_run_id=build_run_id, context=context)
+    # Assembling the context and handing off is one operation, implemented once in
+    # `DeliveryService.start_build_run` — the conversation uses the same one.
+    result = await service.start_build_run(run)
     return ok(result, message="已开始执行")
 
 

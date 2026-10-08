@@ -116,6 +116,10 @@ def test_all_models_are_registered_in_metadata() -> None:
         # Step 4. The set is asserted exactly rather than as a subset, so a table added
         # without being registered here is a failing test rather than a silent extra.
         "installed_skills",
+        # The conversation layer. `conversations` is the container the user asked for
+        # ("我点开这个软件，就是要和我的数字员工对话") and `messages` is what was said in
+        # it, including the questions it asked before starting work.
+        "conversations", "messages",
     }
     assert set(Base.metadata.tables) == expected_tables
 

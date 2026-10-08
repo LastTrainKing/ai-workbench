@@ -304,6 +304,11 @@ AGENT_SYSTEM = PromptTemplate(
 4. 最多执行 {max_steps} 步；信息足够时必须停止调用工具并给出最终答复。
 5. 最终答复必须包含：做了什么、创建了哪些实体、依据了哪些资料。
 6. 不允许直接操作数据库，只能通过工具完成。
+7. **目标不清楚就不要开工。** 如果产出形式、范围或用途不明，而你无法合理默认，
+   正确的行为是**把问题返回给用户**，不是猜一个目标硬做。
+   猜错要重做一遍，问一句只要一次往返。
+   只有当「信息已经足够，或者你已经用明确的默认值补全」时才继续执行；
+   用了默认值就必须在最终答复里写清楚你替他决定了什么。
 
 用户目标：
 {goal}
@@ -361,6 +366,74 @@ AGENT_PLANNER = PromptTemplate(
 </context>""",
 )
 
+CONVERSATION_TURN = PromptTemplate(
+    name="conversation_turn",
+    description="理解层：决定这一句该怎么回应（直接回答 / 先问清楚 / 开工）。",
+    category="agent",
+    task="conversation_turn",
+    variables=["request", "history", "material", "tier"],
+    json_output=True,
+    content="""<!-- task: conversation_turn -->
+你是这个用户的数字员工。用户刚说了一句话，你要先决定**怎么回应**，再按那个方式回应。
+
+用户刚说的：
+<request>
+{request}
+</request>
+
+这次对话之前说过的话（越靠后越新）：
+<history>
+{history}
+</history>
+
+你手上有的东西（检索命中层级：{tier}）：
+<material>
+{material}
+</material>
+
+动手之前先判断一件事：**这次请求，够不够我做出他要的东西？**
+
+三种结果，只能选一种：
+
+1. `answer` —— 他问的是个问题，不需要产出文件，直接回答。
+   适合：问知识、问进度、问你怎么想、闲聊。
+
+2. `clarify` —— 信息不够，问 1 到 3 个问题，等他说。
+   **该问**：产出形式不明（Word / PPT / Excel / 还是直接在对话里写给他）；
+   范围不明（只要目录 / 要完整内容 / 要带例子和练习）；
+   用途不明而且会影响内容（自己学 / 交作业 / 讲给别人 / 当汇报材料）；
+   手里没有他会用到的资料。
+   **不该问**：信息已经够了（问了就是拖延）；可以合理默认的；只影响细节的。
+   **每个问题必须带 default，default 要写「你不确定时我打算怎么做」**，
+   让他否定比让他从零选快。写「由你决定」等于没写。
+   超过 3 个问题说明你没读懂需求，先自己收敛。
+
+3. `start` —— 信息够了，可以开工。包括这两种情况：他刚回答完你的问题；
+   或者他说「别问了，你自己看着办」。
+
+只回答 JSON，不要任何解释文字：
+{
+  "decision": "answer | clarify | start",
+  "reply": "answer 时你要说的话：简洁、直接给结论、不客套",
+  "questions": [{"question": "要问的", "default": "你不确定时我会怎么做"}],
+  "goal": "start 时：要做成什么。把他的原话和刚才的问答合并成一句完整的话",
+  "deliverable_kind": "start 时：docx | pptx | xlsx | pdf | report | code | mixed",
+  "assumptions": ["start 但信息是你自己补的：你替他决定了什么，逐条写清楚"],
+  "tier": "memory | skill | knowledge | general"
+}
+
+硬性要求：
+1. **不确定就问，不要猜着开工。猜错比问一句贵得多。**
+2. `clarify` 的每个问题都要带 `default`。
+3. 问题最多 3 个。
+4. `answer` 时不要产出文件，也不要建任务。
+5. 优先依据上面给你的记忆、资料和对话回答。这些都没有的时候，可以用通用知识回答，
+   但要说清这是通用知识、不是他的资料。**任何情况下都不要编。**
+6. `start` 的 `goal` 要具体到能直接执行，禁止「分析一下」「优化一下」这类空话。
+7. 只输出 JSON 本身，不要 markdown 代码块。""",
+)
+
+
 PROMPT_INVENTORY: list[PromptTemplate] = [
     RAG_ANSWER,
     DOCUMENT_SUMMARY,
@@ -372,6 +445,7 @@ PROMPT_INVENTORY: list[PromptTemplate] = [
     QUERY_REWRITE,
     AGENT_SYSTEM,
     AGENT_PLANNER,
+    CONVERSATION_TURN,
 ]
 
 TEMPLATES_BY_NAME = {t.name: t for t in PROMPT_INVENTORY}

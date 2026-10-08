@@ -10,6 +10,7 @@ from app.api.v1.ai_config import router as ai_config_router
 from app.api.v1.auth import router as auth_router
 from app.api.v1.auth import user_router
 from app.api.v1.context import router as context_router
+from app.api.v1.conversations import router as conversations_router
 from app.api.v1.delivery import router as delivery_router
 from app.api.v1.health import router as health_router
 from app.api.v1.insights import router as insights_router
@@ -38,6 +39,7 @@ api_router.include_router(ai_config_router)
 api_router.include_router(agent_router)
 api_router.include_router(agent_runs_router)
 api_router.include_router(context_router)
+api_router.include_router(conversations_router)
 api_router.include_router(delivery_router)
 api_router.include_router(airuns_router)
 api_router.include_router(insights_router)

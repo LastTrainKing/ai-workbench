@@ -131,6 +131,27 @@ class DeliveryService:
         await self.session.flush()
         return assembled.render()
 
+    async def start_build_run(self, run: BuildRun) -> dict[str, Any]:
+        """Create is not start. This is start, and it is the only implementation of it.
+
+        Two callers need it: the ``/execute`` endpoint, and the conversation when the
+        understanding layer decides the request is clear enough to work on. Having the
+        second one assemble context and hand off on its own would be a second place where
+        "started" means something — and this project has already paid for that mistake
+        once: create and start were separate endpoints, the frontend called one of them,
+        and the run sat in DRAFT while the screen looked like work in progress.
+        """
+        from app.services.build_executor import execute_build_run
+
+        if run.status not in (BuildStatus.DRAFT.value, BuildStatus.READY.value):
+            raise ValidationError(f"当前状态（{run.status}）下不能开始执行")
+
+        # Assemble and record what this run will be told about the user, then hand the
+        # same block to the agent — so "what did it know" and "what was it given" are
+        # the same string rather than two things that ought to match.
+        context = await self.attach_context(run)
+        return await execute_build_run(self.session, build_run_id=run.id, context=context)
+
     # ------------------------------------------------------------ deliverables --
     async def record_deliverable(
         self,

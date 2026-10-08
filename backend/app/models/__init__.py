@@ -21,6 +21,7 @@ from app.models.context import (
     UserPreference,
     UserProfile,
 )
+from app.models.conversation import Conversation, Message, MessageKind, MessageRole
 from app.models.delivery import BuildRun, BuildStatus, Deliverable
 from app.models.job import ActivityEvent, Job
 from app.models.knowledge import (
@@ -67,9 +68,13 @@ __all__ = [  # noqa: RUF022 - grouped by domain layer, which is more readable he
     "BuildRun",
     "BuildStatus",
     "ContextSnapshot",
+    "Conversation",
     "Deliverable",
     "MemoryCandidate",
     "MemoryEntry",
+    "Message",
+    "MessageKind",
+    "MessageRole",
     "UserPreference",
     "UserProfile",
     "ToolAuditLog",
