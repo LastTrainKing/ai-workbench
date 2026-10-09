@@ -45,9 +45,9 @@ for candidate in (str(BACKEND), str(HERE)):
     if candidate not in sys.path:
         sys.path.insert(0, candidate)
 
-from PySide6.QtCore import QEventLoop, QTimer, QUrl  # noqa: E402
-from PySide6.QtGui import QGuiApplication  # noqa: E402
-from PySide6.QtQml import QQmlApplicationEngine  # noqa: E402
+from PySide6.QtCore import QEventLoop, QTimer, QUrl
+from PySide6.QtGui import QGuiApplication
+from PySide6.QtQml import QQmlApplicationEngine
 
 RESULTS: list[tuple[str, bool, str]] = []
 
@@ -117,11 +117,10 @@ async def _make_account() -> uuid.UUID:
 
 
 async def _drop_account(owner: uuid.UUID) -> None:
-    from sqlalchemy import delete
-
     from app.infrastructure.database import session_scope
     from app.models.task import Task
     from app.models.user import User
+    from sqlalchemy import delete
 
     async with session_scope() as session:
         await session.execute(delete(Task).where(Task.owner_id == owner))
@@ -129,10 +128,9 @@ async def _drop_account(owner: uuid.UUID) -> None:
 
 
 async def _count_tasks(owner: uuid.UUID) -> int:
-    from sqlalchemy import func, select
-
     from app.infrastructure.database import session_scope
     from app.models.task import Task
+    from sqlalchemy import func, select
 
     async with session_scope() as session:
         return int(
@@ -154,10 +152,9 @@ async def _task_status(owner: uuid.UUID, task_id: uuid.UUID) -> str:
 
 
 async def _agent_run_count(owner: uuid.UUID) -> int:
-    from sqlalchemy import func, select
-
     from app.infrastructure.database import session_scope
     from app.models.ai import AIRun
+    from sqlalchemy import func, select
 
     async with session_scope() as session:
         return int(
@@ -198,7 +195,7 @@ def main() -> int:
 
     call = Caller(bridge)
 
-    def on_loop(factory):  # noqa: ANN001, ANN202
+    def on_loop(factory):
         """Run a DB helper on the bridge's loop.
 
         The helpers below are async because the engine is async; running them with

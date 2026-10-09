@@ -75,10 +75,9 @@ class ServiceBridge(QObject):
         """This install's account. Resolved once and remembered."""
         if self._owner_id:
             return uuid.UUID(self._owner_id)
-        from sqlalchemy import select
-
         from app.infrastructure.database import session_scope
         from app.models.user import User
+        from sqlalchemy import select
 
         async with session_scope() as session:
             row = (
@@ -218,7 +217,7 @@ class ServiceBridge(QObject):
             owner = await self._owner()
             patch = json.loads(patch_json or "{}")
             if not isinstance(patch, dict):
-                raise ValueError("配置必须是一个 JSON 对象")
+                raise TypeError("配置必须是一个 JSON 对象")
             save(owner, patch)
             return {"effective": resolve(owner).safe()}
 
@@ -329,7 +328,7 @@ class ServiceBridge(QObject):
             if not target.exists():
                 raise FileNotFoundError(f"文件不存在：{target}")
             if os.name == "nt":  # pragma: no cover - platform branch
-                os.startfile(target.parent)  # noqa: S606 - explorer, not an executable
+                os.startfile(target.parent)
             else:  # pragma: no cover
                 QDesktopServices.openUrl(QUrl.fromLocalFile(str(target.parent)))
             return {"path": str(target.parent)}

@@ -35,18 +35,17 @@ for candidate in (str(BACKEND), str(HERE)):
     if candidate not in sys.path:
         sys.path.insert(0, candidate)
 
-from PySide6.QtCore import QUrl, Qt  # noqa: E402
-from PySide6.QtGui import QGuiApplication  # noqa: E402
-from PySide6.QtQml import QQmlApplicationEngine  # noqa: E402
+from awbnative.bridge import ServiceBridge
+from PySide6.QtCore import QUrl
+from PySide6.QtGui import QGuiApplication
+from PySide6.QtQml import QQmlApplicationEngine
 
 # Imported for its side effect as much as for the name. PySide6 only hands back the
 # `QQuickWindow` wrapper for `engine.rootObjects()[0]` if that type has been registered
 # with the binding system; without this import the same object arrives as a plain
 # `QWindow`, which has no `grabWindow`. The symptom is an AttributeError inside a timer
 # callback — a screenshot that silently does not appear, not a crash that points here.
-from PySide6.QtQuick import QQuickWindow  # noqa: E402, F401
-
-from awbnative.bridge import ServiceBridge  # noqa: E402
+from PySide6.QtQuick import QQuickWindow  # noqa: F401
 
 
 def build_engine(bridge: ServiceBridge) -> QQmlApplicationEngine:

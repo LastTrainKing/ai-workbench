@@ -45,7 +45,7 @@ MAX_MESSAGE_BYTES = 1 * 1024 * 1024
 DEFAULT_TIMEOUT_SECONDS = 30.0
 
 PIPE_NAME = r"\\.\pipe\ai-workbench-native"
-_AUTHKEY = b"ai-workbench-native-ui"  # noqa: S105 - a local-pipe handshake, not a secret
+_AUTHKEY = b"ai-workbench-native-ui"
 
 
 class IpcError(RuntimeError):
