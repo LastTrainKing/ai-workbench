@@ -133,22 +133,35 @@ def run_nsis_installer(
 ) -> subprocess.CompletedProcess[bytes]:
     """Run a silent NSIS install into ``target``.
 
-    ``/D=`` must be last and unquoted, so the command line is built as one string and
-    handed to ``cmd`` — which is what ``shell=True`` did, minus the f-string. The target
-    is validated first: cmd reinterprets ``&``, ``|``, ``%`` and friends, and a test
-    install path has no reason to contain them.
+    ``/D=`` must be the last parameter and must **not** be quoted — NSIS reads everything
+    after it to the end of the line, and a quoted value becomes part of the directory
+    name. Passing it as a separate argv element does not work: Python quotes any argument
+    containing a space, and both the installer path and the target normally have one.
+
+    So the command line is built as one string and handed to `CreateProcess` directly,
+    with ``shell=False``. On Windows a **string** `args` is passed through verbatim rather
+    than going through `list2cmdline`, which is exactly the control needed here. No shell
+    is involved, so the metacharacter check below is about cmd.exe not being asked to
+    reinterpret a path, not about escaping into a shell.
+
+    This was briefly `["cmd", "/C", command]`, and it failed in a way worth recording:
+    Python escaped the inner quotes, cmd received ``\\"C:\\...\\Setup.exe\\"`` as the
+    program name, and the install silently did not happen — the test reported "not
+    installed" and the cause was three layers away.
     """
     text = str(target)
     offending = sorted({char for char in text if char in _CMD_METACHARACTERS})
     if offending:
         raise ValueError(
             f"refusing to hand {text!r} to the installer: it contains {offending}, which "
-            "cmd.exe would interpret as syntax rather than as part of the path"
+            "would be interpreted as syntax rather than as part of the path"
         )
-    if not setup.is_file():
-        raise FileNotFoundError(f"no installer at {setup}")
+    resolved = Path(setup).resolve()
+    if not resolved.is_file():
+        raise FileNotFoundError(f"no installer at {resolved}")
     return subprocess.run(
-        ["cmd", "/C", f'"{setup}" /S /D={text}'],
+        f'"{resolved}" /S /D={text}',
+        shell=False,
         capture_output=True,
         check=False,
         timeout=timeout,

@@ -470,6 +470,17 @@ Section "Uninstall"
   Delete "$INSTDIR\repair-install.bat"
   Delete "$INSTDIR\README.md"
   Delete "$INSTDIR\LICENSE"
+  ; `VERSION` was added to the payload and not to this list, so a fresh uninstall left the
+  ; install directory behind with exactly one file in it. A file the installer creates has
+  ; to be a file the uninstaller removes; nothing enforces that but this list.
+  Delete "$INSTDIR\VERSION"
+  ; A stray file the launcher used to write here (the Qdrant key, which belongs in the
+  ; runtime directory, not the program directory). `RMDir` without `/r` on purpose: the
+  ; design guarantees `.runtime` under the install directory holds no user data — the
+  ; installer writes `data-dir.txt` pointing elsewhere — so if this directory turns out to
+  ; be non-empty, something is wrong and deleting it recursively would be the wrong guess.
+  Delete "$INSTDIR\.runtime\qdrant-api-key.txt"
+  RMDir "$INSTDIR\.runtime"
   Delete "$INSTDIR\Uninstall.exe"
   RMDir "$INSTDIR"
 

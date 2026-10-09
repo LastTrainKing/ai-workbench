@@ -151,7 +151,7 @@ def test_installer_runner_reports_a_missing_installer(tmp_path: Path) -> None:
 
 
 def test_installer_runner_does_not_pass_shell_true(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """It hands a raw command line to `cmd`, but must not hand it to a shell."""
+    """It hands a raw command line to CreateProcess, but must not hand it to a shell."""
     setup = tmp_path / "setup.exe"
     setup.write_bytes(b"stub")
     captured: dict[str, object] = {}
@@ -165,8 +165,14 @@ def test_installer_runner_does_not_pass_shell_true(tmp_path: Path, monkeypatch: 
     guard.run_nsis_installer(setup, tmp_path / "target")
 
     assert captured.get("shell") in (None, False)
+    # A **string**, not a list. On Windows a string `args` reaches CreateProcess verbatim;
+    # a list goes through `list2cmdline`, which quotes the target because it has a space,
+    # and a quoted `/D=` becomes part of the directory name. Passing the whole thing to
+    # `cmd /C` instead made cmd receive escaped quotes as the program name — the install
+    # silently did not happen and the test said "not installed", three layers from the
+    # cause.
     args = captured["args"]
-    assert isinstance(args, list)
-    assert args[0] == "cmd" and args[1] == "/C"
-    # `/D=` last and unquoted, which is what NSIS requires.
-    assert args[2].rstrip().endswith("/D=" + str(tmp_path / "target"))
+    assert isinstance(args, str), "a list would be re-quoted by list2cmdline"
+    assert args.startswith(f'"{setup.resolve()}"')
+    assert args.rstrip().endswith("/D=" + str(tmp_path / "target"))
+    assert not args.startswith("cmd "), "no cmd.exe in the middle"

@@ -439,8 +439,15 @@ function Start-Qdrant {
     # The API key Qdrant will require. Taken from the environment when the caller set one,
     # otherwise generated once and kept next to the rest of the local state so it survives
     # restarts and stays the same value the backend is told to send.
+    #
+    # It goes in `$RuntimeDir`, not in `<repo>\.runtime`. On an installed copy those are
+    # different directories — the runtime lives outside the program directory so that
+    # uninstalling cannot touch the user's data — and writing here instead put a stray
+    # file inside the install directory. Two consequences, both real: the uninstaller
+    # could not remove the install directory, and the backend, which reads
+    # `RUNTIME_ROOT/qdrant-api-key.txt`, would not find the key at all.
     if (-not $env:QDRANT_API_KEY) {
-        $keyFile = Join-Path (Join-Path $PSScriptRoot '..') '.runtime\qdrant-api-key.txt'
+        $keyFile = Join-Path $RuntimeDir 'qdrant-api-key.txt'
         if (Test-Path $keyFile) {
             $env:QDRANT_API_KEY = (Get-Content -Path $keyFile -Raw).Trim()
         }
@@ -448,7 +455,7 @@ function Start-Qdrant {
             $bytes = New-Object 'byte[]' 32
             [System.Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes)
             $env:QDRANT_API_KEY = [Convert]::ToBase64String($bytes).TrimEnd('=').Replace('+', 'A').Replace('/', 'B')
-            New-Item -ItemType Directory -Path (Split-Path $keyFile) -Force | Out-Null
+            New-Item -ItemType Directory -Path $RuntimeDir -Force | Out-Null
             Set-Content -Path $keyFile -Value $env:QDRANT_API_KEY -Encoding ascii
         }
     }
