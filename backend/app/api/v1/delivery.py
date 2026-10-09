@@ -351,8 +351,16 @@ async def delivery_summary(user: CurrentUser, session: DbSession) -> dict[str, A
 
 
 @router.get("/delivery/states", summary="The state machine, for the UI")
-async def delivery_states() -> dict[str, Any]:
-    """The states and which of them are terminal, so the UI does not hardcode them."""
+async def delivery_states(user: CurrentUser) -> dict[str, Any]:
+    """The states and which of them are terminal, so the UI does not hardcode them.
+
+    Takes `user` and does not use it. That is deliberate: the body is a static enum list,
+    but **every** other route in this API requires a token, and a route that does not is a
+    route outside the ownership matrix — the one place a future edit can put something
+    real without anyone noticing the dependency is missing. Found by the sweep in
+    `tests/api/test_release_freeze_ownership.py`, which enumerates the live route table
+    rather than a hand-written list.
+    """
     return ok(
         {
             "states": [
