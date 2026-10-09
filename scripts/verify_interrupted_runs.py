@@ -39,6 +39,32 @@ ROOT = Path(__file__).resolve().parent.parent
 BACKEND = ROOT / "backend"
 PYTHON = ROOT / ".venv" / "Scripts" / "python.exe"
 
+sys.path.insert(0, str(BACKEND))
+
+from app.ai.agent.plan import RunState  # noqa: E402
+from app.domain.enums import RunStatus  # noqa: E402
+
+
+def _is_terminal_status(status: str) -> bool:
+    """Terminal according to the enum, not according to a list copied into this script.
+
+    This used to be `status in {"FAILED", "CANCELLED", "TIMEOUT"}`. The moment
+    `INTERRUPTED` was added the behaviour was right and the script reported a failure —
+    which is the same mistake the product made in reverse: a second copy of "which
+    statuses are terminal" is a second thing that has to be kept in step.
+    """
+    try:
+        return RunStatus(status).is_terminal
+    except ValueError:
+        return False
+
+
+def _is_terminal_state(state: str) -> bool:
+    try:
+        return RunState(state).terminal
+    except ValueError:
+        return False
+
 TEST_DB_NAME = "aiworkbench_test"
 PORT = 8012
 BASE = f"http://127.0.0.1:{PORT}/api/v1"
@@ -249,7 +275,7 @@ def main() -> int:
         )
         check(
             "it reached a terminal state",
-            running_status in {"FAILED", "CANCELLED", "TIMEOUT"},
+            _is_terminal_status(running_status),
             running_status,
         )
         check(
@@ -276,7 +302,7 @@ def main() -> int:
             check(f"the {label} run is in the history", run_id in entries)
         check(
             "the interrupted run shows a terminal state, not a live one",
-            entries[run_ids["running"]]["state"] in {"FAILED", "CANCELLED", "COMPLETED"}
+            _is_terminal_state(entries[run_ids["running"]]["state"])
             and entries[run_ids["running"]]["live"] is False,
             entries[run_ids["running"]]["state"],
         )

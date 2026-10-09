@@ -46,7 +46,8 @@ report is not carried forward.
 | 2.2 | Deliverable success verified against the file | **PASS** | Same file; missing and empty files both rejected. |
 | 2.3 | Terminal state written once | **PASS** | `RunRecorder.finish` guards `_finished`; asserted via the executor tests. |
 | 2.4 | A crashed job is bounded by `max_attempts` | **PASS** | Same file: exhausted → terminal `FAILED`, not claimed again, document marked failed with it. |
-| 2.5 | Interrupted runs reported as `INTERRUPTED`, not `FAILED` | **PASS** | `main.py` reconcile updated; `RunState.INTERRUPTED` added; frontend vocabulary updated. |
+| 2.5 | Interrupted runs reported as `INTERRUPTED`, not `FAILED` | **PASS** | `scripts/verify_interrupted_runs.py` → **21/21**: real process killed and restarted, interrupted run becomes `INTERRUPTED` with a reason, finished and cancelled runs untouched, reconcile idempotent across a second restart, ownership still enforced. |
+| 2.8 | Run history survives a real restart | **PASS** | `scripts/verify_agent_run_persistence.py` → **18/18**: writes a run, kills the process, restarts, reads it back identical, not claimed live, other account still refused with `run_not_found`. |
 | 2.6 | RAG grounding requires every claim to cite a real source | **PASS** | `pytest tests/unit/test_release_freeze_rag_citations.py` → 14 passed. |
 | 2.7 | Offline provider cannot be marked grounded | **PASS** | `test_no_retrieved_sources_cannot_be_grounded`, plus the integration RAG tests still pass. |
 
@@ -75,8 +76,8 @@ report is not carried forward.
 | 4.1 | Real installed user data unchanged | **PASS** | `%LOCALAPPDATA%\AI Workbench Data`: **1530 files / 51,775,575 bytes** before and after — identical. `build/release-freeze/data-baseline-{before,after}.json`. |
 | 4.2 | Development `.runtime` not destructively modified | **PASS (with a note)** | File count grew 24,156 → 59,430. The growth is the test suite's own footprint: `pgdata` (test database), `test-storage`, `logs`. No user document, snapshot or config was deleted or rewritten. |
 | 4.3 | No destructive operation on real data | **PASS** | Every test uses `TEST_DATA_DIR`/`aiworkbench_test`; `scripts/_test_data_guard.py` exits 3 on path overlap. |
-| 4.4 | Migration from an empty database | **NOT RUN** | Not re-executed this round; the previous round's `verify_migration.py` result is not carried forward. |
-| 4.5 | Retention `--apply` on an isolated copy | **NOT RUN** | Not re-executed this round. |
+| 4.4 | Migration: fresh / upgrade-with-data / repeated start / drift refusal | **PASS** | `scripts/verify_migration.py` → **19/19** on a scratch database. Includes the new `revoked_tokens` migration (34 tables), an upgrade from the previous head with a row preserved, and a drift case that is refused rather than stamped. |
+| 4.5 | Retention `--apply` on an isolated copy; real store untouched | **PASS** | `scripts/verify_retention_safety.py` → **15/15**. Planning left the real store byte-identical; archive → verify → delete → restore round-tripped with every checksum matching; a tampered archive restored nothing. Real store digest `a0730ac61dbf296f…`, 16,493 files, 3,021 audit rows — unchanged. |
 
 ## 5. Regression tests added
 
@@ -108,10 +109,10 @@ report is not carried forward.
 
 | Result | Count | Where |
 |---|---|---|
-| PASS | 37 | §1 (14), §2 (7), §3 (8), §4 (3), §5 (4), §6 (1) |
+| PASS | 40 | §1 (14), §2 (8), §3 (8), §4 (5), §5 (4), §6 (1) |
 | FAIL | 4 | 1.14 CSP, 3.9 `ruff format` baseline, 6.1 and 6.2 (both RF-01) |
 | BLOCKED | 4 | 7.1 DPI, 7.2 Docker, 7.3 signing certificate, 7.4 SYSTEM-level symlink |
-| NOT RUN | 5 | 3.10 artifact rebuild, 3.11 hashes, 3.13 clean-room install, 4.4 migration, 4.5 retention apply |
+| NOT RUN | 3 | 3.10 artifact rebuild, 3.11 hashes, 3.13 clean-room install |
 
 The four FAILs are three distinct facts:
 
@@ -120,7 +121,12 @@ The four FAILs are three distinct facts:
 - **3.9 `ruff format --check`** — a pre-existing repo condition that this round did not
   introduce (an untouched file also fails it). Not churned during a freeze; see KI-03.
 
-The five NOT RUN items are all downstream of 3.10: rebuilding the installer and ZIP needs a
-full Rust/Tauri release build that was not attempted this round, so the hashes, the
-clean-room install and the artifact-dependent checks cannot run either.
+The three NOT RUN items are all downstream of 3.10: rebuilding the installer and ZIP needs
+a full Rust/Tauri release build that was not attempted this round, so the hashes and the
+clean-room install cannot run either.
+
+The four verification scripts are executed against **scratch** databases and an isolated
+copy of the snapshot store. The development database and the real snapshot store were not
+written to: the retention run reports the real store byte-identical before and after, by
+digest.
 
