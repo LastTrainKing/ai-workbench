@@ -14,6 +14,7 @@ Test isolation strategy
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import os
 import uuid
@@ -46,6 +47,22 @@ from sqlalchemy import text
 from app.core.config import settings
 from app.infrastructure.database import dispose_engine, get_engine, session_scope
 from app.models import Base
+
+
+def _stamp_head() -> None:
+    """Record the head revision on the freshly created test schema.
+
+    Blocking, so it is called through `asyncio.to_thread`. See the note in `_database`.
+    """
+    from alembic.config import Config
+
+    from alembic import command
+    from app.core.schema_guard import ALEMBIC_INI, BACKEND_ROOT
+
+    config = Config(str(ALEMBIC_INI))
+    config.set_main_option("script_location", str(BACKEND_ROOT / "alembic"))
+    config.set_main_option("sqlalchemy.url", settings.database_url)
+    command.stamp(config, "head")
 
 
 async def _ensure_test_database() -> None:
@@ -81,6 +98,12 @@ async def _database() -> AsyncIterator[None]:
     async with get_engine().begin() as conn:
         await conn.run_sync(Base.metadata.drop_all)
         await conn.run_sync(Base.metadata.create_all)
+    # The schema here is built from the models, which is what the migrations describe at
+    # head. Recording that keeps `app.core.schema_guard.ensure_schema` — which refuses to
+    # start the application against a database whose revision it cannot account for — from
+    # rejecting the database this fixture just built. The stamp records a fact that is
+    # true here; it is not used to paper over a mismatch in production.
+    await asyncio.to_thread(_stamp_head)
     yield
     await dispose_engine()
 

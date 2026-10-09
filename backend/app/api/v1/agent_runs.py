@@ -71,6 +71,26 @@ def _owned_controller(run_id: str, user: CurrentUser) -> Any:
     return controller
 
 
+async def _owned_run(run_id: str, user: CurrentUser, session: DbSession) -> dict[str, Any]:
+    """A run's state — live if this process has it, stored otherwise — for this user only.
+
+    Two sources, one ownership rule. The registry knows about a run while it is running;
+    the table knows about it afterwards, and after a restart it is the only source there
+    is. Both are filtered by the same owner, and "not found" and "not yours" stay the same
+    answer so a caller with no right to know cannot use this to learn that a run id exists.
+    """
+    from app.services.autonomous_service import get_controller, history_row_for
+
+    controller = get_controller(run_id)
+    if controller is not None and controller.owner_id == user.id:
+        return {**controller.as_dict(), "live": True}
+
+    row = await history_row_for(session, run_id, user.id)
+    if row is None:
+        raise ValidationError("找不到该运行记录")
+    return row
+
+
 # --------------------------------------------------------------------------- #
 # Runs
 # --------------------------------------------------------------------------- #
@@ -96,21 +116,65 @@ async def start_autonomous_run(
     return ok(started, message="任务已开始执行")
 
 
-@router.get("/runs", summary="Runs currently held by this process")
-async def list_active_runs(user: CurrentUser) -> dict[str, Any]:
-    from app.services.autonomous_service import active_runs
+@router.get("/runs", summary="Runs in flight now, merged with the run history")
+async def list_runs(
+    user: CurrentUser,
+    session: DbSession,
+    limit: int = 50,
+    offset: int = 0,
+    status_filter: str | None = None,
+    live_only: bool = False,
+) -> dict[str, Any]:
+    """Live state and history in one list, one entry per run.
 
-    # `user` is not decorative here. The registry holds every run in the process,
-    # so an unfiltered listing showed one account the runs another account had
-    # started — a brand-new user saw 14 runs that were not theirs.
-    runs = active_runs(user.id)
-    return ok({"runs": runs, "count": len(runs)})
+    This endpoint used to answer from the process-local registry alone. After a restart
+    the registry is empty, so every run the user had ever started vanished from here
+    while the rows sat in ``agent_runs`` — the database had the history and the API
+    returned nothing.
+
+    Now the database is the list and the registry is an overlay: a run that is running
+    right now appears once, with its live state, and everything else appears from its row.
+    ``live`` on each entry says which it is. Restart the process and the history is still
+    here, because it was never the registry's to hold.
+    """
+    from app.services.autonomous_service import active_runs, merge_live_and_history, run_history
+
+    # `user` is not decorative. The registry holds every run in the process, so an
+    # unfiltered listing showed one account the runs another account had started.
+    live = active_runs(user.id)
+
+    if live_only:
+        runs = merge_live_and_history(live, [])
+        return ok({"runs": runs, "count": len(runs), "total": len(runs), "live_count": len(runs)})
+
+    history, total = await run_history(
+        session, user.id, limit=limit, offset=offset, status=status_filter
+    )
+    runs = merge_live_and_history(live, history)
+    return ok(
+        {
+            "runs": runs,
+            "count": len(runs),
+            "total": total,
+            "live_count": sum(1 for entry in runs if entry.get("live")),
+            "limit": limit,
+            "offset": offset,
+        }
+    )
 
 
-@router.get("/runs/{run_id}", summary="Live state, plan and counters")
-async def get_run_state(run_id: str, user: CurrentUser) -> dict[str, Any]:
-    controller = _owned_controller(run_id, user)
-    return ok(controller.as_dict())
+@router.get("/runs/{run_id}", summary="Live state, or the stored record once the run is over")
+async def get_run_state(run_id: str, user: CurrentUser, session: DbSession) -> dict[str, Any]:
+    """A run's state, whether it is running now or finished before the last restart.
+
+    Reading only the registry meant this returned an error for every run older than the
+    current process — including runs the user could see in their own history. The live
+    controller is still preferred when it exists, because it knows things the row does not
+    (current tool, elapsed time); the row is the fallback, not a replacement.
+
+    Ownership is checked either way — `_owned_run` applies the same rule to both sources.
+    """
+    return ok(await _owned_run(run_id, user, session))
 
 
 @router.get("/runs/{run_id}/events", summary="Incremental event stream")

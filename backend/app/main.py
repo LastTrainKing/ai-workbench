@@ -140,30 +140,92 @@ async def _reconcile_interrupted_runs() -> None:
             "interrupted_run_reconcile_failed", extra={"error": f"{type(exc).__name__}: {exc}"}
         )
 
+    await _reconcile_interrupted_agent_runs()
+
+
+async def _reconcile_interrupted_agent_runs() -> None:
+    """Close agent runs the previous process left saying `RUNNING`.
+
+    `BuildRun` was reconciled and `AIRun`/`AgentRun` were not, so a run interrupted by a
+    restart kept `RUNNING` in the database forever. Two consequences, both visible: the
+    history endpoint (now that it reads these rows) would show a run as still in progress
+    days after the process that was driving it died, and `GET /agent/runs/{id}` would
+    report a state the registry — correctly — knows nothing about.
+
+    A row that says `RUNNING` when no process is driving it is not running. The registry
+    is empty at startup by definition, so every `RUNNING` agent run at this moment is
+    interrupted. Marked `FAILED` rather than `CANCELLED`: nobody cancelled it, and saying
+    otherwise would misattribute the outcome.
+    """
+    from sqlalchemy import select
+
+    from app.domain.enums import RunStatus, RunType
+    from app.infrastructure.database import session_scope
+    from app.models.ai import AgentRun, AIRun
+
+    try:
+        async with session_scope() as session:
+            rows = list(
+                (
+                    await session.execute(
+                        select(AIRun).where(
+                            AIRun.run_type == RunType.AGENT.value,
+                            AIRun.status == RunStatus.RUNNING.value,
+                        )
+                    )
+                ).scalars()
+            )
+            for run in rows:
+                run.status = RunStatus.FAILED.value
+                run.error_message = (
+                    run.error_message or "服务在运行过程中重启，这次运行的结果无法确认"
+                )
+            if rows:
+                ids = [run.id for run in rows]
+                agent_rows = list(
+                    (
+                        await session.execute(
+                            select(AgentRun).where(AgentRun.ai_run_id.in_(ids))
+                        )
+                    ).scalars()
+                )
+                for agent_run in agent_rows:
+                    agent_run.status = RunStatus.FAILED.value
+                await session.commit()
+        if rows:
+            logger.warning(
+                "interrupted_agent_runs_closed",
+                extra={"count": len(rows), "run_ids": [r.run_id for r in rows[:10]]},
+            )
+    except Exception as exc:
+        logger.error(
+            "interrupted_agent_run_reconcile_failed",
+            extra={"error": f"{type(exc).__name__}: {exc}"},
+        )
+
 
 async def _bootstrap_schema() -> None:
-    """Create tables and seed reference data (prompts, demo account).
+    """Bring the schema to head, then seed reference data (prompts, demo account).
 
-    Alembic owns schema *evolution*; this bootstrap keeps a fresh clone usable
-    without an extra migration step, and is idempotent.
+    **Alembic owns the schema, including the first build.** This used to call
+    ``Base.metadata.create_all`` for whatever tables were missing, while migrations
+    existed and were never run. Four tables — ``conversations``, ``messages``,
+    ``installed_skills``, ``tool_audit_log`` — were created only that way, so a database
+    rebuilt from migrations alone did not have them, even though ``alembic_version``
+    reported the head.
+
+    A fresh database is now built by running the migrations; an existing one is checked
+    against the head and refused if it disagrees. See ``app.core.schema_guard`` — the
+    check never stamps.
     """
-    from sqlalchemy import inspect
-
     from app.ai.prompts.registry import ensure_seeded
-    from app.models import Base
+    from app.core.schema_guard import ensure_schema
     from app.services.auth_service import AuthService
 
     try:
         async with get_engine().begin() as conn:
-            existing = await conn.run_sync(
-                lambda sync_conn: set(inspect(sync_conn).get_table_names())
-            )
-            missing = set(Base.metadata.tables) - existing
-            if missing:
-                logger.info(
-                    "creating_missing_tables", extra={"count": len(missing), "tables": sorted(missing)}
-                )
-                await conn.run_sync(Base.metadata.create_all)
+            outcome = await ensure_schema(conn)
+        logger.info("schema_ready", extra={"outcome": outcome})
     except Exception as exc:
         logger.error("schema_bootstrap_failed", extra={"error": f"{type(exc).__name__}: {exc}"})
         raise

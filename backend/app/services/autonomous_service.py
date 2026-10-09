@@ -369,12 +369,173 @@ def active_runs(owner_id: uuid.UUID) -> list[dict[str, Any]]:
     return [c.as_dict() for c in get_run_registry().owned_by(owner_id)]
 
 
+async def run_history(
+    session: AsyncSession,
+    owner_id: uuid.UUID,
+    *,
+    limit: int = 50,
+    offset: int = 0,
+    status: str | None = None,
+) -> tuple[list[dict[str, Any]], int]:
+    """Completed and in-flight agent runs from the database, newest first.
+
+    This is the half the API was missing. ``GET /agent/runs`` read only the process-local
+    registry, so after a restart every run the user had ever started disappeared from the
+    endpoint while the rows sat untouched in ``agent_runs``. "Where did my runs go" had
+    the answer "they are in the database and nothing reads them".
+
+    Scoped by ``AgentRun.owner_id``, which is its own column rather than something reached
+    through a join, so isolation does not depend on the join being written correctly.
+    """
+    from sqlalchemy import func, select
+
+    from app.models.ai import AgentRun, AIRun
+
+    base = (
+        select(AgentRun, AIRun)
+        .join(AIRun, AgentRun.ai_run_id == AIRun.id)
+        .where(AgentRun.owner_id == owner_id)
+    )
+    if status:
+        base = base.where(AIRun.status == status)
+
+    total = int(
+        (await session.execute(select(func.count()).select_from(base.subquery()))).scalar_one()
+    )
+    rows = (
+        await session.execute(base.order_by(AIRun.created_at.desc()).limit(limit).offset(offset))
+    ).all()
+
+    return [_history_row(agent_run, ai_run) for agent_run, ai_run in rows], total
+
+
+#: ``RunStatus`` is what the row records; ``RunState`` is what the run was doing. They are
+#: different vocabularies — ``SUCCEEDED`` is a row status and not a valid ``RunState``, so
+#: handing the raw column to the UI would put a value on screen that
+#: ``describeState()`` has no case for. The scratchpad holds the real ``RunState`` for a
+#: run that got far enough to write one; this maps the rest.
+_STATUS_TO_STATE: dict[str, str] = {
+    RunStatus.RUNNING.value: "EXECUTING",
+    RunStatus.SUCCEEDED.value: "COMPLETED",
+    RunStatus.FAILED.value: "FAILED",
+    RunStatus.CANCELLED.value: "CANCELLED",
+    RunStatus.TIMEOUT.value: "FAILED",
+}
+
+
+def _history_row(agent_run: Any, ai_run: Any) -> dict[str, Any]:
+    scratchpad = agent_run.scratchpad if isinstance(agent_run.scratchpad, dict) else {}
+    state = scratchpad.get("state") or _STATUS_TO_STATE.get(ai_run.status, ai_run.status)
+    return {
+        "run_id": ai_run.run_id,
+        "db_run_id": str(ai_run.id),
+        "goal": agent_run.goal,
+        "status": ai_run.status,
+        "state": state,
+        "live": False,
+        "steps_used": agent_run.steps_used,
+        "max_steps": agent_run.max_steps,
+        "verified": scratchpad.get("verified"),
+        "snapshot_id": scratchpad.get("snapshot_id"),
+        "retries": scratchpad.get("retries"),
+        "provider": ai_run.provider,
+        "model": ai_run.model,
+        "error": ai_run.error_message or "",
+        "created_at": ai_run.created_at.isoformat() if ai_run.created_at else None,
+        "updated_at": ai_run.finished_at.isoformat() if ai_run.finished_at else None,
+    }
+
+
+async def history_row_for(
+    session: AsyncSession, run_id: str, owner_id: uuid.UUID
+) -> dict[str, Any] | None:
+    """One stored run by its display id, but only if it belongs to ``owner_id``.
+
+    The owner is part of the query, not a check applied afterwards — the same rule the
+    list endpoint follows, so a run id guessed from a log cannot be used to read someone
+    else's record.
+    """
+    from sqlalchemy import select
+
+    from app.models.ai import AgentRun, AIRun
+
+    row = (
+        await session.execute(
+            select(AgentRun, AIRun)
+            .join(AIRun, AgentRun.ai_run_id == AIRun.id)
+            .where(AgentRun.owner_id == owner_id, AIRun.run_id == run_id)
+            .limit(1)
+        )
+    ).first()
+    if row is None:
+        return None
+    agent_run, ai_run = row
+    return _history_row(agent_run, ai_run)
+
+
+def merge_live_and_history(
+    live: list[dict[str, Any]], history: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """One entry per run: the database row, with live state laid over it.
+
+    Keyed on ``run_id``, because the same run is legitimately in both places — it is in
+    the registry while it runs and in the table from the moment it starts. Listing both
+    would show the same run twice, once "running" and once as whatever the row says.
+
+    The database is the spine and the registry is an overlay, not the other way round: a
+    live run with no row is appended (better a run with no history than a run that is
+    invisible), but a row is never dropped because the registry no longer knows about it —
+    that is precisely what a restart does.
+    """
+    merged: dict[str, dict[str, Any]] = {row["run_id"]: dict(row) for row in history}
+
+    for item in live:
+        run_id = item["run_id"]
+        entry = merged.get(run_id)
+        if entry is None:
+            entry = {
+                "run_id": run_id,
+                "db_run_id": None,
+                "goal": "",
+                "status": item.get("state", ""),
+                "state": item.get("state", ""),
+                "live": True,
+                "steps_used": item.get("tool_calls", 0),
+                "max_steps": 0,
+                "verified": None,
+                "snapshot_id": None,
+                "retries": item.get("retries"),
+                "provider": "",
+                "model": "",
+                "error": "",
+                "created_at": None,
+                "updated_at": None,
+            }
+            merged[run_id] = entry
+        else:
+            entry["live"] = True
+            entry["state"] = item.get("state", entry.get("state", ""))
+        entry["paused"] = item.get("paused")
+        entry["current_tool"] = item.get("current_tool")
+        entry["tool_calls"] = item.get("tool_calls")
+        entry["elapsed_seconds"] = item.get("elapsed_seconds")
+
+    return sorted(
+        merged.values(),
+        key=lambda entry: (entry.get("created_at") or "", entry["run_id"]),
+        reverse=True,
+    )
+
+
 __all__ = [
     "active_runs",
     "control",
     "diff_for_run",
     "get_controller",
+    "history_row_for",
+    "merge_live_and_history",
     "rollback_run",
+    "run_history",
     "snapshot_view",
     "start_run",
 ]

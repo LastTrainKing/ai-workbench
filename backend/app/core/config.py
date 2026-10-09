@@ -156,6 +156,24 @@ class Settings(BaseSettings):
     agent_max_files_modified: int = 50
     agent_max_download_bytes: int = 200_000_000
 
+    #: Retention. **Off by default, and nothing in the product calls it automatically.**
+    #:
+    #: Snapshots and audit rows only ever grew — 1,269 snapshots and 3,021 audit rows had
+    #: accumulated with no rule saying which still mattered. The rules are here so they can
+    #: be read and changed; they are inert until someone builds a plan and applies it, and
+    #: the first release ships the preview rather than the deletion.
+    #:
+    #: A snapshot has to exceed **both** the count and the age limit to become a candidate,
+    #: unless `retention_require_both_limits` is turned off. Pinned snapshots, snapshots
+    #: belonging to a run that is still going, and the newest snapshot for each run are
+    #: never candidates — see `app.ai.agent.retention`.
+    retention_enabled: bool = False
+    retention_snapshot_max_count: int = 200
+    retention_snapshot_max_age_days: int = 30
+    retention_audit_max_count: int = 50_000
+    retention_audit_max_age_days: int = 180
+    retention_require_both_limits: bool = True
+
     #: How long a high-risk confirmation stays open before the run gives up.
     agent_confirmation_timeout_seconds: int = 180
 

@@ -495,9 +495,12 @@ def test_the_skills_package_has_no_directory_scan() -> None:
     for path in skills_dir.glob("*.py"):
         tree = ast.parse(path.read_text(encoding="utf-8"))
         for node in ast.walk(tree):
-            if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
-                if node.func.attr in {"glob", "rglob", "iterdir", "scandir", "walk"}:
-                    offenders.append(f"{path.name}:{node.lineno} .{node.func.attr}()")
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr in {"glob", "rglob", "iterdir", "scandir", "walk"}
+            ):
+                offenders.append(f"{path.name}:{node.lineno} .{node.func.attr}()")
     assert not offenders, f"a directory scan appeared in the skills package: {offenders}"
 
 

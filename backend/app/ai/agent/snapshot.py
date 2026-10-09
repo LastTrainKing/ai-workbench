@@ -101,6 +101,9 @@ class WorkspaceSnapshot:
     post_files: dict[str, FileEntry] = field(default_factory=dict)
     total_bytes: int = 0
     truncated: bool = False
+    #: Set when the user has said this snapshot matters and must not be reclaimed.
+    #: Retention treats it as an absolute: no age or count overrides it.
+    pinned: bool = False
 
     @property
     def directory(self) -> Path:
@@ -116,6 +119,7 @@ class WorkspaceSnapshot:
             "file_count": len(self.files),
             "total_bytes": self.total_bytes,
             "truncated": self.truncated,
+            "pinned": self.pinned,
             "has_post_state": bool(self.post_files),
         }
         if include_files:
@@ -251,6 +255,7 @@ class WorkspaceSnapshotManager:
             "created_at": snapshot.created_at,
             "total_bytes": snapshot.total_bytes,
             "truncated": snapshot.truncated,
+            "pinned": snapshot.pinned,
             "files": [f.as_dict() for f in snapshot.files.values()],
             "post_files": [f.as_dict() for f in snapshot.post_files.values()],
         }
@@ -296,11 +301,26 @@ class WorkspaceSnapshotManager:
             created_at=payload.get("created_at", ""),
             total_bytes=payload.get("total_bytes", 0),
             truncated=payload.get("truncated", False),
+            pinned=payload.get("pinned", False),
         )
         for item in payload.get("files", []):
             snapshot.files[item["path"]] = FileEntry(**item)
         for item in payload.get("post_files", []):
             snapshot.post_files[item["path"]] = FileEntry(**item)
+        return snapshot
+
+    def set_pinned(self, snapshot_id: str, pinned: bool = True) -> WorkspaceSnapshot | None:
+        """Mark a snapshot as one the user wants kept.
+
+        Retention reads this and stops considering the snapshot, whatever its age or how
+        far down the list it is. Without a way to say "this one matters" the only choices
+        are "keep everything" and "lose the important one eventually".
+        """
+        snapshot = self.get(snapshot_id)
+        if snapshot is None:
+            return None
+        snapshot.pinned = pinned
+        self._write(snapshot)
         return snapshot
 
     def delete(self, snapshot_id: str) -> bool:

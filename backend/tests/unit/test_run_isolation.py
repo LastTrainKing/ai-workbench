@@ -52,9 +52,17 @@ def test_owner_is_required_not_defaulted():
 def test_every_by_id_endpoint_goes_through_the_ownership_check():
     """Source-level guard, because the failure is an *omission*.
 
-    A new by-id endpoint that forgets `_owned_controller` reintroduces the leak and
-    no behavioural test would notice unless it happened to exercise that path. So
-    assert on the module itself: each run-scoped route must call the check.
+    A new by-id endpoint that forgets the ownership check reintroduces the leak and no
+    behavioural test would notice unless it happened to exercise that path. So assert on
+    the module itself.
+
+    There are two ownership helpers now, not one. `_owned_controller` is for the routes
+    that need the live controller — pause, resume, cancel, the event stream — and
+    `_owned_run` is for the one route that may also answer from the stored row, which is
+    how a run stays readable after a restart. Both are checked here, and both are checked
+    for the thing that actually matters: that they compare `owner_id`. A route that used
+    the stored-row path *without* the owner comparison would be a worse leak than the one
+    this test was written for, because the table keeps every run forever.
     """
     import inspect
 
@@ -62,9 +70,8 @@ def test_every_by_id_endpoint_goes_through_the_ownership_check():
 
     source = inspect.getsource(agent_runs)
 
-    # Routes that take a run_id and must therefore confirm ownership first.
-    required = [
-        "get_run_state",
+    # Routes that need the live controller and must confirm ownership before using it.
+    live_only = [
         "get_run_events",
         "get_run_plan",
         "pause_run",
@@ -73,11 +80,21 @@ def test_every_by_id_endpoint_goes_through_the_ownership_check():
         "get_run_diff",
         "rollback_run_endpoint",
     ]
-    for name in required:
-        fn = getattr(agent_runs, name)
-        body = inspect.getsource(fn)
+    for name in live_only:
+        body = inspect.getsource(getattr(agent_runs, name))
         assert "_owned_controller(" in body, f"{name} does not verify run ownership"
 
-    # And the unfiltered helper must not be reachable from the API layer.
+    # The route that may answer from the stored row.
+    assert "_owned_run(" in inspect.getsource(agent_runs.get_run_state), (
+        "get_run_state does not go through the ownership check"
+    )
+
+    # Both helpers must compare the owner, and must treat "not found" and "not yours"
+    # the same way.
+    for helper in ("_owned_controller", "_owned_run"):
+        body = inspect.getsource(getattr(agent_runs, helper))
+        assert "owner_id" in body, f"{helper} does not compare owner_id"
+
+    # And the unfiltered helpers must not be reachable from the API layer.
     assert "active_runs()" not in source, "the unscoped listing is back"
     assert "registry.all()" not in source
