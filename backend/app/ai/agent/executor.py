@@ -40,7 +40,7 @@ from app.ai.tools.executor import ResourceLimits, ToolExecutor
 from app.ai.tools.permissions import AgentPolicy, default_workspace
 from app.ai.tools.registry import ComputerToolRegistry, build_computer_registry
 from app.ai.tools.unified import UnifiedToolRegistry
-from app.ai.tracing import RunRecorder
+from app.ai.tracing import RunRecorder, persist_terminal_record
 from app.ai.types import ChatMessage, ToolResult, estimate_tokens
 from app.core.config import settings
 from app.core.errors import AIError
@@ -331,6 +331,19 @@ class AgentExecutor:
         )
         agent_run = await recorder.attach_agent_run(goal=goal, max_steps=steps_allowed)
 
+        # Commit the run row **before** the first model call, not after the last one.
+        #
+        # A flush is not enough. Until this commits, the row lives in an uncommitted
+        # transaction that no other session can see — so a live run was invisible in the
+        # run history, and, worse, a process killed mid-run left *no row at all*. That made
+        # `_reconcile_interrupted_agent_runs` unreachable for a real crash: the machinery
+        # built to mark an interrupted run as `INTERRUPTED` had nothing to find, because
+        # the row it exists for had never been written.
+        #
+        # The cost is one extra commit per run. The benefit is that "this run happened" is
+        # true from the moment it starts rather than only if it finishes.
+        await session.commit()
+
         ctx = ToolContext(
             session=session,
             owner_id=owner_id,
@@ -429,6 +442,12 @@ class AgentExecutor:
                     for s in steps
                 ]
                 await session.flush()
+                # Commit each step, which is what makes the recorder's own promise true:
+                # "if the model times out at step 4 of an agent loop, we still want the
+                # first three tool calls". Flushing alone leaves them in a transaction the
+                # caller rolls back, so the promise held only when the run also succeeded —
+                # the one case where it was not needed.
+                await session.commit()
 
                 # Feed the observation back to the model.
                 messages.append(
@@ -550,6 +569,7 @@ class AgentExecutor:
                 error_message=exc.message,
                 result_payload={"steps_completed": len(steps), "created": ctx.artifacts},
             )
+            await persist_terminal_record(session, context=f"agent:{exc.code}")
             raise
         except Exception as exc:
             agent_run.status = RunStatus.FAILED.value
@@ -560,6 +580,7 @@ class AgentExecutor:
                 error_message=f"{type(exc).__name__}: {exc}",
                 result_payload={"steps_completed": len(steps)},
             )
+            await persist_terminal_record(session, context="agent:unexpected_error")
             raise
 
 

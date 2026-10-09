@@ -21,7 +21,7 @@ from app.ai.prompts.registry import get_prompt
 from app.ai.providers.budget import reasoning_budget
 from app.ai.providers.factory import build_llm_provider
 from app.ai.rag.retriever import Retriever
-from app.ai.tracing import RunRecorder, truncate_for_prompt
+from app.ai.tracing import RunRecorder, persist_terminal_record, truncate_for_prompt
 from app.ai.types import ChatMessage, RetrievedChunk, estimate_tokens
 from app.core.config import settings
 from app.core.errors import AIError, AIResponseFormatError
@@ -437,6 +437,9 @@ class RAGPipeline:
                 error_code=exc.code,
                 error_message=exc.message,
             )
+            # Without this the caller's rollback discards the record of a failed answer,
+            # which is the case the tracing exists for.
+            await persist_terminal_record(session, context=f"rag:{exc.code}")
             raise
         except Exception as exc:
             await recorder.finish(
@@ -444,6 +447,7 @@ class RAGPipeline:
                 error_code="unexpected_error",
                 error_message=f"{type(exc).__name__}: {exc}",
             )
+            await persist_terminal_record(session, context="rag:unexpected_error")
             raise
 
 

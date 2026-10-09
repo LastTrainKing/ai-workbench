@@ -239,6 +239,40 @@ class RunRecorder:
         return row
 
 
+async def persist_terminal_record(session: AsyncSession, *, context: str) -> None:
+    """Commit the run record so the caller's rollback cannot discard it.
+
+    **Why this exists.** `session_scope` — which is what every API route uses — rolls back
+    on any exception. The executor and the RAG pipeline both write `status=FAILED`, an error
+    code and an error message, and then re-raise, so the caller's rollback erased exactly
+    the record they exist to write: a failed run left no trace at all.
+
+    That contradicts this module's own guarantee. The docstring above says a run must
+    survive partial failure — "if the model times out at step 4 of an agent loop, we still
+    want the first three tool calls" — and it was the failure case, the one where the record
+    matters most, that was being dropped. The product states the same guarantee to its
+    users: every AI invocation is recorded so it can answer "what did the AI actually do?".
+
+    **The trade-off, stated rather than implied.** Committing here also commits any business
+    write the tools performed before the failure — a task the agent created, a note it
+    wrote. The alternative is losing the record of work that demonstrably happened, and
+    leaving the database disagreeing with what the agent already reported to the user. The
+    success path commits the same writes; only the run's terminal status differs.
+
+    A failure to commit is logged and swallowed: the original exception is the one the
+    caller needs to see, and replacing it with a database error would hide the cause.
+    """
+    from sqlalchemy.exc import SQLAlchemyError
+
+    try:
+        await session.commit()
+    except SQLAlchemyError as exc:
+        logger.error(
+            "terminal_record_not_persisted",
+            extra={"context": context, "error": f"{type(exc).__name__}: {exc}"},
+        )
+
+
 def _as_uuid(value: Any) -> uuid.UUID | None:
     if isinstance(value, uuid.UUID):
         return value

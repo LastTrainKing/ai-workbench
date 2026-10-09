@@ -127,6 +127,23 @@ class BlockedProvider:
         return getattr(self._inner, item)
 
 
+def _loopback_host(provider: Any) -> str:
+    """The host of a provider's base URL when it is this machine, else "".
+
+    Returns the host rather than a bool so the reason can be logged and a future reader can
+    see *which* address was allowed through.
+    """
+    from urllib.parse import urlsplit
+
+    raw = str(getattr(provider, "base_url", "") or "")
+    if not raw:
+        return ""
+    host = (urlsplit(raw).hostname or "").strip().lower()
+    if host in {"127.0.0.1", "localhost", "::1", "0.0.0.0"}:
+        return host
+    return ""
+
+
 def guard(provider: Any, *, kind: str = "") -> Any:
     """Wrap `provider` when calls are forbidden, otherwise return it unchanged.
 
@@ -136,9 +153,16 @@ def guard(provider: Any, *, kind: str = "") -> Any:
     also broke three integration tests that legitimately exercise the whole agent loop
     against the offline engine, which is the only way to test that loop without a key.
 
-    What must be blocked is anything that could **leave the machine**: DeepSeek, an
-    OpenAI-compatible endpoint, Ollama. Those are the ones that cost money and that this
-    round forbids.
+    **A provider pointed at loopback is not wrapped either, and the reason is the same
+    one.** The rule this module states for itself is "anything that could leave the
+    machine". A stub listening on `127.0.0.1` cannot leave the machine, cannot reach a
+    vendor, and cannot cost anything — it is the local test double that lets the six
+    provider-failure behaviours (empty response, malformed body, invalid JSON, loop, step
+    ceiling, mid-run kill) be tested without a key at all. Blocking it would leave those
+    behaviours untested, which is a worse outcome than the risk it would avoid.
+
+    The check is on the **host**, not on a flag the caller sets, so a provider aimed at
+    `api.deepseek.com` cannot opt itself in by claiming to be a stub.
     """
     if provider is None:
         return provider
@@ -148,4 +172,13 @@ def guard(provider: Any, *, kind: str = "") -> Any:
         return provider
     if isinstance(provider, BlockedProvider):
         return provider
+
+    host = _loopback_host(provider)
+    if host:
+        logger.info(
+            "model_call_allowed_loopback",
+            extra={"provider": str(getattr(provider, "name", "")), "host": host},
+        )
+        return provider
+
     return BlockedProvider(provider)
