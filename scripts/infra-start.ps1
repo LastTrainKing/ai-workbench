@@ -435,6 +435,24 @@ function Start-Qdrant {
     $cfgDir = Join-Path $QdrantDir 'config'
     if (-not (Test-Path $cfgDir)) { New-Item -ItemType Directory -Path $cfgDir -Force | Out-Null }
     $cfg = Join-Path $cfgDir 'config.yaml'
+
+    # The API key Qdrant will require. Taken from the environment when the caller set one,
+    # otherwise generated once and kept next to the rest of the local state so it survives
+    # restarts and stays the same value the backend is told to send.
+    if (-not $env:QDRANT_API_KEY) {
+        $keyFile = Join-Path (Join-Path $PSScriptRoot '..') '.runtime\qdrant-api-key.txt'
+        if (Test-Path $keyFile) {
+            $env:QDRANT_API_KEY = (Get-Content -Path $keyFile -Raw).Trim()
+        }
+        else {
+            $bytes = New-Object 'byte[]' 32
+            [System.Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes)
+            $env:QDRANT_API_KEY = [Convert]::ToBase64String($bytes).TrimEnd('=').Replace('+', 'A').Replace('/', 'B')
+            New-Item -ItemType Directory -Path (Split-Path $keyFile) -Force | Out-Null
+            Set-Content -Path $keyFile -Value $env:QDRANT_API_KEY -Encoding ascii
+        }
+    }
+
     if (-not (Test-Path $cfg)) {
         Write-Step 'Writing Qdrant config.yaml'
         $yaml = @"
@@ -448,10 +466,51 @@ service:
   host: 127.0.0.1
   http_port: $QdrantPort
   grpc_port: 6334
-  enable_cors: true
+  api_key: $env:QDRANT_API_KEY
+  enable_cors: false
   max_request_size_mb: 64
 "@
         Set-Content -Path $cfg -Value $yaml -Encoding ascii
+    }
+    else {
+        # An existing config is one this script wrote on an earlier run. It is regenerated
+        # for the two settings that are security decisions rather than preferences:
+        #
+        #   enable_cors: true    Qdrant shipped this and it lets any page in any browser on
+        #                        this machine read and delete the vector collections. CORS
+        #                        exists for browser callers; this product's only Qdrant
+        #                        client is the backend, which is not one.
+        #   api_key (absent)     The store had no authentication at all. It is on loopback,
+        #                        but loopback is not a boundary: every process running as
+        #                        this user, and every page the browser loads, can reach it.
+        #
+        # Rewriting a generated file is safe — a human did not author it, and anything else
+        # in it is preserved line by line.
+        $lines = Get-Content -Path $cfg
+        $out = New-Object System.Collections.Generic.List[string]
+        $sawKey = $false
+        $sawCors = $false
+        foreach ($line in $lines) {
+            if ($line -match '^\s*enable_cors\s*:') {
+                $out.Add('  enable_cors: false'); $sawCors = $true
+            }
+            elseif ($line -match '^\s*api_key\s*:') {
+                $out.Add("  api_key: $env:QDRANT_API_KEY"); $sawKey = $true
+            }
+            elseif ($line -match '^\s*max_request_size_mb\s*:' -and -not $sawCors) {
+                $out.Add("  api_key: $env:QDRANT_API_KEY")
+                $out.Add('  enable_cors: false')
+                $out.Add($line)
+                $sawKey = $true; $sawCors = $true
+            }
+            else {
+                $out.Add($line)
+            }
+        }
+        if (-not $sawCors) { $out.Add('  enable_cors: false') }
+        if (-not $sawKey) { $out.Add("  api_key: $env:QDRANT_API_KEY") }
+        Set-Content -Path $cfg -Value $out -Encoding ascii
+        Write-Step 'Qdrant config: CORS off, API key enforced'
     }
 
     Write-StartupLog -Service 'Qdrant' -State 'STARTING' -Detail "port $QdrantPort"

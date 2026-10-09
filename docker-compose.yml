@@ -16,6 +16,15 @@
 #
 # Treat the compose path as "provided and reviewed, not executed". If you run
 # it, verify it yourself — and please report what you find.
+#
+# SECURITY DEFAULTS (changed; see RELEASE-FREEZE-ISSUES.md)
+#   * PostgreSQL, Redis and Qdrant are no longer published to the host at all —
+#     only api/worker reach them, over the `awb` bridge network.
+#   * Their weak/absent credentials are gone. POSTGRES_PASSWORD, REDIS_PASSWORD
+#     and QDRANT_API_KEY are REQUIRED (`:?`), so `docker compose up` fails with a
+#     named error instead of starting an unauthenticated database.
+#   * Qdrant has CORS disabled.
+#   * The API and frontend publish on 127.0.0.1 only.
 # =============================================================================
 
 name: ai-workbench
@@ -27,13 +36,19 @@ services:
     restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-aiworkbench}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-aiworkbench}
+      # Required, no default. The value that used to be here ("aiworkbench") is the
+      # password in every example of this file on the internet, which makes it a
+      # credential in the same sense that "password" is one.
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}
       POSTGRES_DB: ${POSTGRES_DB:-aiworkbench}
       POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C"
     volumes:
       - postgres-data:/var/lib/postgresql/data
-    ports:
-      - "${POSTGRES_PORT:-5432}:5432"
+    # Not published at all. Only the api/worker services need it, and they reach it over
+    # the `awb` network by service name. Publishing it — even on loopback — is a decision
+    # to let anything on this machine talk to the database directly, and nothing does.
+    expose:
+      - "5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-aiworkbench} -d ${POSTGRES_DB:-aiworkbench}"]
       interval: 10s
@@ -46,12 +61,25 @@ services:
     image: redis:7-alpine
     container_name: awb-redis
     restart: unless-stopped
-    # Cache-only usage: persistence is intentionally disabled.
-    command: ["redis-server", "--save", "", "--appendonly", "no", "--maxmemory", "256mb", "--maxmemory-policy", "allkeys-lru"]
-    ports:
-      - "${REDIS_PORT:-6379}:6379"
+    # Cache-only usage: persistence is intentionally disabled. Authentication is not,
+    # though — an open Redis on a shared network is a remote-code-execution surface via
+    # CONFIG SET, not just a cache leak.
+    command:
+      - redis-server
+      - --save
+      - ""
+      - --appendonly
+      - "no"
+      - --maxmemory
+      - 256mb
+      - --maxmemory-policy
+      - allkeys-lru
+      - --requirepass
+      - ${REDIS_PASSWORD:?REDIS_PASSWORD must be set in .env}
+    expose:
+      - "6379"
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
       interval: 10s
       timeout: 5s
       retries: 10
@@ -61,11 +89,17 @@ services:
     image: qdrant/qdrant:v1.12.4
     container_name: awb-qdrant
     restart: unless-stopped
+    environment:
+      # Real authentication. Qdrant on loopback with no key is readable and writable by
+      # every process on this machine and every page the browser loads.
+      QDRANT__SERVICE__API_KEY: ${QDRANT_API_KEY:?QDRANT_API_KEY must be set in .env}
+      # CORS off. The only Qdrant client here is the backend, which is not a browser.
+      QDRANT__SERVICE__ENABLE_CORS: "false"
     volumes:
       - qdrant-data:/qdrant/storage
-    ports:
-      - "${QDRANT_HTTP_PORT:-6333}:6333"
-      - "${QDRANT_GRPC_PORT:-6334}:6334"
+    expose:
+      - "6333"
+      - "6334"
     healthcheck:
       test: ["CMD-SHELL", "bash -c ':> /dev/tcp/127.0.0.1/6333' || exit 1"]
       interval: 10s
@@ -89,9 +123,10 @@ services:
       APP_ENV: ${APP_ENV:-prod}
       DEBUG: ${DEBUG:-false}
       SECRET_KEY: ${SECRET_KEY:?SECRET_KEY must be set in .env}
-      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-aiworkbench}:${POSTGRES_PASSWORD:-aiworkbench}@postgres:5432/${POSTGRES_DB:-aiworkbench}
-      REDIS_URL: redis://redis:6379/0
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-aiworkbench}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-aiworkbench}
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
       QDRANT_URL: http://qdrant:6333
+      QDRANT_API_KEY: ${QDRANT_API_KEY}
       QDRANT_COLLECTION: ${QDRANT_COLLECTION:-ai_workbench_chunks}
       AI_PROVIDER: ${AI_PROVIDER:-openai_compatible}
       AI_BASE_URL: ${AI_BASE_URL:-https://api.deepseek.com/v1}
@@ -110,8 +145,10 @@ services:
       LOG_JSON: ${LOG_JSON:-true}
     volumes:
       - uploads:/app/.runtime/storage
+    # Loopback only. The API is a local service; reaching it from another machine is an
+    # explicit opt-in with TLS and authentication in front, not the default.
     ports:
-      - "${API_PORT:-8000}:8000"
+      - "127.0.0.1:${API_PORT:-8000}:8000"
     networks: [awb]
 
   # Optional: run the worker as its own container. Set WORKER_ENABLED=false on
@@ -130,9 +167,10 @@ services:
     environment:
       APP_ENV: ${APP_ENV:-prod}
       SECRET_KEY: ${SECRET_KEY:?SECRET_KEY must be set in .env}
-      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-aiworkbench}:${POSTGRES_PASSWORD:-aiworkbench}@postgres:5432/${POSTGRES_DB:-aiworkbench}
-      REDIS_URL: redis://redis:6379/0
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-aiworkbench}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-aiworkbench}
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
       QDRANT_URL: http://qdrant:6333
+      QDRANT_API_KEY: ${QDRANT_API_KEY}
       AI_PROVIDER: ${AI_PROVIDER:-openai_compatible}
       AI_BASE_URL: ${AI_BASE_URL:-https://api.deepseek.com/v1}
       AI_API_KEY: ${AI_API_KEY:-}
@@ -158,8 +196,9 @@ services:
     restart: unless-stopped
     depends_on:
       api: { condition: service_healthy }
+    # Loopback only, same reason as the API.
     ports:
-      - "${WEB_PORT:-5173}:80"
+      - "127.0.0.1:${WEB_PORT:-5173}:80"
     networks: [awb]
 
 volumes:

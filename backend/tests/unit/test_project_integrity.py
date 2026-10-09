@@ -120,6 +120,9 @@ def test_all_models_are_registered_in_metadata() -> None:
         # ("我点开这个软件，就是要和我的数字员工对话") and `messages` is what was said in
         # it, including the questions it asked before starting work.
         "conversations", "messages",
+        # Logged-out tokens. The revocation list used to live only in Redis, so a cache
+        # outage made every logged-out token valid again; this table is the durable copy.
+        "revoked_tokens",
     }
     assert set(Base.metadata.tables) == expected_tables
 

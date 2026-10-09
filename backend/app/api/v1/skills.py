@@ -145,7 +145,18 @@ async def discover_skills(
         "current_goals": getattr(profile_row, "current_goals", []) or [],
     }
 
-    result = await discovery_module.discover(profile=profile, need=payload.need, per_query=payload.per_query)
+    # The outbound gate is the agent's own policy — the same one that governs every other
+    # network call this product makes. It used to be omitted here, and `_authorise`
+    # treated an omitted policy as "allowed", so this path had no domain check at all.
+    from app.ai.tools.permissions import PermissionManager
+    from app.ai.tools.policy_store import build_policy
+
+    result = await discovery_module.discover(
+        profile=profile,
+        need=payload.need,
+        permissions=PermissionManager(build_policy(user.id)),
+        per_query=payload.per_query,
+    )
     return ok(
         {
             "queries": result.queries,

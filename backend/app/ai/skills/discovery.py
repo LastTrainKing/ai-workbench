@@ -135,15 +135,58 @@ def build_queries(profile: dict[str, Any], need: str, *, limit: int = 3) -> list
 
 
 async def _authorise(permissions: Any, url: str) -> None:
-    """The same gate every other network caller uses."""
+    """The same gate every other network caller uses.
+
+    **A missing policy is a denial, not a pass.** This used to return early when
+    ``permissions`` was None, and the one caller that existed — ``POST /skills/discover``
+    — never passed a policy, so the domain gate on that path was never executed at all.
+    The URLs were hard-coded to GitHub, so it was not exploitable as written; but a check
+    that is skipped whenever it is inconvenient is not a check, and the next caller would
+    not have had that accident protecting it.
+    """
     if permissions is None:
-        return
+        raise PermissionDeniedError(
+            "该请求没有权限策略，按安全默认值拒绝",
+            details={"url": url, "reason": "no_permission_policy"},
+        )
     verdict = permissions.check_domain(url)
     if not verdict.allowed:
         raise PermissionDeniedError(
             verdict.reason,
             details={"url": url, "host": url, "risk": verdict.risk.value},
         )
+
+
+#: How many redirects a single fetch may follow. Each one is re-authorised, so this is a
+#: loop bound rather than a policy.
+_MAX_REDIRECTS = 3
+_REDIRECT_CODES = frozenset({301, 302, 303, 307, 308})
+
+
+async def _get_checked(
+    client: httpx.AsyncClient, url: str, *, permissions: Any, headers: dict[str, str]
+) -> httpx.Response:
+    """GET, following a redirect only after checking the hop it points at.
+
+    ``follow_redirects=True`` checks nothing. The first request is authorised and the
+    redirect target never is, so an allowed host can hand the client to ``127.0.0.1`` or
+    to a cloud metadata address and the only check that ran is the one that passed. Every
+    hop is resolved and authorised here, before it is requested.
+    """
+    current = url
+    for _ in range(_MAX_REDIRECTS + 1):
+        await _authorise(permissions, current)
+        response = await client.get(current, headers=headers)
+        if response.status_code not in _REDIRECT_CODES:
+            return response
+        location = response.headers.get("location")
+        if not location:
+            return response
+        current = str(httpx.URL(current).join(location))
+    raise PermissionDeniedError(
+        f"重定向超过 {_MAX_REDIRECTS} 次，已停止",
+        details={"url": url},
+    )
 
 
 async def search_github(
@@ -299,8 +342,10 @@ async def fetch_skill_file(
         headers["Authorization"] = f"Bearer {token}"
 
     try:
-        async with httpx.AsyncClient(timeout=20, follow_redirects=True) as client:
-            response = await client.get(url, headers=headers)
+        # `follow_redirects=False` on the client, because the redirect target is checked
+        # per hop inside `_get_checked` rather than handed to httpx to follow blindly.
+        async with httpx.AsyncClient(timeout=20, follow_redirects=False) as client:
+            response = await _get_checked(client, url, permissions=permissions, headers=headers)
     except httpx.HTTPError as exc:
         # Reported, not turned into None. "Could not reach it" and "it is not a skill" are
         # different facts, and collapsing them is how a network failure becomes invisible.

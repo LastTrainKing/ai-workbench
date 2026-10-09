@@ -374,6 +374,32 @@ class Settings(BaseSettings):
             )
         return self
 
+    @model_validator(mode="after")
+    def _qdrant_key_from_launcher_file(self) -> Settings:
+        """Pick up the Qdrant API key the launcher generated, if the env has none.
+
+        `scripts/infra-start.ps1` starts Qdrant with an API key and writes it to
+        ``<runtime>/qdrant-api-key.txt``. The backend is often started by a *different*
+        process, so it cannot inherit that environment variable — reading the same file is
+        what makes the two agree. Without this the launcher would enforce a key that the
+        client never sends, and every vector call would fail with 401.
+
+        An explicit ``QDRANT_API_KEY`` always wins, so a deployment that sets it properly
+        is unaffected.
+        """
+        if self.qdrant_api_key.strip():
+            return self
+        key_file = RUNTIME_ROOT / "qdrant-api-key.txt"
+        if not key_file.is_file():
+            return self
+        try:
+            value = key_file.read_text(encoding="utf-8").strip()
+        except OSError:
+            return self
+        if value:
+            self.qdrant_api_key = value
+        return self
+
     @property
     def api_docs_enabled(self) -> bool:
         """`/docs`, `/redoc` and `/openapi.json` describe every route and every schema.

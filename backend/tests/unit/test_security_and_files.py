@@ -49,10 +49,24 @@ def test_verify_password_tolerates_corrupt_hash() -> None:
     assert verify_password("anything", "") is False
 
 
-def test_long_passwords_are_truncated_not_crashing() -> None:
-    long_password = "a" * 500
-    hashed = hash_password(long_password)
-    assert verify_password(long_password, hashed)
+def test_over_long_passwords_are_rejected_not_truncated() -> None:
+    """This test used to assert the **truncating** behaviour, which was the defect.
+
+    It read ``hash_password("a" * 500)`` and asserted the result verified — true, because
+    the old code applied bcrypt's 72-byte limit itself. The last 428 characters were
+    discarded without a word, and two different long passwords that agreed on their first
+    72 bytes were the same password. Rejecting an over-long input is the correct
+    behaviour, so that is what is asserted now.
+
+    The boundary cases — Chinese, emoji, and two passwords differing only after byte 72 —
+    are in ``test_release_freeze_security.py``.
+    """
+    with pytest.raises(ValueError):
+        hash_password("a" * 500)
+
+    # At the documented limit it still works, and the whole value is used.
+    at_limit = "a1" * 64
+    assert verify_password(at_limit, hash_password(at_limit))
 
 
 def test_jwt_roundtrip() -> None:
