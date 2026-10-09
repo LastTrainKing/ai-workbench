@@ -9,7 +9,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import AuthenticationError, ConflictError, NotFoundError
 from app.core.logging import get_logger
-from app.core.security import create_access_token, hash_password, verify_password
+from app.core.security import (
+    DUMMY_PASSWORD_HASH,
+    create_access_token,
+    hash_password,
+    password_needs_rehash,
+    verify_password,
+)
 from app.models.user import User
 from app.repositories.ai_repo import ActivityRepository
 from app.repositories.base import BaseRepository
@@ -70,14 +76,25 @@ class AuthService:
 
     async def login(self, identifier: str, password: str) -> tuple[User, str, object]:
         user = await self.users.by_identifier(identifier.strip())
-        # Always run a hash comparison so timing does not reveal account existence.
+        # Always run a full bcrypt comparison so timing does not reveal account
+        # existence. The dummy is a real hash of the current scheme, not an invalid
+        # string: an invalid one makes `checkpw` fail before it does any work, which is
+        # fast — and "fast" is the oracle this line exists to remove.
         if user is None:
-            verify_password(password, "$2b$12$" + "x" * 53)
+            verify_password(password, DUMMY_PASSWORD_HASH)
             raise AuthenticationError("Incorrect username or password")
         if not verify_password(password, user.hashed_password):
             raise AuthenticationError("Incorrect username or password")
         if not user.is_active:
             raise AuthenticationError("This account has been disabled")
+
+        # The plaintext is available exactly here, and nowhere else. A hash written
+        # before the scheme change is upgraded now, so legacy accounts migrate as they
+        # are used instead of being reset.
+        if password_needs_rehash(user.hashed_password):
+            user.hashed_password = hash_password(password)
+            await self.session.flush()
+            logger.info("password_hash_upgraded", extra={"user_id": str(user.id)})
 
         token, expires = create_access_token(str(user.id), extra={"username": user.username})
         logger.info("user_login", extra={"user_id": str(user.id)})

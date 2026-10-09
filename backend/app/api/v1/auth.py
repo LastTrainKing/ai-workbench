@@ -55,6 +55,7 @@ async def me(user: CurrentUser) -> dict:
 @router.post("/auth/logout", summary="Log out, and make this token stop working")
 async def logout(
     user: CurrentUser,
+    session: DbSession,
     credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer)] = None,
 ) -> dict:
     """Revoke this token, rather than trusting the client to discard it.
@@ -63,12 +64,13 @@ async def logout(
     That is what a browser does and what anyone else does not: the token stayed valid for
     the rest of its 24 hours, and "log out" was a message to the client rather than a
     decision by the server. The `jti` is now recorded as revoked until the token would
-    have expired on its own.
+    have expired on its own — **in the database**, so the revocation survives a restart of
+    the cache it is also written to.
     """
     revoked = False
     if credentials is not None and credentials.credentials:
         with contextlib.suppress(AuthenticationError):
-            revoked = await revoke_token(decode_access_token(credentials.credentials))
+            revoked = await revoke_token(decode_access_token(credentials.credentials), session)
     return ok({"logged_out": True, "username": user.username, "token_revoked": revoked})
 
 

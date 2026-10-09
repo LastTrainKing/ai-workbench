@@ -37,7 +37,7 @@ from app.models.note import Note
 from app.models.project import Project
 from app.models.skill import InstalledSkill
 from app.models.task import Task, TaskDependency, TaskDocument, TaskTag
-from app.models.user import User
+from app.models.user import RevokedToken, User
 
 __all__ = [  # noqa: RUF022 - grouped by domain layer, which is more readable here
     "Base",
@@ -46,6 +46,7 @@ __all__ = [  # noqa: RUF022 - grouped by domain layer, which is more readable he
     "utcnow",
     # domain
     "User",
+    "RevokedToken",
     "InstalledSkill",
     "Project",
     "KnowledgeBase",

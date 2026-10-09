@@ -80,6 +80,68 @@ def runtime_root() -> Path:
 #: anyone can read is not signed, so `prod` refuses to start while this is in place.
 DEFAULT_SECRET_KEY = "change-me-in-dotenv-please-32-chars-min"
 
+#: Substrings that mark a value as an example rather than a secret. Checked
+#: case-insensitively against the whole value.
+#:
+#: The old check compared against `DEFAULT_SECRET_KEY` and the length, and nothing else —
+#: so `change-me-to-a-random-32-plus-character-string` (the value in `.env.example`) is
+#: 47 characters, is not the built-in default, and **passed production validation**. A
+#: placeholder that satisfies the length rule is still a placeholder.
+_PLACEHOLDER_MARKERS = (
+    "change-me",
+    "changeme",
+    "change_me",
+    "replace-me",
+    "replaceme",
+    "replace_me",
+    "placeholder",
+    "your-secret",
+    "your_secret",
+    "your-key",
+    "example",
+    "sample",
+    "dummy",
+    "insecure",
+    "secret-key-here",
+    "xxxxxxxx",
+    # Keyboard/sequence runs. A real random key contains one of these with negligible
+    # probability, so they cost nothing and catch a person typing "abcdefgh…".
+    "abcdefgh",
+    "12345678",
+    "qwerty",
+    "asdfgh",
+)
+
+#: A real 32+ character key is drawn from a large alphabet; a pattern like
+#: `"abcdefghijklmnopqrstuvwxyz012345"` is not. Below this many distinct characters the
+#: value is treated as a pattern rather than a key. Deliberately low: a hex key has only
+#: sixteen possible characters, so a threshold that excluded it would reject real keys.
+_MIN_DISTINCT_SECRET_CHARS = 10
+
+
+def _secret_problems(value: str) -> list[str]:
+    """Why this value is not acceptable as a production `SECRET_KEY` (empty = fine)."""
+    key = value.strip()
+    problems: list[str] = []
+    if not key:
+        return ["SECRET_KEY is empty"]
+    if key == DEFAULT_SECRET_KEY:
+        problems.append("SECRET_KEY is still the built-in default")
+    if len(key) < 32:
+        problems.append(f"SECRET_KEY is {len(key)} characters; 32 is the minimum")
+    lowered = key.lower()
+    markers = sorted({m for m in _PLACEHOLDER_MARKERS if m in lowered})
+    if markers:
+        problems.append(
+            "SECRET_KEY contains placeholder text (" + ", ".join(markers) + ")"
+        )
+    if len(set(key)) < _MIN_DISTINCT_SECRET_CHARS:
+        problems.append(
+            f"SECRET_KEY uses only {len(set(key))} distinct characters; "
+            "it looks like a pattern rather than a random key"
+        )
+    return problems
+
 
 class Settings(BaseSettings):
     """Typed, validated application settings."""
@@ -301,11 +363,7 @@ class Settings(BaseSettings):
         if self.app_env != "prod":
             return self
 
-        problems: list[str] = []
-        if self.secret_key.strip() == DEFAULT_SECRET_KEY:
-            problems.append("SECRET_KEY is still the built-in default")
-        if len(self.secret_key.strip()) < 32:
-            problems.append(f"SECRET_KEY is {len(self.secret_key.strip())} characters; 32 is the minimum")
+        problems: list[str] = _secret_problems(self.secret_key)
         if self.debug:
             problems.append("DEBUG is on")
 

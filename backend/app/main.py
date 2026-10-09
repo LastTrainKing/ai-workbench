@@ -62,6 +62,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # Fail fast with a clear message if the schema is missing.
     await _bootstrap_schema()
     await _reconcile_interrupted_runs()
+    await _purge_expired_revocations()
 
     worker_task: asyncio.Task[None] | None = None
     if settings.worker_enabled:
@@ -85,6 +86,29 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         await close_vector_store()
         await dispose_engine()
         logger.info("application_stopped")
+
+
+async def _purge_expired_revocations() -> None:
+    """Drop revocation rows whose token has already expired on its own.
+
+    An expired token is rejected by its signature, so its revocation row is dead weight.
+    Without this the `revoked_tokens` table grows by one row per logout forever, and the
+    list that exists to be small becomes the thing that is not.
+    """
+    from app.core.security import purge_expired_revocations
+    from app.infrastructure.database import session_scope
+
+    try:
+        async with session_scope() as session:
+            removed = await purge_expired_revocations(session)
+            await session.commit()
+        if removed:
+            logger.info("expired_revocations_purged", extra={"count": removed})
+    except Exception as exc:
+        # Housekeeping must not stop startup; it must not be silent either.
+        logger.error(
+            "revocation_purge_failed", extra={"error": f"{type(exc).__name__}: {exc}"}
+        )
 
 
 async def _reconcile_interrupted_runs() -> None:

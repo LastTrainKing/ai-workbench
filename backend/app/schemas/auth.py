@@ -7,6 +7,8 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 
+from app.core.security import MAX_PASSWORD_CHARS
+
 
 class UserBase(BaseModel):
     email: EmailStr
@@ -15,11 +17,16 @@ class UserBase(BaseModel):
 
 
 class UserCreate(UserBase):
-    password: str = Field(min_length=8, max_length=72)
+    # The ceiling is the same value login enforces, and it is a *rejection* limit, not
+    # a truncation limit: a password longer than this is refused rather than quietly
+    # cut. See `app.core.security` for why the old 72 was wrong.
+    password: str = Field(min_length=8, max_length=MAX_PASSWORD_CHARS)
 
     @field_validator("password")
     @classmethod
     def _strength(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError("password must not be blank")
         if v.isdigit() or v.isalpha():
             raise ValueError("password must mix letters and digits")
         return v
@@ -28,7 +35,10 @@ class UserCreate(UserBase):
 class UserLogin(BaseModel):
     # Accepts either the username or the email address.
     identifier: str = Field(min_length=3, max_length=255)
-    password: str = Field(min_length=1, max_length=72)
+    # Same ceiling as registration. No minimum: an old password that predates the
+    # current rules must still be able to log in, and a wrong-length guess is a failed
+    # login, not a validation error that reveals the policy.
+    password: str = Field(min_length=1, max_length=MAX_PASSWORD_CHARS)
 
 
 class UserUpdate(BaseModel):
