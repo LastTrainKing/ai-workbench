@@ -65,6 +65,25 @@ def _resolve_runtime_root() -> Path:
 RUNTIME_ROOT = _resolve_runtime_root()
 
 
+def _read_version() -> str:
+    """The product version, from the repository's single `VERSION` file.
+
+    The backend used to hard-code ``1.0.0`` while the installer said ``2.1.0`` and the
+    shell ``2.0.0`` — three numbers for one product, visible to the same user in the same
+    session. `VERSION` at the repository root is the source; `scripts/sync_version.py`
+    writes it into the files that cannot read it (JSON, NSIS) and the test suite asserts
+    they all agree.
+
+    Falls back to a visibly non-release value rather than to a plausible one: an install
+    that cannot find its own version file should look wrong, not look like 1.0.0.
+    """
+    try:
+        text = (PROJECT_ROOT / "VERSION").read_text(encoding="utf-8").strip()
+    except OSError:
+        text = ""
+    return text or "0.0.0-unknown"
+
+
 def runtime_root() -> Path:
     """The one answer to "where does this copy keep its data?".
 
@@ -155,7 +174,8 @@ class Settings(BaseSettings):
 
     # ---------------------------------------------------------------- app ---
     app_name: str = "AI Workbench"
-    app_version: str = "1.0.0"
+    #: From the repository `VERSION` file — one source for the whole product.
+    app_version: str = _read_version()
     app_env: Literal["dev", "test", "prod"] = "dev"
     debug: bool = True
     api_v1_prefix: str = "/api/v1"

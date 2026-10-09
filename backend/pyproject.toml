@@ -61,7 +61,10 @@ asyncio_default_fixture_loop_scope = "session"
 asyncio_default_test_loop_scope = "session"
 testpaths = ["tests"]
 pythonpath = ["."]
-addopts = "-q --strict-markers --timeout=180 --timeout-method=thread"
+# No `-q` here. It was duplicated with the one on the command line, and `-qq`
+# suppresses the pass/fail/skip summary — so the counts this project reports came
+# from reading the exit code, or from adding a flag that cancelled the first one.
+addopts = "--strict-markers --timeout=180 --timeout-method=thread"
 markers = [
     "integration: requires PostgreSQL/Redis/Qdrant to be running",
     "slow: takes more than a few seconds",

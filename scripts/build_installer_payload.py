@@ -46,6 +46,9 @@ INCLUDE: list[tuple[str, str]] = [
     ("worker", "worker"),
     ("vendor/runtime", "vendor/runtime"),
     (".env.example", ".env.example"),
+    # The installed backend reads this to report its own version; without it the
+    # shipped copy would answer "0.0.0-unknown".
+    ("VERSION", "VERSION"),
     ("README.md", "README.md"),
     ("LICENSE", "LICENSE"),
 ]

@@ -4,6 +4,59 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.0] — 2026-10-09
+
+Release-freeze round. Every entry below is a defect that was confirmed against the source
+and is covered by a regression test that fails on the previous code. The full table,
+including what is still open, is `RELEASE-FREEZE-ISSUES.md`.
+
+### Security
+
+- **Logout no longer fails open.** `is_token_revoked` read Redis, and a Redis outage made
+  every logged-out token valid again. Revocations are recorded in a new `revoked_tokens`
+  table (with a migration) and Redis is a fast path in front of it; the check answers
+  revoked / not_revoked / storage_unavailable, and a request is refused in the third case.
+- **Passwords are no longer truncated at 72 bytes.** The old code applied bcrypt's limit
+  itself, so two passwords agreeing on their first 72 bytes were one password and a
+  multibyte password could be cut mid-character. The scheme is versioned and pre-hashes the
+  whole password; existing hashes still verify and are upgraded on the next login.
+- **Production refuses placeholder keys.** The validator compared against one exact string
+  and the length, so the 47-character placeholder that actually shipped in `.env.example`
+  passed. It now rejects placeholder text, short values and degenerate patterns.
+- **A fresh install is a production install.** The installer copied `.env.example` to
+  `.env`, which selects `APP_ENV=dev` and seeds `demo / demo1234`. The launcher now writes
+  a production file with a per-install random key, and never overwrites an existing one.
+- **Skill discovery had no domain check.** `_authorise` treated a missing policy as
+  "allowed", and `POST /skills/discover` never passed one. A missing policy is now a
+  denial, and redirects are re-authorised at every hop instead of followed blindly.
+- **One account could change another's AI provider.** Provider, model, base URL and API key
+  lived in one shared file. They are now layered per account, and a request can only write
+  its own layer. Base URLs are validated (https for remote, no embedded credentials).
+- **Qdrant had no authentication and CORS was on.** The launcher now generates and enforces
+  an API key that the backend reads from the same file, and CORS is off.
+- **docker-compose published everything on every interface** with a default PostgreSQL
+  password and an unauthenticated Redis. The data services are no longer published; the API
+  and frontend bind to loopback; the credentials are required.
+
+### Fixed
+
+- **A stopped agent is no longer recorded as a success.** `max_steps`, `loop_detected` and
+  `empty_response` produced explanatory text, and the truthiness of that text was the whole
+  success test. New terminal states `INCOMPLETE` and `INTERRUPTED` say what happened, and a
+  delivery task's success is verified against the file it claims to have produced.
+- **A crashed job is no longer retried forever.** `requeue_stale` ignored
+  `attempts`/`max_attempts`. An exhausted job is now terminal `FAILED`, and its document is
+  marked failed with it.
+- **RAG grounding is honest.** One valid citation marked the whole answer grounded. Every
+  claim-bearing sentence must now cite a real source, and an ungrounded answer says so.
+
+### Changed
+
+- Single version source: `VERSION` at the repository root, propagated by
+  `scripts/sync_version.py`. The shell, installer, backend and frontend had reported four
+  different versions.
+- `pytest` no longer carries a duplicate `-q`, which was suppressing the summary.
+
 ## [1.1.0] — 2026-10-03
 
 Real DeepSeek integration plus a runtime provider control surface. Verified against the
