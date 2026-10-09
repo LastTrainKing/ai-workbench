@@ -18,6 +18,7 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai.memory import ContextAssembler
@@ -243,6 +244,39 @@ class DocumentService:
         embedded = 0
         failed = 0
         batch_size = max(1, settings.embedding_batch_size)
+
+        # A collection holds one semantic space. Two models can produce vectors of the same
+        # size and mean completely different things by them — so the dimension check in
+        # `ensure_collection` is necessary and **not sufficient**. Without this, switching
+        # the embedding provider silently mixed the new model's vectors into a collection
+        # built by the old one: retrieval then compared distances across two incompatible
+        # spaces, while every row still claimed a single `embedding_model` and nothing
+        # anywhere reported a problem.
+        #
+        # A knowledge base with no embedded chunks is not a conflict — there is nothing to
+        # be incompatible with — and reindexing is the documented way out of one.
+        existing_kb = await self.bases.get(document.knowledge_base_id)
+        if existing_kb is not None and existing_kb.embedding_model and embedder.model:
+            embedded_already = int(
+                (
+                    await self.session.execute(
+                        select(func.count(DocumentChunk.id)).where(
+                            DocumentChunk.knowledge_base_id == document.knowledge_base_id,
+                            DocumentChunk.embedding_status == EmbeddingStatus.EMBEDDED.value,
+                        )
+                    )
+                ).scalar_one()
+            )
+            if embedded_already and existing_kb.embedding_model != embedder.model:
+                raise ValidationError(
+                    "这个知识库是用另一个 embedding 模型建立的，直接写入会混入不兼容的向量。",
+                    details={
+                        "knowledge_base_model": existing_kb.embedding_model,
+                        "current_model": embedder.model,
+                        "embedded_chunks": embedded_already,
+                        "hint": "请重建索引后再导入，或把 embedding 模型切回原值。",
+                    },
+                )
 
         for start in range(0, len(rows), batch_size):
             batch = rows[start : start + batch_size]
