@@ -79,13 +79,13 @@ class ConnectionTestRequest(BaseModel):
 # --------------------------------------------------------------------------- #
 @router.get("", summary="Effective AI configuration, provider catalogue and overrides")
 async def get_ai_config(user: CurrentUser) -> dict[str, Any]:
-    cfg = resolve()
+    cfg = resolve(user.id)
     return ok(
         {
             "effective": cfg.safe(),
-            "overrides": _masked_overrides(),
+            "overrides": _masked_overrides(user.id),
             "catalog": provider_catalog(),
-            "runtime_config_path": ".runtime/ai-config.json (git-ignored, local only)",
+            "runtime_config_path": ".runtime/ai-config/<account>.json (git-ignored, per account)",
             "editable_fields": list(OVERRIDABLE),
         }
     )
@@ -159,15 +159,15 @@ async def update_ai_config(payload: AIConfigUpdate, user: CurrentUser) -> dict[s
                 "Unknown provider(s) in enabled_providers", details={"unknown": sorted(unknown)}
             )
 
-    save_runtime_config(patch)
+    save_runtime_config(user.id, patch)
     # Cached provider instances keyed on the old configuration must not survive.
     reset_provider_cache()
 
-    cfg = resolve()
+    cfg = resolve(user.id)
     return ok(
         {
             "effective": cfg.safe(),
-            "overrides": _masked_overrides(),
+            "overrides": _masked_overrides(user.id),
             "catalog": provider_catalog(),
         },
         message="AI 配置已更新，下一次 AI 调用即生效",
@@ -181,21 +181,21 @@ async def toggle_provider(payload: ProviderToggle, user: CurrentUser) -> dict[st
             f"Unknown provider '{payload.provider}'",
             details={"allowed": provider_registry.ids()},
         )
-    current = dict(load_runtime_config().get("enabled_providers") or {})
+    current = dict(load_runtime_config(user.id).get("enabled_providers") or {})
     current[payload.provider] = bool(payload.enabled)
-    save_runtime_config({"enabled_providers": current})
+    save_runtime_config(user.id, {"enabled_providers": current})
     reset_provider_cache()
     return ok({"enabled_providers": current}, message="Provider 状态已更新")
 
 
 @router.delete("", summary="Clear all overrides and fall back to .env")
 async def reset_ai_config(user: CurrentUser) -> dict[str, Any]:
-    clear_runtime_config()
+    clear_runtime_config(user.id)
     reset_provider_cache()
-    cfg = resolve()
+    cfg = resolve(user.id)
     return ok(
         {"effective": cfg.safe(), "catalog": provider_catalog()},
-        message="已恢复为 .env 中的配置",
+        message="已清除本账号的覆盖，回退到安装级配置与 .env",
     )
 
 
@@ -205,11 +205,11 @@ async def run_connection_test(payload: ConnectionTestRequest, user: CurrentUser)
     return ok(result, message="连接成功" if result["ok"] else "连接失败")
 
 
-def _masked_overrides() -> dict[str, Any]:
-    """Runtime overrides with every secret replaced by a mask."""
+def _masked_overrides(owner_id: Any = None) -> dict[str, Any]:
+    """**This account's** overrides with every secret replaced by a mask."""
     from app.ai.runtime_config import mask_api_key
 
-    raw = dict(load_runtime_config())
+    raw = dict(load_runtime_config(owner_id))
     if "api_key" in raw:
         raw["api_key"] = mask_api_key(str(raw["api_key"]))
         raw["api_key_set"] = True

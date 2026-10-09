@@ -2,21 +2,36 @@
 
 Precedence (highest first):
 
-1. **Runtime overrides** written by the Settings UI into
-   ``.runtime/ai-config.json`` (git-ignored, local machine only).
-2. **Environment variables** from ``.env`` (``DEEPSEEK_API_KEY``, ``AI_PROVIDER``, …).
-3. **Built-in defaults** in ``app.core.config.Settings``.
+1. **This account's overrides** — ``.runtime/ai-config/<owner_id>.json``.
+2. **The installation's overrides** — ``.runtime/ai-config.json``, written by whoever
+   set the machine up. This is the install-level default, not a shared setting: a
+   request never writes here, so one account cannot change another's model.
+3. **Environment variables** from ``.env`` (``DEEPSEEK_API_KEY``, ``AI_PROVIDER``, …).
+4. **Built-in defaults** in ``app.core.config.Settings``.
+
+Why per-account, and what was wrong before
+------------------------------------------
+There was one file. Every account read and wrote it, so account A changing the model,
+the base URL or the API key changed what account B's *next* call would use. The response
+masked the key, which made it look contained, but the effect was not: A could point B's
+prompts and B's uploaded documents at an endpoint A controlled, and the bill for A's
+changes arrived on B's provider account. A setting that belongs to a person cannot live
+in a file that belongs to the machine.
+
+The install-level file is kept, and is read as a fallback, because an existing install
+already has one and its contents should not silently disappear on upgrade. It is now
+read-only from the API's point of view.
 
 Why a file and not a database table
 -----------------------------------
 An API key is a machine-local secret, not application data. Keeping it out of
-PostgreSQL means it is not in the database dump, not in a backup, and not visible
-to anything that can read the database. ``.runtime/`` is already git-ignored and
-already excluded from the delivery archive, so the key cannot leak into Git, the
-ZIP, the logs or the screenshots.
+PostgreSQL means it is not in the database dump, not in a backup, and not visible to
+anything that can read the database. ``.runtime/`` is already git-ignored and already
+excluded from the delivery archive, so the key cannot leak into Git, the ZIP, the logs
+or the screenshots.
 
-The file is re-read when its modification time changes, so a change made through
-the UI (or by hand) takes effect on the very next AI call without a restart.
+The files are re-read when their modification time changes, so a change made through the
+UI (or by hand) takes effect on the very next AI call without a restart.
 """
 
 from __future__ import annotations
@@ -25,9 +40,11 @@ import contextlib
 import json
 import threading
 import time
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 from app.core.config import RUNTIME_ROOT, settings
 from app.core.errors import ValidationError
@@ -35,7 +52,10 @@ from app.core.logging import get_logger, mask_secret
 
 logger = get_logger(__name__)
 
+#: The install-level file. Read as a fallback; never written by a request.
 CONFIG_PATH: Path = RUNTIME_ROOT / "ai-config.json"
+#: Per-account overrides.
+CONFIG_DIR: Path = RUNTIME_ROOT / "ai-config"
 
 # Fields the UI is allowed to override.
 OVERRIDABLE = (
@@ -55,46 +75,94 @@ OVERRIDABLE = (
 
 _PROVIDER_VALUES = {"deepseek", "openai_compatible", "ollama", "offline"}
 
+# --------------------------------------------------------------------------- #
+# Which account is this call for?
+# --------------------------------------------------------------------------- #
+# `build_llm_provider()` is called from deep inside the RAG pipeline, the agent and the
+# services, none of which take an owner argument. Threading one through every one of them
+# would be a large change to code that is otherwise correct. The request dependency sets
+# this once, and `resolve` reads it when the caller does not name an owner — which keeps
+# the change in one place and makes the default explicit rather than implicit.
+_owner_var: ContextVar[str | None] = ContextVar("ai_config_owner", default=None)
+
+
+def set_current_owner(owner_id: Any) -> None:
+    """Bind this request/task to an account. Called by the auth dependency."""
+    _owner_var.set(str(owner_id) if owner_id else None)
+
+
+def current_owner() -> str | None:
+    return _owner_var.get()
+
+
+def _coerce_owner(owner_id: Any) -> str | None:
+    if owner_id is None:
+        return None
+    text = str(owner_id).strip()
+    return text or None
+
+
+def _path_for(owner_id: Any) -> Path:
+    owner = _coerce_owner(owner_id)
+    if owner is None:
+        return CONFIG_PATH
+    # `owner` is a user UUID, but it arrives as a string from a path/claim, so it is
+    # sanitised rather than trusted: a value containing a separator would otherwise be a
+    # path traversal into another file.
+    safe = "".join(ch for ch in owner if ch.isalnum() or ch in "-_")
+    if not safe:
+        raise ValidationError("Invalid account id for AI configuration")
+    return CONFIG_DIR / f"{safe}.json"
+
+
 _lock = threading.Lock()
-_cache: dict[str, Any] | None = None
-_cache_mtime: float = -1.0
+#: path -> (mtime, parsed). A single-entry cache was fine when there was one file.
+_cache: dict[Path, tuple[float, dict[str, Any]]] = {}
 
 
 # --------------------------------------------------------------------------- #
 # Raw store
 # --------------------------------------------------------------------------- #
-def _read_file() -> dict[str, Any]:
-    if not CONFIG_PATH.exists():
+def _read_file(path: Path) -> dict[str, Any]:
+    if not path.exists():
         return {}
     try:
-        data = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+        data = json.loads(path.read_text(encoding="utf-8"))
         return data if isinstance(data, dict) else {}
     except (json.JSONDecodeError, OSError) as exc:
         # A corrupt override file must not take the product down: fall back to
         # environment configuration and say so loudly.
         logger.error(
             "ai_config_unreadable",
-            extra={"path": str(CONFIG_PATH), "error": f"{type(exc).__name__}: {exc}"},
+            extra={"path": str(path), "error": f"{type(exc).__name__}: {exc}"},
         )
         return {}
 
 
-def load(*, force: bool = False) -> dict[str, Any]:
-    """Return the runtime overrides, re-reading the file when it changes."""
-    global _cache, _cache_mtime
+def load(owner_id: Any = None, *, force: bool = False) -> dict[str, Any]:
+    """Return one layer of overrides, re-reading the file when it changes.
+
+    ``owner_id=None`` means the install-level file. Anything else means that account's
+    own file, which is the only one a request ever writes.
+    """
+    path = _path_for(owner_id)
     with _lock:
         try:
-            mtime = CONFIG_PATH.stat().st_mtime if CONFIG_PATH.exists() else -1.0
+            mtime = path.stat().st_mtime if path.exists() else -1.0
         except OSError:
             mtime = -1.0
-        if force or _cache is None or mtime != _cache_mtime:
-            _cache = _read_file()
-            _cache_mtime = mtime
-        return dict(_cache or {})
+        cached = _cache.get(path)
+        if force or cached is None or mtime != cached[0]:
+            _cache[path] = (mtime, _read_file(path))
+        return dict(_cache[path][1])
 
 
-def save(patch: dict[str, Any]) -> dict[str, Any]:
-    """Merge ``patch`` into the override file. ``None`` values clear a key."""
+def save(owner_id: Any, patch: dict[str, Any]) -> dict[str, Any]:
+    """Merge ``patch`` into **this account's** override file. ``None`` clears a key.
+
+    There is deliberately no way to write the install-level file through this function:
+    a request must not be able to change what every other account falls back to.
+    """
     unknown = set(patch) - set(OVERRIDABLE)
     if unknown:
         raise ValidationError(
@@ -102,8 +170,17 @@ def save(patch: dict[str, Any]) -> dict[str, Any]:
             details={"unknown": sorted(unknown), "allowed": list(OVERRIDABLE)},
         )
 
+    _validate_endpoint_fields(patch)
+
+    path = _path_for(owner_id)
+    if path == CONFIG_PATH:
+        raise ValidationError(
+            "AI configuration must be written per account, not installation-wide",
+            code="ai_config_scope_required",
+        )
+
     with _lock:
-        current = _read_file()
+        current = _read_file(path)
         for key, value in patch.items():
             if value is None:
                 current.pop(key, None)
@@ -111,38 +188,99 @@ def save(patch: dict[str, Any]) -> dict[str, Any]:
                 current[key] = value
         current["updated_at"] = time.strftime("%Y-%m-%dT%H:%M:%S")
 
-        CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
-        tmp = CONFIG_PATH.with_suffix(".json.tmp")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".json.tmp")
         tmp.write_text(json.dumps(current, ensure_ascii=False, indent=2), encoding="utf-8")
-        tmp.replace(CONFIG_PATH)
+        tmp.replace(path)
 
         # Restrict the file to the current user where the OS supports it
         # (Windows does not always honour POSIX modes).
         with contextlib.suppress(OSError):
-            CONFIG_PATH.chmod(0o600)
+            path.chmod(0o600)
 
-    global _cache, _cache_mtime
-    _cache = None
-    _cache_mtime = -1.0
+    _cache.pop(path, None)
     logger.info(
         "ai_config_updated",
         extra={
+            "owner": _coerce_owner(owner_id),
             "fields": sorted(patch),
             "api_key": mask_secret(patch.get("api_key")) if "api_key" in patch else None,
         },
     )
-    return load(force=True)
+    return load(owner_id, force=True)
 
 
-def clear() -> None:
-    """Remove all overrides so configuration falls back to ``.env``."""
+def clear(owner_id: Any) -> None:
+    """Remove this account's overrides so it falls back to the installation's config."""
+    path = _path_for(owner_id)
+    if path == CONFIG_PATH:
+        raise ValidationError(
+            "AI configuration must be reset per account, not installation-wide",
+            code="ai_config_scope_required",
+        )
     with _lock:
-        if CONFIG_PATH.exists():
-            CONFIG_PATH.unlink()
-    global _cache, _cache_mtime
-    _cache = None
-    _cache_mtime = -1.0
-    logger.info("ai_config_cleared")
+        if path.exists():
+            path.unlink()
+        _cache.pop(path, None)
+    logger.info("ai_config_cleared", extra={"owner": _coerce_owner(owner_id)})
+
+
+# --------------------------------------------------------------------------- #
+# Endpoint validation
+# --------------------------------------------------------------------------- #
+#: Schemes a provider base URL may use. `file:`, `ftp:`, `gopher:` and friends are not
+#: base URLs for an HTTP client, and accepting them turns a configuration field into an
+#: arbitrary-protocol request.
+_ALLOWED_SCHEMES = {"http", "https"}
+#: Hosts for which plain HTTP is allowed, because they are this machine. A remote
+#: endpoint over HTTP sends the API key and the prompt in clear text.
+_LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1", "0.0.0.0", "host.docker.internal"}
+
+
+def validate_endpoint(url: str, *, field_name: str = "base_url") -> str:
+    """Check a user-supplied provider endpoint. Returns the value unchanged.
+
+    Rules, and why each one exists:
+
+    * **HTTPS for anything remote.** The key and the prompt travel in this request.
+    * **HTTP only for a host that is this machine** — a local Ollama or a local
+      OpenAI-compatible server has no certificate to offer.
+    * **No userinfo.** ``https://user:pass@host`` embeds credentials in a value that is
+      displayed, logged and stored, and some HTTP clients forward them.
+    * **No fragment/query.** A base URL is a prefix, not a request.
+    """
+    raw = (url or "").strip()
+    if not raw:
+        return raw
+    parts = urlsplit(raw)
+    if parts.scheme.lower() not in _ALLOWED_SCHEMES:
+        raise ValidationError(
+            f"{field_name} 必须使用 http 或 https",
+            details={"got": parts.scheme, "allowed": sorted(_ALLOWED_SCHEMES)},
+        )
+    if "@" in (parts.netloc or ""):
+        raise ValidationError(
+            f"{field_name} 不能在 URL 里内嵌用户名/密码",
+            details={"hint": "凭据请单独填写，不要放进地址"},
+        )
+    host = (parts.hostname or "").lower()
+    if not host:
+        raise ValidationError(f"{field_name} 缺少主机名", details={"got": raw})
+    if parts.scheme.lower() == "http" and host not in _LOCAL_HOSTS:
+        raise ValidationError(
+            f"{field_name} 指向远程主机时必须使用 https",
+            details={"host": host, "hint": "远程 http 会让 API Key 与提示词明文传输"},
+        )
+    if parts.fragment or parts.query:
+        raise ValidationError(f"{field_name} 不应包含查询串或片段", details={"got": raw})
+    return raw
+
+
+def _validate_endpoint_fields(patch: dict[str, Any]) -> None:
+    for key in ("base_url", "embedding_base_url"):
+        value = patch.get(key)
+        if isinstance(value, str) and value.strip():
+            validate_endpoint(value, field_name=key)
 
 
 # --------------------------------------------------------------------------- #
@@ -216,25 +354,39 @@ def _first(*candidates: tuple[Any, str]) -> tuple[Any, str]:
     return None, "default"
 
 
-def resolve() -> ResolvedAIConfig:
-    """Merge runtime overrides over environment configuration over defaults."""
-    runtime = load()
+def resolve(owner_id: Any = None) -> ResolvedAIConfig:
+    """Merge this account's overrides over the installation's over the environment.
+
+    Order: **account file → installation file → environment → defaults**. The account
+    layer is the one that makes a person's choice stop applying to everybody else; the
+    installation layer is kept below it so an existing install's settings survive the
+    upgrade instead of vanishing.
+
+    With no owner — a background worker, a CLI, or a request that is not authenticated —
+    only the installation layer applies. That is the correct reading of "whose setting is
+    this?" when there is no user: nobody's.
+    """
+    owner = _coerce_owner(owner_id) or current_owner()
+    account = load(owner) if owner else {}
+    install = load(None)
+    runtime = {**install, **account}
+    origin = {key: ("account" if key in account else "install") for key in runtime}
     sources: dict[str, str] = {}
 
     def pick(field_name: str, *env_values: tuple[Any, str], default: Any = None) -> Any:
-        """First non-empty value wins: runtime override → env → default.
+        """First non-empty value wins: account → install → env → default.
 
         NOTE: the fallback must return ``default`` itself, not ``str(None)``.
         Converting a missing value to the *string* ``"None"`` would make an empty
         API key look configured — which is exactly the kind of silent failure
         that makes a product claim a cloud model is answering when it is not.
         """
-        candidates = ((runtime.get(field_name), "runtime"), *env_values)
-        value, origin = _first(*candidates)
+        candidates = ((runtime.get(field_name), origin.get(field_name, "runtime")), *env_values)
+        value, origin_name = _first(*candidates)
         if value is None:
             sources[field_name] = "default"
             return default
-        sources[field_name] = origin
+        sources[field_name] = origin_name
         return value
 
     provider = str(

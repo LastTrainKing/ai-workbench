@@ -56,6 +56,13 @@ async def get_current_user(
         raise AuthenticationError("The account referenced by this token no longer exists")
     if not user.is_active:
         raise AuthenticationError("This account has been disabled")
+
+    # Bind the rest of this request to the account. `resolve()` reads this when it is not
+    # told an owner, which is what makes the AI provider configuration the caller's own
+    # rather than the machine's — see `app.ai.runtime_config`.
+    from app.ai.runtime_config import set_current_owner
+
+    set_current_owner(user.id)
     return user
 
 
