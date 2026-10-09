@@ -115,6 +115,23 @@ class BlockedProvider:
     async def chat(self, *args: Any, **kwargs: Any) -> Any:
         self._refuse()
 
+    async def stream_chat(self, *args: Any, **kwargs: Any) -> Any:
+        """Refuse a streamed call the same way `chat` refuses a plain one.
+
+        **An async generator, not a coroutine.** `stream_chat` is consumed with
+        `async for`, which requires `__aiter__`. Written as a plain `async def` that calls
+        `_refuse()`, the refusal never ran: `async for` rejected the coroutine with
+        "requires an object with __aiter__ method" before anything inside it executed. The
+        call still did not reach the vendor, but the operator would see a TypeError three
+        frames from the cause instead of the guard's own message — and a caller catching
+        broadly would read it as a transport problem.
+
+        The `yield` is unreachable; it is what makes this a generator. The body does not
+        run until the first iteration, which is exactly when the refusal should happen.
+        """
+        self._refuse()
+        yield  # pragma: no cover - makes this an async generator
+
     async def aclose(self) -> None:
         close = getattr(self._inner, "aclose", None)
         if close is not None:

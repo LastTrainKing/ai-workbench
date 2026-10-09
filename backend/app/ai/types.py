@@ -71,6 +71,30 @@ class Usage:
 
 
 @dataclass(slots=True)
+class ChatStreamChunk:
+    """One piece of a streamed completion.
+
+    Streaming is not "the same answer, delivered differently". The user sees the answer
+    appear while it is being written, which is the difference between a chat interface and
+    a form that returns a paragraph after a pause. It also means the transport is different:
+    server-sent events, read line by line, with a terminator — so this type carries the
+    pieces the caller needs to tell "still going" from "finished" from "failed".
+
+    ``usage`` is only present on the final chunk, and only when the provider is asked to
+    include it. A provider that does not report it leaves it None rather than zero: zero
+    would look like a measured value.
+    """
+
+    delta: str = ""
+    #: Set on the last chunk the provider sends ("stop", "length", …).
+    finish_reason: str = ""
+    #: Token counts, when the provider reports them on the stream.
+    usage: Usage | None = None
+    #: Chain of thought, for reasoning models that stream it separately.
+    reasoning_delta: str = ""
+
+
+@dataclass(slots=True)
 class ChatResult:
     content: str
     model: str = ""

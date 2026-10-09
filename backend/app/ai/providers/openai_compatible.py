@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import json
 import time
-from collections.abc import Sequence
+from collections.abc import AsyncIterator, Sequence
 from typing import Any
 
 import httpx
@@ -20,6 +20,7 @@ from app.ai.providers.base import EmbeddingProvider, LLMProvider
 from app.ai.types import (
     ChatMessage,
     ChatResult,
+    ChatStreamChunk,
     EmbeddingResult,
     ToolCallRequest,
     ToolSpec,
@@ -235,6 +236,100 @@ class OpenAICompatibleProvider(LLMProvider):
             latency_ms=latency_ms,
             reasoning_content=str(message.get("reasoning_content") or ""),
         )
+
+    @property
+    def supports_streaming(self) -> bool:
+        return True
+
+    async def stream_chat(
+        self,
+        messages: Sequence[ChatMessage],
+        *,
+        temperature: float = 0.2,
+        max_tokens: int = 2048,
+        tools: Sequence[ToolSpec] | None = None,
+        json_mode: bool = False,
+    ) -> AsyncIterator[ChatStreamChunk]:
+        """Read the completion as server-sent events and yield each delta.
+
+        The transport is genuinely different from `chat`: one HTTP response that stays open
+        and arrives in pieces, terminated by `data: [DONE]`. That is what makes the answer
+        appear while it is being written rather than after it is finished.
+
+        Three details that matter and are easy to get wrong:
+
+        * **`stream_options.include_usage`** — without it the vendor reports no token counts
+          on a streamed response at all, and the run record would show zero tokens for a
+          call that cost real money. With it, the final chunk carries them.
+        * **The usage chunk has an empty `choices` array.** A parser that indexes
+          `choices[0]` unconditionally crashes on the last frame of every streamed response.
+        * **Errors arrive as a normal HTTP status**, before any event does, so the status is
+          checked before the first line is read. A 401 read as "the stream ended" would look
+          like an empty answer.
+        """
+        payload: dict[str, Any] = {
+            "model": self.model,
+            "messages": [m.to_openai() for m in messages],
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+            "stream": True,
+            "stream_options": {"include_usage": True},
+        }
+        if tools:
+            payload["tools"] = [t.to_openai() for t in tools]
+            payload["tool_choice"] = "auto"
+        if json_mode:
+            payload["response_format"] = {"type": "json_object"}
+
+        async with self._http().stream("POST", "/chat/completions", json=payload) as response:
+            if response.status_code >= 400:
+                body = (await response.aread()).decode("utf-8", "replace")
+                raise _classify_status(response.status_code, body)
+
+            async for line in response.aiter_lines():
+                line = line.strip()
+                if not line or line.startswith(":"):
+                    continue  # a keep-alive comment, not data
+                if not line.startswith("data:"):
+                    continue
+                data = line[len("data:") :].strip()
+                if data == "[DONE]":
+                    return
+                try:
+                    chunk = json.loads(data)
+                except json.JSONDecodeError:
+                    # One malformed frame is not a reason to discard a working stream; the
+                    # alternative is throwing away an answer that is already half-received.
+                    continue
+
+                usage_raw = chunk.get("usage")
+                usage = None
+                if isinstance(usage_raw, dict):
+                    usage = Usage(
+                        prompt_tokens=int(usage_raw.get("prompt_tokens") or 0),
+                        completion_tokens=int(usage_raw.get("completion_tokens") or 0),
+                        total_tokens=int(usage_raw.get("total_tokens") or 0),
+                    )
+
+                choices = chunk.get("choices") or []
+                if not choices:
+                    # The final usage-only frame.
+                    if usage is not None:
+                        yield ChatStreamChunk(usage=usage)
+                    continue
+
+                choice = choices[0]
+                delta = choice.get("delta") or {}
+                content = delta.get("content") or ""
+                reasoning = delta.get("reasoning_content") or ""
+                finish = choice.get("finish_reason") or ""
+                if content or reasoning or finish or usage is not None:
+                    yield ChatStreamChunk(
+                        delta=content,
+                        finish_reason=finish,
+                        usage=usage,
+                        reasoning_delta=reasoning,
+                    )
 
     # ------------------------------------------------------------- embedding --
     async def embed(self, texts: Sequence[str]) -> EmbeddingResult:

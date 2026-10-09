@@ -92,6 +92,9 @@ class StubProvider:
         status: int = 200,
         raw_body: str | None = None,
         chunked_slow: float = 0.0,
+        stream_pieces: list[str] | None = None,
+        stream_usage: dict[str, int] | None = None,
+        stream_garbage: str = "",
     ) -> None:
         self.script = script
         self.delay_seconds = delay_seconds
@@ -102,6 +105,12 @@ class StubProvider:
         #: Sleep this long *per completion* when the script is exhausted, for the
         #: mid-run-kill case where the child has to be alive when it is killed.
         self.chunked_slow = chunked_slow
+        #: Server-sent events. When set, a request with `"stream": true` gets these as
+        #: `data:` frames followed by `[DONE]`.
+        self.stream_pieces = stream_pieces
+        self.stream_usage = stream_usage
+        #: A deliberately malformed frame, to check it is skipped rather than fatal.
+        self.stream_garbage = stream_garbage
         self.requests: list[dict[str, Any]] = []
         self._calls = 0
         self._server: ThreadingHTTPServer | None = None
@@ -142,6 +151,10 @@ class StubProvider:
                     stub._respond(self, 200, stub.raw_body)
                     return
 
+                if stub.stream_pieces is not None and stub._wants_stream():
+                    stub._respond_stream(self)
+                    return
+
                 index = stub._calls
                 stub._calls += 1
                 if stub.chunked_slow and index >= len(stub.script):
@@ -155,6 +168,49 @@ class StubProvider:
         self._thread = threading.Thread(target=self._server.serve_forever, daemon=True, name="stub-provider")
         self._thread.start()
         return self
+
+    def _wants_stream(self) -> bool:
+        """Whether the request asked for server-sent events.
+
+        Read from the request body the handler stored, so a caller that does not set
+        `"stream": true` still gets the ordinary JSON path. That matters: the same stub
+        then covers both transports, and a test cannot pass by accident on the wrong one.
+        """
+        if not self.requests:
+            return False
+        return bool(self.requests[-1].get("stream"))
+
+    def _respond_stream(self, handler: BaseHTTPRequestHandler) -> None:
+        """Write the scripted pieces as SSE frames, then the terminator."""
+        frames: list[str] = []
+        for piece in self.stream_pieces or []:
+            frames.append(
+                "data: "
+                + json.dumps(
+                    {"choices": [{"delta": {"content": piece}, "finish_reason": None}]},
+                    ensure_ascii=False,
+                )
+                + "\n\n"
+            )
+        if self.stream_garbage:
+            frames.append(f"data: {self.stream_garbage}\n\n")
+        frames.append(
+            "data: "
+            + json.dumps({"choices": [{"delta": {}, "finish_reason": "stop"}]})
+            + "\n\n"
+        )
+        if self.stream_usage is not None:
+            # The usage frame has an EMPTY choices array — the shape that crashes a parser
+            # which indexes choices[0] unconditionally on the last frame of every stream.
+            frames.append("data: " + json.dumps({"choices": [], "usage": self.stream_usage}) + "\n\n")
+        frames.append("data: [DONE]\n\n")
+
+        body = "".join(frames).encode("utf-8")
+        handler.send_response(200)
+        handler.send_header("Content-Type", "text/event-stream")
+        handler.send_header("Content-Length", str(len(body)))
+        handler.end_headers()
+        handler.wfile.write(body)
 
     def _respond(self, handler: BaseHTTPRequestHandler, status: int, body: str) -> None:
         data = body.encode("utf-8")
