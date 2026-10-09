@@ -27,11 +27,11 @@ import pytest
 
 from app.ai.agent import executor as executor_module
 from app.ai.agent.executor import (
+    _STOP_REASON_STATUS,
     AgentExecutor,
     AgentStopReason,
     _as_stop_reason,
     _verify_deliverables,
-    _STOP_REASON_STATUS,
 )
 from app.ai.types import ChatResult, ToolCallRequest, ToolResult, ToolSpec
 from app.domain.enums import DocumentStatus, JobStatus, RunStatus
@@ -163,7 +163,7 @@ class _AnsweringLLM:
 
 
 @pytest.fixture
-def _stub_provider(monkeypatch: pytest.MonkeyPatch):  # noqa: ANN202
+def _stub_provider(monkeypatch: pytest.MonkeyPatch):
     """Replace the provider factory with a controllable stub."""
 
     def install(llm: Any) -> None:
