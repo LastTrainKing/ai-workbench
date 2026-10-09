@@ -215,6 +215,10 @@ cd backend
   → 3 passed
 ..\.venv\Scripts\python.exe -m pytest tests/unit tests/api
   → 986 passed, 4 skipped, 0 failed
+..\.venv\Scripts\python.exe -m pytest            # the whole suite
+  → 1216 passed, 10 skipped, 0 failed
+     (1204 before this round + the 12 new cases — no regression,
+      and no existing test changed meaning)
 ..\.venv\Scripts\ruff.exe check app tests
   → All checks passed
 
