@@ -14,13 +14,17 @@ Flickable {
     contentHeight: column.implicitHeight
     clip: true
 
-    property var data: null
+    // `summary`, not `data`: `data` is a built-in `Item` property — the default
+    // property that owns the item's children — and declaring it again shadows the
+    // engine's own member. Qt warns about it at load, and the name is the wrong one
+    // regardless: this holds the dashboard payload.
+    property var summary: null
     property string errorText: ""
 
     function load() {
         var id = "dashboard-" + Date.now()
         shell.request("总览", id, function (payload) {
-            page.data = payload
+            page.summary = payload
             page.errorText = ""
         })
         bridge.loadDashboard(id)
@@ -71,10 +75,10 @@ Flickable {
             rowSpacing: 16
 
             Repeater {
-                model: page.data ? [
-                    { label: "项目", value: page.data.projects ?? page.data.project_count ?? 0 },
-                    { label: "任务", value: page.data.tasks ?? page.data.task_count ?? 0 },
-                    { label: "文档", value: page.data.documents ?? page.data.document_count ?? 0 }
+                model: page.summary ? [
+                    { label: "项目", value: page.summary.projects ?? page.summary.project_count ?? 0 },
+                    { label: "任务", value: page.summary.tasks ?? page.summary.task_count ?? 0 },
+                    { label: "文档", value: page.summary.documents ?? page.summary.document_count ?? 0 }
                 ] : []
 
                 delegate: Rectangle {
@@ -117,7 +121,7 @@ Flickable {
                 wrapMode: Text.WordWrap
                 color: Theme.textMuted
                 font.pixelSize: 12
-                text: page.data
+                text: page.summary
                       ? "本页的数字来自 StatsService.dashboard(owner_id=…) 的一次真实查询。"
                         + " QML 直接调用服务层，中间没有 HTTP 监听、没有 bearer token。"
                       : "正在读取…"
@@ -133,7 +137,7 @@ Flickable {
                 color: Theme.textFaint
                 font.family: "Consolas"
                 font.pixelSize: 11
-                text: page.data ? JSON.stringify(page.data) : "(空)"
+                text: page.summary ? JSON.stringify(page.summary) : "(空)"
             }
         }
 

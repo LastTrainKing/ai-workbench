@@ -54,3 +54,26 @@ function taskTone(status) {
 function scale(base, factor) {
     return Math.round(base * factor)
 }
+
+// The numbered pages, in order. `Ctrl+1` is the first entry, `Ctrl+2` the second, and so
+// on — so the rail's hint text and the actual shortcut cannot disagree about which key
+// opens which page. They were two lists before, and a hint that lies is worse than no
+// hint: it teaches the user a key that does something else.
+var pages = [
+    { key: "dashboard", label: "总览" },
+    { key: "knowledge", label: "知识库" },
+    { key: "tasks",     label: "任务" },
+    { key: "projects",  label: "项目" },
+    { key: "notes",     label: "笔记" },
+    { key: "runs",      label: "Agent" },
+    { key: "settings",  label: "设置" }
+]
+
+//: "Ctrl+3" for a numbered page, "" for one that has no shortcut (documents and ask are
+//: reached from a knowledge base rather than from a key).
+function shortcutFor(key) {
+    for (var i = 0; i < pages.length; i++) {
+        if (pages[i].key === key) return "Ctrl+" + (i + 1)
+    }
+    return ""
+}

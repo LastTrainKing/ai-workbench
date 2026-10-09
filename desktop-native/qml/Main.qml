@@ -2,6 +2,7 @@ import QtQuick
 import QtQuick.Controls.Basic
 import QtQuick.Layouts
 import QtQuick.Window
+import QtQml
 import "pages"
 import "components"
 import "theme.js" as Theme
@@ -12,7 +13,7 @@ import "theme.js" as Theme
 // a real `Button`, a real `TextField`, a real `ScrollView` — so the focus system, the
 // input method and the accessibility tree are Qt's, not a DOM's.
 ApplicationWindow {
-    id: shell
+    id: shellRoot
 
     // DPI: the ratio comes from the screen this window is on, and everything sized in
     // `Theme.scale` derives from it. Qt applies the platform scale factor itself; this is
@@ -22,6 +23,15 @@ ApplicationWindow {
     readonly property real railWidth: Theme.scale(220, uiScale)
 
     property string activePage: "dashboard"
+    //: The numbered pages, in shortcut order, exposed so a keyboard test can ask the
+    //: running shell which page each `Ctrl+N` should open instead of keeping its own copy
+    //: of the list. A copy in the test would pass while the application was wrong.
+    readonly property var pages: Theme.pages
+    //: The rail's entries, in the order the arrow keys move through them. **A different
+    //: list from `pages`**: the rail also carries `documents` and `ask`, which are reached
+    //: from a knowledge base and have no shortcut. A test that walked `pages` would stop
+    //: two entries short and call a working rail broken — which is what happened.
+    readonly property var railEntries: rail.entries
     //: Parameters for the pages that need one (a knowledge base, say). Held here rather
     //: than passed through the Loader, which would recreate the page on every change.
     property var pageParams: ({})
@@ -40,16 +50,16 @@ ApplicationWindow {
 
     // ---------------------------------------------------------------- toast --
     function toast(level, message) {
-        shell.toastLevel = level
-        shell.toastText = message
-        shell.toastVisible = true
+        shellRoot.toastLevel = level
+        shellRoot.toastText = message
+        shellRoot.toastVisible = true
         toastTimer.restart()
     }
 
     Timer {
         id: toastTimer
         interval: 6000
-        onTriggered: shell.toastVisible = false
+        onTriggered: shellRoot.toastVisible = false
     }
 
     // ---------------------------------------------------------------- bridge --
@@ -58,25 +68,25 @@ ApplicationWindow {
     property var pending: ({})
 
     function request(kind, id, callback) {
-        shell.pending[id] = { kind: kind, callback: callback }
-        shell.inflight += 1
+        shellRoot.pending[id] = { kind: kind, callback: callback }
+        shellRoot.inflight += 1
     }
 
     function resolve(id, payload) {
-        var entry = shell.pending[id]
-        delete shell.pending[id]
-        shell.inflight = Math.max(0, shell.inflight - 1)
+        var entry = shellRoot.pending[id]
+        delete shellRoot.pending[id]
+        shellRoot.inflight = Math.max(0, shellRoot.inflight - 1)
         if (entry && entry.callback) {
             entry.callback(payload)
         }
     }
 
     function fail(id, message, code) {
-        var entry = shell.pending[id]
-        delete shell.pending[id]
-        shell.inflight = Math.max(0, shell.inflight - 1)
+        var entry = shellRoot.pending[id]
+        delete shellRoot.pending[id]
+        shellRoot.inflight = Math.max(0, shellRoot.inflight - 1)
         var label = (entry ? entry.kind : "请求")
-        shell.toast(code === "timeout" ? "warn" : "error", label + " 失败：" + message)
+        shellRoot.toast(code === "timeout" ? "warn" : "error", label + " 失败：" + message)
         if (entry && entry.onError) {
             entry.onError(message, code)
         }
@@ -87,13 +97,13 @@ ApplicationWindow {
         function onCompleted(id, payload) {
             var parsed = payload
             try { parsed = JSON.parse(payload) } catch (e) { /* plain string is fine */ }
-            shell.resolve(id, parsed)
+            shellRoot.resolve(id, parsed)
         }
         function onFailed(id, message, code) {
-            shell.fail(id, message, code)
+            shellRoot.fail(id, message, code)
         }
         function onNotify(level, message) {
-            shell.toast(level, message)
+            shellRoot.toast(level, message)
         }
     }
 
@@ -102,11 +112,12 @@ ApplicationWindow {
         spacing: 0
 
         NavRail {
+            id: rail
             Layout.fillHeight: true
-            Layout.preferredWidth: shell.railWidth
-            activePage: shell.activePage
-            inflight: shell.inflight
-            onNavigate: function (page) { shell.activePage = page }
+            Layout.preferredWidth: shellRoot.railWidth
+            activePage: shellRoot.activePage
+            inflight: shellRoot.inflight
+            onNavigate: function (page) { shellRoot.activePage = page }
         }
 
         Rectangle {
@@ -116,16 +127,19 @@ ApplicationWindow {
 
             Loader {
                 id: pageLoader
+                objectName: "pageLoader"
                 anchors.fill: parent
-                anchors.margins: shell.gap
+                anchors.margins: shellRoot.gap
                 // The page is chosen by name; each one is a file, so a new screen is a new
                 // file and not a new branch in a switch.
                 sourceComponent: {
-                    switch (shell.activePage) {
+                    switch (shellRoot.activePage) {
                     case "knowledge": return knowledgePage
                     case "documents": return documentsPage
                     case "ask":       return askPage
                     case "tasks":     return tasksPage
+                    case "projects":  return projectsPage
+                    case "notes":     return notesPage
                     case "runs":      return runsPage
                     case "settings":  return settingsPage
                     default:          return dashboardPage
@@ -134,9 +148,9 @@ ApplicationWindow {
                 onLoaded: {
                     // Parameters are applied once, when the page instance appears, so a
                     // page cannot be recreated by a change it caused itself.
-                    if (item && shell.pageParams) {
-                        for (var key in shell.pageParams) {
-                            item[key] = shell.pageParams[key]
+                    if (item && shellRoot.pageParams) {
+                        for (var key in shellRoot.pageParams) {
+                            item[key] = shellRoot.pageParams[key]
                         }
                     }
                 }
@@ -144,63 +158,91 @@ ApplicationWindow {
         }
     }
 
-    Component { id: dashboardPage; DashboardPage { shell: shell } }
+    // **The window's id is `shellRoot`, not `shell`, and that is not cosmetic.**
+    //
+    // These components used to read `DashboardPage { shell: shell }`. In QML an unqualified
+    // name inside an object's binding resolves to that object's *own* properties before it
+    // resolves to an outer id — so the right-hand `shell` was the page's own (empty) `shell`
+    // property, and every page was constructed with `shell = null`. The pages still rendered,
+    // because their layout does not depend on it; what did not work was everything that
+    // calls back into the shell. `shell.request` threw "Cannot call method 'request' of
+    // undefined" the moment a button was pressed, so no page could load or write anything.
+    //
+    // The symptom was a page that looked finished and did nothing, which is why it survived
+    // a screenshot check and a bridge-level test. `verify_native_shell.py` now presses the
+    // buttons, so a page wired to nothing fails there.
+    Component { id: dashboardPage; DashboardPage { shell: shellRoot } }
     Component { id: knowledgePage; KnowledgePage {
-        shell: shell
+        shell: shellRoot
         onOpenDocuments: function (kbId, kbName) {
-            shell.pageParams = { kbId: kbId, kbName: kbName }
-            shell.activePage = "documents"
+            shellRoot.pageParams = { kbId: kbId, kbName: kbName }
+            shellRoot.activePage = "documents"
         }
     } }
     Component { id: documentsPage; DocumentsPage {
-        shell: shell
-        onBack: shell.activePage = "knowledge"
+        shell: shellRoot
+        onBack: shellRoot.activePage = "knowledge"
         onAsk: function (kbId, kbName) {
-            shell.pageParams = { kbId: kbId, kbName: kbName }
-            shell.activePage = "ask"
+            shellRoot.pageParams = { kbId: kbId, kbName: kbName }
+            shellRoot.activePage = "ask"
         }
     } }
     Component { id: askPage; AskPage {
-        shell: shell
-        onBack: shell.activePage = "documents"
+        shell: shellRoot
+        onBack: shellRoot.activePage = "documents"
     } }
-    Component { id: tasksPage;     TasksPage     { shell: shell } }
-    Component { id: runsPage;      RunsPage      { shell: shell } }
-    Component { id: settingsPage;  SettingsPage  { shell: shell } }
+    Component { id: tasksPage;     TasksPage     { shell: shellRoot } }
+    Component { id: projectsPage;  ProjectsPage  { shell: shellRoot } }
+    Component { id: notesPage;     NotesPage     { shell: shellRoot } }
+    Component { id: runsPage;      RunsPage      { shell: shellRoot } }
+    Component { id: settingsPage;  SettingsPage  { shell: shellRoot } }
 
     // ---------------------------------------------------------------- toast UI --
     Rectangle {
         id: toastBox
-        visible: shell.toastVisible
+        visible: shellRoot.toastVisible
         anchors.horizontalCenter: parent.horizontalCenter
         anchors.bottom: parent.bottom
-        anchors.bottomMargin: shell.gap * 2
-        width: Math.min(parent.width - shell.gap * 4, toastLabel.implicitWidth + shell.gap * 3)
-        height: toastLabel.implicitHeight + shell.gap * 1.6
+        anchors.bottomMargin: shellRoot.gap * 2
+        width: Math.min(parent.width - shellRoot.gap * 4, toastLabel.implicitWidth + shellRoot.gap * 3)
+        height: toastLabel.implicitHeight + shellRoot.gap * 1.6
         radius: 10
         color: Theme.bgCard
         border.width: 2
-        border.color: shell.toastLevel === "error" ? Theme.danger
-                    : shell.toastLevel === "warn" ? Theme.warn
+        border.color: shellRoot.toastLevel === "error" ? Theme.danger
+                    : shellRoot.toastLevel === "warn" ? Theme.warn
                     : Theme.accent
 
         Text {
             id: toastLabel
             anchors.centerIn: parent
-            width: parent.width - shell.gap * 2
+            width: parent.width - shellRoot.gap * 2
             wrapMode: Text.WordWrap
             color: Theme.text
-            font.pixelSize: Theme.scale(14, shell.uiScale)
-            text: shell.toastText
+            font.pixelSize: Theme.scale(14, shellRoot.uiScale)
+            text: shellRoot.toastText
         }
     }
 
-    // Keyboard: Escape dismisses the toast, Ctrl+1..4 moves between pages. A Big Picture
-    // shell is used from a couch; the mouse is the second-class citizen.
-    Shortcut { sequence: "Escape"; onActivated: shell.toastVisible = false }
-    Shortcut { sequence: "Ctrl+1"; onActivated: shell.activePage = "dashboard" }
-    Shortcut { sequence: "Ctrl+2"; onActivated: shell.activePage = "knowledge" }
-    Shortcut { sequence: "Ctrl+3"; onActivated: shell.activePage = "tasks" }
-    Shortcut { sequence: "Ctrl+4"; onActivated: shell.activePage = "runs" }
-    Shortcut { sequence: "Ctrl+5"; onActivated: shell.activePage = "settings" }
+    // Keyboard: Escape dismisses the toast; Ctrl+1..7 moves between pages; Up/Down move
+    // inside the rail and Enter opens the entry focus is on. A Big Picture shell is used
+    // from a couch; the mouse is the second-class citizen.
+    //
+    // The list of pages and their order come from `theme.js`, which is also where the
+    // rail's hint text comes from. Two lists would drift, and a hint that names the wrong
+    // key is worse than no hint at all.
+    Shortcut { sequence: "Escape"; onActivated: shellRoot.toastVisible = false }
+
+    // `Instantiator`, not `Repeater`: a `Shortcut` is a QObject and a `Repeater` requires
+    // its delegate to be an Item. With `Repeater` the whole window failed to load with
+    // "Delegate must be of Item type".
+    Instantiator {
+        model: Theme.pages.length
+
+        delegate: Shortcut {
+            required property int index
+            sequence: "Ctrl+" + (index + 1)
+            onActivated: shellRoot.activePage = Theme.pages[index].key
+        }
+    }
 }

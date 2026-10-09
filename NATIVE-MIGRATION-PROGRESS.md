@@ -1,312 +1,503 @@
-# Native migration progress — round 4
+# Native migration progress — round 5
 
-Branch `fix/release-freeze-20261009` · start `e447e24` · real-provider calls: **11, ¥0.01**
+Branch `fix/release-freeze-20261009` · start `aa8e11b` · real-provider calls this round: **0, ¥0.00**
 
-This round did three things: verified the remaining cheap real-model capabilities, found and
-fixed two defects, and moved the native UI from four pages to seven by building the product's
-core loop. It did **not** finish the migration — 20 pages remain, and that is stated below
-rather than implied.
+This round closed the two P0 items. It made the agent's tool calls survive a crash, and it
+produced a Windows native package that actually launches, reaches the database, and passes a
+ten-point acceptance. It also found and fixed a defect that had been in the native UI since
+it was written: **no page could talk to the shell**.
+
+It did **not** finish the page migration — 10 of 25 old pages remain `NOT_STARTED`. That is
+stated in section D rather than implied.
 
 ---
 
-## 1. Baseline
+## A. 工程状态
 
 | | |
 |---|---|
-| Start commit | `e447e24` (both `e447e24` and `52b9af7` verified as ancestors of HEAD) |
+| Start commit | `aa8e11b` |
 | Branch | `fix/release-freeze-20261009` |
 | Working tree at start | clean |
 | Version | 2.2.0 |
-| 2.2.0 artifact | `build/installer/AI-Workbench-Setup.exe` — **97,311,474 bytes**, SHA-256 `698db636…` |
-| Archived copy | `archive/releases/AI-Workbench-2.2.0-final.exe` — **identical SHA-256** |
-| User data | `%LOCALAPPDATA%\AI Workbench Data` — 1,530 files, present, untouched |
-| Test baseline | 1,216 passed / 10 skipped / 0 failed |
-| Test result at end | **1,229 passed / 10 skipped / 0 failed** (1,216 + 13 new: 3 embedding guard, 10 streaming) |
+| 2.2.0 artifact | `build/installer/AI-Workbench-Setup.exe` — **97,311,474 bytes**, SHA-256 `698db63662cc24e42873884077ada51b7b97c5ccd45ab3616acd15ad2df0d3d7` |
+| Archived copy | `archive/releases/AI-Workbench-2.2.0-final.exe` — **byte-identical**, same SHA-256 |
+| User data | `%LOCALAPPDATA%\AI Workbench Data` — **1,530 files, 50 MB, present, not modified** |
+| Test baseline (round 4) | 1,229 passed / 10 skipped / 0 failed |
+| Test result at end | **1,278 passed / 10 skipped / 0 failed** |
+| Mutation check | **22/22 defects caught** by their regression test |
 
-Everything the previous report claimed about the baseline was confirmed against the
-repository. No discrepancy.
+Both copies of the 2.2.0 archive were hashed at the start and at the end of this round and are
+unchanged. The user's data directory was read but never written to; the only database this
+round modified was the **development** database, and only by `alembic upgrade head` (section F).
+
+### Commits added
+
+| Commit | Purpose |
+|---|---|
+| *(this round's first)* | Agent tool invocations: the intent is recorded before the tool runs, recovery distinguishes `UNKNOWN` |
+| *(this round's second)* | Standalone Windows native package: build, first-run initialisation, ten-point acceptance |
+| *(this round's third)* | Native shell: keyboard navigation, accessibility, Projects and Notes; two defects found in the packaged acceptance |
 
 ---
 
-## 2. Real model acceptance
+## B. 原生安装包
 
-### 2.1 What was already verified, and was **not** re-run
-
-Per the instruction not to spend credit re-proving things, these were cited, not repeated:
-real RAG Q&A (`run_e3d7119e…`), real Agent `project_list` call with observation
-(`run_0aafffc2…`), citation-to-source verification, real 400 → `ai_runs` FAILED
-(`run_ed8a03234f…`), and the native UI key save/mask path.
-
-### 2.2 What this round ran
-
-| # | Purpose | Real or stub | Calls | In / Out tokens | Cost | Run ID | Result |
-|---|---|---|---|---|---|---|---|
-| A2 | Real streaming: do bytes arrive in pieces? | **real** | 3 | 570 total | < ¥0.005 | not persisted (provider-level) | **PASS_REAL** |
-| A3 | Multi-turn context carried between turns | **real** | 2 | 1 per turn | < ¥0.005 | via conversation `c486dfb5…` | **PASS_REAL** |
-| A4 | Controlled longer input (~3,800 chars) | **real** | 3 | 489 + 511 + 2,218 | < ¥0.005 | not persisted | **PASS_REAL** |
-| A2s | Streaming transport, terminator, malformed frame, usage frame, HTTP error, guard | stub | 0 | 0 | ¥0.00 | — | **PASS_STUB** (10 tests) |
-| A7 | Embedding provider assessment | none | 1 probe | 0 | ¥0.00 | — | **BLOCKED** |
-| B5b | Knowledge loop through the native bridge | **real** | 1 | ~1,000 | < ¥0.005 | `run_dbc17976…` | **PASS_REAL** |
-
-**Total: 11 real HTTP requests, ¥0.01** (balance 6.71 → 6.71 at two-decimal precision).
-No pause threshold reached, no repeated requests, no concurrency.
-
-### 2.3 A2 — streaming
-
-The provider layer had **no streaming at all** before this round. A chat interface where the
-answer appears only after it is finished is a form, not a conversation, so the transport was
-implemented: server-sent events, read line by line, terminated by `data: [DONE]`.
-
-Real evidence: **44 content chunks arriving over 0.37 s** with measurable gaps between them,
-usage reported (60 in / 44 out), `finish_reason=stop`.
-
-Two of the three A2 calls returned **no answer at all** — 128 and 256 chunks of *reasoning*
-and nothing else. `deepseek-flash` is a reasoning model, and an open-ended prompt consumed the
-whole budget thinking. That is a real property the interface has to handle: a stream can end
-with `finish_reason=length` and empty content, and the UI must say so rather than show a blank
-panel.
-
-### 2.4 A3 — multi-turn context
-
-Two turns in one conversation, with the outgoing request **captured**:
+### B.1 How it is built
 
 ```
-turn 2 sent  : ...用户：请记住一件事：我的项目代号是 ORION-7。
-                   你：记住了：你的项目代号是 ORION-7。...
-turn 2 reply : 你的项目代号是 ORION-7。（这是你之前让我记住的，我这边存着呢。）
+.venv\Scripts\python.exe desktop-native\build_native.py
 ```
 
-The assertion that matters is the captured request, not the reply — a model can guess a
-plausible fact, but `ORION-7` is made up, and it appears in turn 2's prompt because the
-application put it there. 2 model calls total, 4 messages persisted.
+`build_native.py` runs PyInstaller with `desktop-native/ai-workbench-native.spec` and then
+**runs `verify_native_package.py` against the result**, failing if any check fails. A build
+that produces a directory full of correctly named files and no working application is a
+build that fails here.
 
-### 2.5 A4 — controlled longer input
+One folder, not one file: a one-file build extracts several hundred megabytes of Qt and Python
+to a temporary directory on every launch, and gives a different `sys._MEIPASS` each time.
 
-3,787-character document, marker at character 1,902 (the midpoint), one question. The answer
-`ZQ-4417` proves the middle reached the model — a beginning-only truncation would have failed
-it. 2,172 prompt tokens reported against a client estimate of 3,392 (the estimate is
-conservative for CJK; the vendor's count is authoritative).
-
-The first two attempts were **703 characters**, below the 2,000–4,000 the order specifies, and
-each still spent a call discovering it. The size is now asserted *before* the request.
-
-### 2.6 A7 — Embedding: **BLOCKED**, and what was done instead
-
-| Check | Finding |
-|---|---|
-| Independent chat/embedding providers | **Yes** — `embedding_provider`, `embedding_base_url`, `embedding_model` are separate settings |
-| DeepSeek embeddings endpoint | **404** — the API does not serve one |
-| Local embedding model on this machine | **None** — no Ollama running; no sentence-transformers, transformers, torch, onnxruntime or fastembed installed |
-| Providers the project supports | `openai_compatible`, `ollama`, `offline` |
-| Collection records model and dimension | Yes — `DocumentChunk.embedding_model`, `KnowledgeBase.embedding_model` / `vector_size` |
-
-**Not worked around.** Installing a heavy dependency or registering another paid service to
-close a checkbox is what the round forbids. The capability stays `BLOCKED`, with the
-dimension, storage and isolation checks done against the offline embedder instead — which is
-honest about what was and was not verified.
-
-**A real defect was found in this area and fixed** — see §4.1.
-
----
-
-## 3. Native UI migration
-
-### 3.1 Page inventory, recounted from the code
-
-25 pages in `frontend/src/pages`, 10,476 lines of TSX. Counted from the filesystem, not copied
-from a previous report.
-
-| Old page | Lines | Native | Status |
-|---|---|---|---|
-| `SettingsPage` | 721 | `SettingsPage.qml` | **IMPLEMENTED** — provider config, credential entry, runtime info, file export |
-| `DashboardPage` | 639 | `DashboardPage.qml` | **IMPLEMENTED** — real aggregate counts |
-| `TasksPage` | 540 | `TasksPage.qml` | **IMPLEMENTED** — list, create, complete |
-| `KnowledgePage` | 474 | `KnowledgePage.qml` | **IMPLEMENTED** — list, create, counts per base |
-| `KnowledgeDocumentsPage` | 96 | `DocumentsPage.qml` | **IMPLEMENTED** — list, real file import |
-| `ChatPage` | 453 | `AskPage.qml` | **PARTIAL** — grounded Q&A with citations and streaming; no conversation history |
-| `AgentPage` | 442 | `RunsPage.qml` | **PARTIAL** — run, stream progress, cancel; no history list or filters |
-| `ConversationPage` | 872 | — | `NOT_STARTED` |
-| `MyAIPage` | 648 | — | `NOT_STARTED` (provider config is covered by `SettingsPage`) |
-| `AgentWorkbenchPage` | 555 | — | `NOT_STARTED` |
-| `HomePage` | 546 | — | `NOT_STARTED` |
-| `AIRunsPage` | 525 | — | `NOT_STARTED` |
-| `PlannerPage` | 486 | — | `NOT_STARTED` |
-| `GraphPage` | 450 | — | `NOT_STARTED` — needs its own design (force layout, no d3) |
-| `AgentPermissionsPage` | 449 | — | `NOT_STARTED` |
-| `NotesPage` | 433 | — | `NOT_STARTED` |
-| `AIRunDetailPage` | 345 | — | `NOT_STARTED` |
-| `LoginPage` | 345 | — | **N/A** — a local session; there is no login in a single-account desktop app |
-| `ProjectDetailPage` | 344 | — | `NOT_STARTED` |
-| `ProjectsPage` | 340 | — | `NOT_STARTED` |
-| `OnboardingPage` | 256 | — | `NOT_STARTED` |
-| `SearchPage` | 249 | — | `NOT_STARTED` |
-| `WorkbenchPage` | 226 | — | `NOT_STARTED` |
-| `NotFoundPage` | 25 | — | `N/A` — a desktop shell has no routes |
-| `DocumentsPage` | 17 | — | **N/A** — a redirect |
-
-**Tally: 6 IMPLEMENTED, 2 PARTIAL, 15 NOT_STARTED, 2 N/A.**
-
-Nothing is marked `VERIFIED` except where §3.3 shows a test. A page with a matching title is
-not a migrated page.
-
-### 3.2 The core loop, and what it actually does
-
-```
-create a knowledge base  →  import a real file  →  parse and embed  →  ask  →  answer with citations
-```
-
-Six new bridge slots. The import calls `save_upload` → `register_upload` → `ingest` — exactly
-what the HTTP upload route calls — so the file is hashed, deduplicated, parsed and embedded by
-the product's own pipeline, not by a path written for the interface.
-
-The ask page shows the **grounding report** rather than a green tick: claim units, supported
-units, coverage, and the reason when it fails. It also states, in the interface, that this is
-a structural check and not fact-level entailment.
-
-### 3.3 Verification
-
-| What | Result |
-|---|---|
-| `desktop-native/verify_knowledge_loop.py` — create, import, embed, ask, stream | **18/18** |
-| `desktop-native/verify_native_ui.py` — window, tasks, config, permissions, IPC | **28/28** |
-| `desktop-native/audit_native_ui.py` — no HTTP, no browser, permissions, IPC, page gap | **25/25** |
-| Real RAG answer **through the bridge** | **6/6 PASS_REAL** — `deepseek/deepseek-flash`, `本项目的封版版本号是 **2.2.0** [1]`, citation resolves to `release-notes.md` |
-
-### 3.4 Architecture boundaries, re-checked
-
-| Requirement | Evidence |
-|---|---|
-| No WebView2 / Qt WebEngine / Chromium / HTML page | audit: no browser component referenced, no HTML shipped, the React build is not loaded |
-| No `127.0.0.1` HTTP path from the UI | audit: a socket spy during a bridge call shows **0 connections to the API port** |
-| Business logic not in QML | all data access is in `awbnative/bridge.py`; QML only calls slots |
-| Permission layer not bypassed | audit: workspace write succeeds; out-of-policy and protected paths are refused |
-| UI thread not blocked | `AsyncRunner` owns one asyncio loop on a background thread; every slot returns immediately |
-| IPC frame cap, ids, timeout, allowlist, disconnect | audit: 1 MiB cap, `unknown_method`, `timeout`, server survives a mid-frame hang-up |
-
-### 3.5 Not done, and not claimed
-
-* **Packaging.** No PyInstaller/NSIS wiring for the Qt build; the Qt runtime is not bundled.
-  There is no installable native artifact, so the deliverable for this round is the runnable
-  source tree plus the verification scripts.
-* **Keyboard navigation** beyond the Ctrl+1–5 shortcuts. Focus order, traps and the
-  accessibility tree are unverified.
-* **DPI.** One display at 1.0. The scaling code runs; 100/125/150/175% and mixed DPI are
-  `BLOCKED`.
-* **Performance at scale.** No measurement with many knowledge bases, documents or graph nodes.
-* **The graph page.** No design work started; it needs a force layout and its own interaction
-  model before it can be estimated.
-
----
-
-## 4. Defects found and fixed
-
-### 4.1 The embedding model could be switched silently (backend)
-
-`kb.embedding_model` was assigned on every ingest and never compared against anything. A
-knowledge base built with model A accepted vectors from model B without a word; retrieval then
-compared distances across two incompatible spaces while every row still claimed a single
-model. The dimension guard in `ensure_collection` is necessary and **not sufficient** — two
-models can both produce 384-dimensional vectors and mean different things by them.
-
-Fixed with a comparison against what the knowledge base was actually built with, refusing with
-both model names and the embedded-chunk count. A knowledge base with no vectors yet is not a
-conflict, and that case is tested so the guard cannot be "fixed" into refusing first
-ingestions. **3 tests.**
-
-### 4.2 The native bridge read the wrong provider configuration (native UI)
-
-`ServiceBridge._owner()` resolved the account id and stopped. `build_llm_provider()` takes no
-owner and reads the request context — which the HTTP application sets in its auth dependency —
-so every provider built inside the bridge resolved the **installation-level** configuration
-while `loadAiConfig` returned the account's. The settings page showed a key and a model; the
-calls used whatever the machine had.
-
-This is precisely the failure the acceptance round warned about, and it was in the newest code.
-`_owner()` now binds the call. **Verified by a real call through the bridge.**
-
-### 4.3 The guard's streaming refusal never ran (backend)
-
-Written as a plain `async def`, `BlockedProvider.stream_chat` returned a coroutine; `async for`
-rejected it with "requires an object with `__aiter__` method" *before* the refusal executed.
-The call still did not reach the vendor, but the operator would see a TypeError three frames
-from the cause. It is an async generator now. **1 test.**
-
-### 4.4 Three ways a streaming parser goes wrong (backend)
-
-`stream_options.include_usage` (without it, zero tokens recorded for a paid call); the usage
-frame's **empty `choices` array** (crashes a parser that indexes `choices[0]`, on the last
-frame, after the user has watched the answer appear); and HTTP errors arriving before any
-event. **10 tests.**
-
----
-
-## 5. Backend and data reliability
-
-The transaction semantics from the previous round are **unchanged** — `persist_terminal_record`
-still commits the failure record, and the executor still commits at run start and per step.
-No evidence was found to justify changing them, and the design trade-off is documented in
-`tracing.py` rather than revisited.
-
-| Check | Result |
-|---|---|
-| Real data directory before/after | **unchanged** — 1,530 files, same mtime |
-| 2.2.0 artifact | untouched; two copies with identical SHA-256 |
-| Destructive migration | none attempted |
-| Tests deleted or weakened | none |
-| New regression tests | 14 (3 embedding guard, 10 streaming, plus the audit's own checks) |
-
-**Recovery re-execution risk, stated plainly:** if a run is interrupted after a side-effecting
-tool succeeded but before its step committed, the tool's effect may or may not be durable, and
-nothing in the system records which. Re-running the goal would repeat the tool. There is no
-idempotency key on tool calls. That is a known gap, not a fixed one, and it is the honest
-answer to "can recovery re-execute a side-effecting tool?" — **yes, it can**.
-
----
-
-## 6. Cost and credentials
+### B.2 The artifact
 
 | | |
 |---|---|
-| Real requests this round | **11** (A2 3, A3 2, A4 3, B5b 1, embeddings probe 1, balance queries 2) |
-| Tokens | ≈ 5,800 |
-| Cost | **¥0.01** (balance 6.71 → 6.71) |
-| Pause threshold (¥3) | not reached |
-| Concurrency | none; every request serial |
-| Retries | disabled for the tests (`AI_MAX_RETRIES=1`) |
-| Key in reports/source/logs/Git | **none** — only `sk-****` masks |
+| Directory | `desktop-native/dist/AI-Workbench-Native/` |
+| Executable | `AI-Workbench-Native.exe` — **20,899,343 bytes** |
+| Executable SHA-256 | `3b652ded9c072cbc108b13c8e5f1895730eaf137492b41621511285d80289aed` |
+| Total size | **255 MB**, 2,267 files |
+| Bundled Python | 3.13.14 (its own; no host Python required) |
+| Bundled OpenSSL | 3.5.7 (pinned to the interpreter's own — see B.5) |
+| Qt | PySide6 6.12.0, 4 platform plugins including `qwindows` and `qoffscreen` |
 
-The key is **not revoked** and the user asked that it be kept. It remains in the git-ignored
-per-account file only.
+**There is no installer yet.** The package is a portable directory that runs from where it
+is unpacked. An NSIS installer wrapping it is the next step and is *not* claimed as done.
+
+### B.3 Acceptance — 10 checks, 10 pass
+
+```
+  [PASS]  1. 可执行文件已生成 — AI-Workbench-Native.exe, 19.9 MiB
+  [PASS]  2. Qt 运行时与平台插件已打包 — Qt libraries, Shiboken binding, 4 platform plugins
+  [PASS]  3. QML 界面与 Qt QML 模块已打包 — 13 interface files and the Qt QML modules
+  [PASS]  4. Alembic 迁移已打包 — 8 migrations
+  [PASS]  5. VERSION 与仓库一致 — 2.2.0
+  [PASS]  6. 包内没有密钥与用户数据 — 717 text files and the executable scanned, nothing found
+  [PASS]  7. 打包后的应用能启动并自检通过 — 7 UI checks passed in 2.2s (exit 0)
+  [PASS]  8. 首次运行会创建用户数据目录 — created AI Workbench Data and used it
+  [PASS]  9. 运行不会写入安装目录 — 2267 files unchanged
+  [PASS] 10. 不依赖宿主机 Python — ran as AI-Workbench-Native.exe with a sanitized environment
+```
+
+Checks 7–10 **run the built executable**. Checks 8 and 9 are the two that matter most:
+
+* **8** runs with `AI_WORKBENCH_DATA_DIR` pointing at a directory that does not exist, and
+  requires the application to create it and then report having used it. An application that
+  only works once someone has already made its data directory works on the developer's
+  machine and nowhere else.
+* **9** snapshots all 2,267 files (path, size, mtime) before and after a real run and requires
+  that nothing was added, removed or modified. This is the check that catches the class of
+  defect this project has already shipped once — a key file and a data directory written next
+  to the program, which made the uninstaller unable to remove the install directory.
+
+### B.4 Running environment, and what is blocked
+
+The packaged application reaches the real services on this machine:
+
+```
+  database: PASS     — schema=verified, accounts=45
+  redis:    PASS     — redis://127.0.0.1:6379/0
+  qdrant:   BLOCKED  — HTTP 401: Qdrant is running but refused the request (no API key configured)
+```
+
+Qdrant is `BLOCKED`, not failed, and the reason is correct behaviour rather than a defect: the
+development `.env` holds `QDRANT_API_KEY` and the packaged build deliberately does not read it.
+A packaged application that reads the development `.env` would be shipping development
+credentials, which is the opposite of what check 6 is for. Configuring the key through the
+application's own settings is the intended path and is not wired to the vector store yet.
+
+**Not verified, and not claimed:**
+
+| Item | State | Why |
+|---|---|---|
+| Code signing | **BLOCKED** | no certificate on this machine |
+| Install / uninstall on a clean machine | **BLOCKED** | no second clean Windows environment available |
+| Multi-monitor and DPI behaviour | **BLOCKED** | single display; `Screen.devicePixelRatio` is read and used, but not exercised |
+| Qdrant from the packaged build | **BLOCKED** | see above |
+| TLS to a *remote* PostgreSQL | **not verified** | the only database here is loopback (see B.5) |
+
+### B.5 Two packaging defects found and fixed
+
+**`shiboken6.Shiboken` was excluded by this build's own spec.** The exclusion read like an
+internal detail of a package already being bundled. It is the C++ binding layer every PySide6
+class is built on, and the first package died at `import PySide6` with "No module named
+'shiboken6.Shiboken'". Because the executable is a GUI-subsystem binary, the failure appeared
+as a **modal fatal-error dialog that waits** — so a broken build hung instead of failing.
+`verify_native_package.py` now checks for `shiboken6/Shiboken.pyd` by name, and the spec
+refuses to build if it is missing.
+
+**The bundled OpenSSL did not match the bundled `_ssl.pyd`.** The second package started,
+built its window, and then could not reach PostgreSQL:
+
+```
+SSLError: [SSL] system lib (_ssl.c:4105)
+```
+
+`_ssl.pyd` in the bundle was byte-identical to the interpreter's, but `libssl-3-x64.dll` and
+`libcrypto-3-x64.dll` were **not** — PyInstaller had collected OpenSSL from elsewhere on the
+machine. A mismatched OpenSSL pair against a fixed `_ssl.pyd` produces exactly this: contexts
+are created (the basic symbols resolve) and handshakes fail at the OpenSSL level. The
+diagnostic that settled it asks the question directly and is now part of the report:
+
+```
+  "tls_probe": { "plain": "ok", "tls": "SSLError: [SSL] system lib (_ssl.c:4105)" }
+```
+
+The spec now takes both libraries from `sys.base_prefix/DLLs`, removes any other copy, and
+refuses to build if the pinned files are not the ones in the product. After the fix the
+packaged application reports `database: PASS — schema=verified, accounts=45`.
 
 ---
 
-## 7. Next stage
+## C. Agent 执行安全
 
-Ordered by value, with the dependency that actually gates each one.
+### C.1 The defect
 
-| # | Task | Depends on | Size |
-|---|---|---|---|
-| 1 | **Package the native UI.** Without it there is no installable artifact, and every other page is unreachable by a user. | — | 5–8 days |
-| 2 | **Keyboard navigation and focus.** Every core action reachable by keyboard; focus visible; dialogs and lists trap focus. Required by the product statement, currently unverified. | — | 3–4 days |
-| 3 | **Projects and notes.** The two largest gaps in the daily loop; both are list-and-form pages over services that already exist. | — | 4–5 days |
-| 4 | **Run history and detail.** The agent can be started but not reviewed afterwards. | — | 4–5 days |
-| 5 | **Planner.** Goal → plan → apply, over an existing service. | Projects (task tree) | 4 days |
-| 6 | **Conversation.** The largest single page in the old interface and the only one with token streaming into a scrolling transcript. Needs its own technical validation before it can be estimated honestly. | Packaging, streaming | 8–10 days + validation |
-| 7 | **Graph.** Needs a data-model and interaction design first; no d3 equivalent in Qt. | — | 5–6 days + validation |
-| 8 | **Agent permissions UI.** Policy editing over an existing store. | — | 3 days |
-| 9 | **DPI and multi-display acceptance.** | Real hardware | `BLOCKED` here |
-| 10 | **Embedding provider.** Either a local model or a provider with an embeddings API. | A decision, not code | `BLOCKED` |
+`tool_calls` rows were written **after** the tool returned. The window between a tool starting
+and its outcome being recorded therefore left no row at all. A process killed inside that
+window produced an agent run with no evidence it had ever called anything — and re-running the
+goal repeated the tool. For a `file_append` or a `git_commit` that is a duplicated side effect
+that nothing in the system could detect, because nothing had been written down.
 
-**Recommended next:** packaging first, then keyboard navigation. A migrated interface that
-cannot be installed or driven without a mouse is not closer to the product than the current
-one, and both are prerequisites for calling any page `VERIFIED`.
+### C.2 What was implemented
+
+**A durable invocation record, written in two phases.**
+
+| Status | Meaning |
+|---|---|
+| `PENDING` | the intent is recorded; the tool has not started |
+| `RUNNING` | the tool was handed to the executor; its side effect may or may not have happened |
+| `SUCCEEDED` | the result was verified and persisted |
+| `FAILED` | the tool ran and failed |
+| `SKIPPED` | the loop guard refused a duplicate; nothing ran |
+| `UNKNOWN` | the process died mid-invocation. **Never auto-retried** |
+
+`begin_tool_call()` writes the row as `RUNNING` with a stable `invocation_id`, `started_at` and
+`mutates_state`, and the caller **commits before dispatching**. `finish_tool_call()` sets the
+outcome and `finished_at`. A row with `started_at` and no `finished_at` is the definition of
+"we do not know".
+
+The commit is not interchangeable with a flush: a flush leaves the row inside the caller's
+transaction, invisible to any other session and discarded outright if the process dies — which
+is precisely the scenario the row exists for. The cost is one extra commit per tool call.
+
+`invocation_id` doubles as an idempotency key: submitting the same one twice returns the
+existing row rather than creating a second.
+
+Both agent engines are covered — `AgentExecutor` (which had the defect) and `AutonomousAgent`
+(which recorded nothing at all; it now writes the same rows).
+
+**Recovery.** `resolve_orphan_tool_calls()` turns every `RUNNING` row into `UNKNOWN` at
+startup, before the interrupted runs are closed. `finished_at` is deliberately left `NULL`:
+stamping it would claim the invocation ended, and the whole point of the row is that its end
+was never observed. `unresolved_tool_calls()` returns the mutating ones for a run.
+
+**Tool classification.** `ToolSpec.replay_class()` returns `read_only`, `idempotent` or
+`unsafe`. **The default is `unsafe`**, and that direction is deliberate: marking a tool
+replayable is a claim about its implementation, and getting the claim wrong is the failure
+this mechanism exists to prevent. Three tools are marked `idempotent` because their code was
+read — `file_write` (overwrites; the file is a function of path + content), `directory_create`
+(`mkdir(exist_ok=True)`), `git_add` (the index records paths) — and 22 writes are `unsafe`,
+including `file_append`, `git_commit`, `file_delete` and every terminal tool.
+
+### C.3 Fault injection — eight windows, real processes
+
+`tests/integration/_invocation_child.py` is spawned, allowed to reach a named point, and then
+**killed from outside** with `Popen.kill()`. It does not kill itself: an in-process exception
+runs the `finally` blocks and disposes the session politely, which is exactly the cleanup a
+crash does not get. The child writes a sentinel file and fsyncs it before blocking, so the
+parent can never kill a process that announced a window it had not reached.
+
+`file_append` is the tool under test: it mutates state and is **not** idempotent, so a
+duplicate shows up in the file itself and not only in the database.
+
+| # | Window | Result |
+|---|---|---|
+| 1 | killed before the intent was committed | no row; the file does not exist. **This window is not covered by the fix** — a transaction that never committed leaves no trace, and the fix narrows it to the microseconds between flush and commit |
+| 2 | killed after the intent committed, before the tool started | one `RUNNING` row, `started_at` set, `finished_at` NULL, file untouched |
+| 3 | killed after the side effect, before the outcome | file contains `w3`; one `RUNNING` row — the case the mechanism exists for |
+| 4 | killed after the outcome committed | one `SUCCEEDED` row, `finished_at` set |
+| 5 | killed after the tool failed, before the failure was written | one `RUNNING` row for `file_delete`; nothing changed |
+| 6 | recovery after restart | exactly the three open windows become `UNKNOWN`; the decided one is untouched; `finished_at` stays NULL on the `UNKNOWN` rows |
+| 7 | the same invocation id submitted twice | one row, resolved to the same id, not two |
+| 8 | two legitimate calls of the same tool | two rows, distinct invocation ids, both terminal |
+
+Two further tests assert the **ordering itself**, which is the part that cannot be checked by
+looking at the code: a fake registry opens its **own session** at the moment the tool is about
+to run and looks for the invocation. If the executor had only flushed, it would find nothing.
+
+### C.4 Boundaries, stated rather than implied
+
+**This is not exactly-once, and is not described as such.** A database commit and an external
+side effect cannot be one atomic transaction, and nothing here pretends otherwise.
+
+* **Window 1 is real and unfixed.** A process killed between `flush()` and `commit()` leaves
+  nothing. What the fix does is make that window as small as a commit, instead of as long as
+  the tool call.
+* **`UNKNOWN` is a report, not a resolution.** For a mutating call killed mid-flight, the
+  system can say "this may have happened" and refuses to replay it automatically. It cannot
+  say whether it happened. Resolving that needs a human, or a reconciliation the tool itself
+  provides — no tool provides one today.
+* **RAG and Agent still recover differently.** The RAG pipeline records its run through
+  `RunRecorder` and does not execute tools, so it has no invocation window at all; the agent
+  paths do. This is a real asymmetry and is recorded here rather than smoothed over.
+* **No tool is auto-replayed.** Recovery marks and reports; it never re-runs. So the
+  duplicate-execution risk is closed by *not replaying*, not by making replay safe.
 
 ---
 
-## 8. Final state
+## D. 原生 UI
 
-* Worktree clean; every change committed.
-* No product feature outside this round's scope was touched.
-* The 2.2.0 archive and the user's data are intact.
-* The native UI is **7 pages, 6 implemented and 2 partial**, verified by 71 automated checks
-  plus one real end-to-end call — and **not** a finished product.
+### D.1 Page inventory, recounted from the code
+
+25 pages under `frontend/src/pages/` — counted this round, not copied from the previous
+report. Status is what the **native** shell can do, verified by reading the bridge's slots
+(24 real slots) and the QML:
+
+| Old page | Native status | Evidence |
+|---|---|---|
+| `DashboardPage` | **IMPLEMENTED** | `DashboardPage.qml`, `loadDashboard` |
+| `KnowledgePage` | **IMPLEMENTED** | `KnowledgePage.qml`, `loadKnowledgeBases` / `createKnowledgeBase` |
+| `KnowledgeDocumentsPage` | **IMPLEMENTED** | `DocumentsPage.qml`, `loadDocuments` / `importDocument` |
+| `DocumentsPage` | **IMPLEMENTED** | same page |
+| `TasksPage` | **IMPLEMENTED** | `TasksPage.qml`, `loadTasks` / `createTask` / `completeTask` |
+| `ProjectsPage` | **IMPLEMENTED** | `ProjectsPage.qml`, `loadProjects` / `createProject` — **new this round** |
+| `NotesPage` | **IMPLEMENTED** | `NotesPage.qml`, `loadNotes` / `createNote` — **new this round** |
+| `SettingsPage` | **IMPLEMENTED** | `SettingsPage.qml`, `loadAiConfig` / `saveAiConfig` / `clearAiConfig` |
+| `AIRunsPage` | **PARTIAL** | `RunsPage.qml`, `startAgentRun` / `cancelAgentRun`; no run detail |
+| `AgentPage` | **PARTIAL** | the runs page covers start and cancel |
+| `MyAIPage` | **PARTIAL** | provider configuration lives in Settings |
+| `ProjectDetailPage` | NOT_STARTED | — |
+| `AIRunDetailPage` | NOT_STARTED | — |
+| `AgentWorkbenchPage` | NOT_STARTED | — |
+| `AgentPermissionsPage` | NOT_STARTED | the bridge exposes no permission slots |
+| `ChatPage` | NOT_STARTED | `streamAnswer` exists for RAG; no chat UI |
+| `ConversationPage` | NOT_STARTED | — |
+| `GraphPage` | NOT_STARTED | — |
+| `PlannerPage` | NOT_STARTED | — |
+| `SearchPage` | NOT_STARTED | — |
+| `WorkbenchPage` | NOT_STARTED | — |
+| `HomePage` | N/A | the dashboard is the entry point |
+| `LoginPage` | N/A | single-user desktop, no login |
+| `OnboardingPage` | N/A | replaced by first-run initialisation (section B) |
+| `NotFoundPage` | N/A | one window, no routes |
+
+**8 IMPLEMENTED · 3 PARTIAL · 10 NOT_STARTED · 4 N/A.**
+
+### D.2 The core loop that works
+
+配置 AI → 创建知识库 → 导入资料 → 检索 → RAG 问答（含引用）→ 创建任务 → 创建项目 → 写笔记 → Agent 运行 → 查看运行记录. The knowledge-base loop was built in round 4 and was **reused, not rewritten**; this round added Projects and Notes.
+
+### D.3 A defect that had been there from the start
+
+**No page could talk to the shell.** The wiring read:
+
+```qml
+Component { id: projectsPage; ProjectsPage { shell: shell } }
+```
+
+In QML an unqualified name inside an object's binding resolves to that object's **own**
+properties before it resolves to an outer id. So the right-hand `shell` was the page's own
+(empty) `shell` property, and every page was constructed with `shell = null`.
+
+The pages still rendered — their layout does not depend on it. What did not work was
+everything that calls back into the shell: `shell.request` threw
+`Cannot call method 'request' of undefined` the moment a button was pressed, so **no page
+could load or write anything**. The symptom was a page that looked finished and did nothing,
+which is why it survived a screenshot check and a bridge-level test — the bridge-level test
+drives the bridge directly and never asks a page to do anything.
+
+Fixed by renaming the window's id to `shellRoot` and binding `shell: shellRoot`, with a
+comment at the site because the trap is invisible.
+
+Two more defects surfaced the same way once the pages could run:
+
+* `property bool busy: bool = false` in `DocumentsPage.qml` — C++ initialiser syntax, which
+  QML reads as a write to a global called `bool`. The property was never initialised.
+* `property var data` in `DashboardPage.qml` — `data` is a built-in `Item` property (the
+  default property that owns the item's children), and redeclaring it shadows the engine's
+  own member.
+
+The packaged application's self-check now fails on any QML warning or error, which is what
+would have caught all three. A QML error does not stop the window from appearing; it makes a
+binding evaluate to `undefined` and leaves a control that looks right and does nothing.
+
+### D.4 Keyboard navigation and accessibility — verified by pressing keys
+
+`desktop-native/verify_native_shell.py` sends real key events with `QTest` and then asks the
+window where focus went. **29/29 pass.** Nothing in it reads the QML source to decide whether
+the keyboard works.
+
+```
+  [PASS] shell 暴露了页面清单 — 7 个页面
+  [PASS] shell 暴露了导航栏条目 — 9 个条目
+  === 1. 快捷键 Ctrl+N ===         7/7   Ctrl+1..7 each open the page the rail's hint names
+  === 2. 导航栏方向键 ===           6/6   Down walks 9 entries in order, Up returns,
+                                         the ends hold (no wrap), Home/End jump
+  === 3. 浏览与激活是两件事 ===      2/2   moving focus does not navigate; Enter opens
+  === 4. Esc 关闭提示 ===           1/1
+  === 5. Tab 焦点顺序 ===           3/3   name → description → create, Shift+Tab returns
+  === 6. 按钮可以用键盘触发 ===      4/4   typing reaches the field; Space fires the button
+                                         and a project row appears in PostgreSQL
+  === 7. 无障碍名称与角色 ===        3/3   9 rail entries + 3 page controls, read at runtime
+  === 8. 焦点可见性 ===             1/1
+  结果：29/29 通过
+```
+
+Two things about how this is done, because they were both wrong first:
+
+* **Focus is read from `QWindow.focusObject()`, not from a walk over `findChildren`.** Repeater
+  delegates are not reachable that way from Python — the rail's nine entries exist, carry their
+  names and take focus, and a tree walk finds none of them. The first version of this verifier
+  reported "focus never left the window" while focus was on `nav-dashboard` the whole time.
+* **The accessible name and role are read while each entry holds focus**, which is both the only
+  way to reach them and the only way to read what a screen reader would be given. `Accessible.name`
+  is a QML attached property with no Python accessor, so the QML binds it to a mirrored property
+  and the test reads that — the same string, not a copy.
+
+Status must not be carried by colour alone: the rail's state is checked to be a non-empty word,
+and the same word is what the accessible name carries.
+
+### D.5 Not done
+
+* **Streaming chat UI.** `streamAnswer` exists and real SSE streaming was verified in round 4,
+  but no page consumes it. `ChatPage` and `ConversationPage` are `NOT_STARTED`.
+* **Graph, Planner, permissions, run detail, search, workbench.** All `NOT_STARTED`; the bridge
+  has no slots for them.
+* **Dialogs and focus restoration.** Pages use toasts and inline state; there is no modal
+  dialog and therefore no focus-restoration behaviour to verify.
+* **Multi-monitor / DPI.** `Screen.devicePixelRatio` drives the scale, but only one display
+  exists here.
+
+---
+
+## E. 模型与费用
+
+**No real model call was made this round. ¥0.00 spent, cumulative ¥0.01 across the programme.**
+
+The round's work did not need one: the agent-safety work is proved by killing real processes
+and reading the database, and the packaging acceptance proves the application starts, reaches
+PostgreSQL and writes nothing into its own directory. Adding a paid call to any of those would
+not have made the evidence stronger.
+
+| Item | State |
+|---|---|
+| Real provider round-4 evidence (streaming, multi-turn, long input, agent tool call, RAG) | **PASS_REAL** — unchanged, cited, not re-run |
+| Stub provider transport tests | **PASS_STUB** — 9/9 |
+| This round's real calls | **NOT_RUN** — deliberately |
+| Embedding | **BLOCKED** — unchanged. DeepSeek `/embeddings` returned 404 and no alternative provider is configured; the offline hash/n-gram embedder is **not** a real semantic embedding and is not reported as one |
+
+The API key was not read, not used, and does not appear in any file, commit, command line or
+report from this round.
+
+---
+
+## F. 测试与风险
+
+### F.1 What was run
+
+| Suite | Result |
+|---|---|
+| Backend, full (`pytest tests`) | **1,278 passed / 10 skipped / 0 failed** in 684 s |
+| New: `test_release_freeze_tool_invocation.py` | 12 passed |
+| New: `test_release_freeze_tool_replay.py` | 37 passed |
+| `verify_release_freeze_mutations.py` | **22/22 defects caught** |
+| `verify_native_shell.py` | 29/29 |
+| `verify_native_package.py` | 10/10 |
+
+The mutation check is the evidence that the new tests are regression tests rather than
+couplings: it reintroduces each defect into the fixed tree and requires the test to fail. The
+new cases cover the commit-before-dispatch ordering, the outcome closing the window, recovery
+scope, the idempotency key, the refusal status, the `unsafe` default, the unknown-tool default,
+and the registry-shape resolver.
+
+### F.2 A note on test stability
+
+An earlier full run of the same suite reported **5 failures**, all in agent execution. Two were
+real and are fixed (section F.3). Three were **CPU-contention flakes**: that run overlapped a
+PyInstaller build that was saturating the machine, and the affected tests spawn subprocesses
+and talk to a local stub HTTP server with timeouts. All three pass when nothing else is running,
+which is how the final 1,278/0 was obtained. They are timing-sensitive by construction and are
+worth noting as a known fragility rather than pretending the first run was noise.
+
+### F.3 A defect this round introduced and then fixed
+
+The executor was changed to call `registry.get_spec(name)`. `get_spec` is a convenience that
+the two production registries happen to provide; `specs()` is the contract every registry
+satisfies — including the small stand-ins the test suite drives the executor with. Four tests
+that had nothing to do with tool classification stopped passing.
+
+Fixed by `app.ai.tools.registry.spec_for()`, which asks `get_spec` when it exists and falls back
+to a scan of `specs()`. The answer still has to be *right*, not merely present: the executor
+uses it to decide whether a call can be repeated after a crash, so a miss means "unknown tool",
+which is treated as unsafe.
+
+### F.4 Data integrity
+
+The development database was at revision `81cce5214260`, two migrations behind head. It was
+**backed up first** (`pg_dump -Fc`,
+`.runtime/backups/aiworkbench-before-tool-call-invocations-20261010-022306.dump`, 1.2 MB), then
+`alembic upgrade head` was run. Both migrations are additive — the first adds `revoked_tokens`,
+the second adds four columns to `tool_calls` — and neither drops or rewrites anything. Before
+and after:
+
+```
+  users 45 · ai_runs 167 · documents 11 · tool_calls 57   (identical before and after)
+  revision 81cce5214260 → 6a1884572148
+  new columns: finished_at, invocation_id, mutates_state, started_at
+```
+
+The test database was migrated the same way. The user's data directory was never touched.
+
+### F.5 Open risks
+
+| Risk | Severity | State |
+|---|---|---|
+| Window 1: killed between flush and commit leaves no record | medium | **Unfixed by design** — narrowed to a commit, documented in C.4 |
+| `UNKNOWN` invocations need a human to resolve | medium | **Unfixed** — the system reports, it does not reconcile |
+| No tool provides a reconciliation check | medium | **Unfixed** — no auto-replay exists, so the risk is contained rather than solved |
+| 10 old pages not migrated | medium | Planned, section D.1 |
+| Streaming chat UI absent | medium | `streamAnswer` exists; no page consumes it |
+| Qdrant unreachable from the packaged build | low | Needs the key configured through the application's own settings |
+| No installer, no code signing | medium | No certificate; no clean machine |
+| Timing-sensitive tests | low | See F.2 |
+
+---
+
+## G. 交付位置
+
+| What | Absolute path | Exists |
+|---|---|---|
+| Native application | `C:\Users\user\Desktop\ai-workbench\desktop-native\dist\AI-Workbench-Native\AI-Workbench-Native.exe` | yes — 20,899,343 bytes, SHA-256 `3b652ded9c072cbc108b13c8e5f1895730eaf137492b41621511285d80289aed` |
+| Package directory | `C:\Users\user\Desktop\ai-workbench\desktop-native\dist\AI-Workbench-Native\` | yes — 255 MB, 2,267 files |
+| Build | `C:\Users\user\Desktop\ai-workbench\desktop-native\build_native.py` | yes |
+| Package acceptance | `C:\Users\user\Desktop\ai-workbench\desktop-native\verify_native_package.py` | yes |
+| Keyboard/accessibility acceptance | `C:\Users\user\Desktop\ai-workbench\desktop-native\verify_native_shell.py` | yes |
+| Agent-safety fault injection | `C:\Users\user\Desktop\ai-workbench\backend\tests\integration\_invocation_child.py` + `test_release_freeze_tool_invocation.py` | yes |
+| Mutation check | `C:\Users\user\Desktop\ai-workbench\scripts\verify_release_freeze_mutations.py` | yes |
+| 2.2.0 archive (unchanged) | `C:\Users\user\Desktop\ai-workbench\archive\releases\AI-Workbench-2.2.0-final.exe` | yes — 97,311,474 bytes, SHA-256 `698db63662cc24e42873884077ada51b7b97c5ccd45ab3616acd15ad2df0d3d7` |
+| Database backup taken before migrating | `C:\Users\user\Desktop\ai-workbench\.runtime\backups\aiworkbench-before-tool-call-invocations-20261010-022306.dump` | yes |
+
+**No installer is delivered**, because none was built. The package above runs from its own
+directory; turning it into an installer is the next step.
+
+---
+
+## Next stage
+
+1. **NSIS installer** wrapping `desktop-native/dist/AI-Workbench-Native/`, with the same
+   install/user-data separation the acceptance already proves, plus an uninstaller that asks
+   about the data rather than deciding.
+2. **Streaming chat page** consuming the `streamAnswer` slot that already exists.
+3. **Run detail and agent permissions pages** — needs bridge slots first.
+4. **Graph, Planner, Search, Workbench** — the remaining `NOT_STARTED` pages.
+5. **A reconciliation hook for `UNKNOWN` invocations**: let a tool answer "did this already
+   happen?" so the one window that currently needs a human can be closed.

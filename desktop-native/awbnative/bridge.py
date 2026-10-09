@@ -661,6 +661,122 @@ class ServiceBridge(QObject):
 
         self._submit(request_id, work)
 
+    # ---------------------------------------------------------------- projects --
+    @Slot(str, str, str)
+    def createProject(self, request_id: str, name: str, description: str) -> None:
+        """Create a project, and return it in the same shape `loadProjects` returns.
+
+        The same shape on purpose: the page appends the returned row to the list it already
+        has, so a created project cannot appear with different fields from a loaded one —
+        which is how a list ends up disagreeing with itself about what a project is.
+        """
+
+        async def work() -> dict[str, Any]:
+            from app.core.errors import ValidationError
+            from app.infrastructure.database import session_scope
+            from app.models.project import Project
+
+            owner = await self._owner()
+            cleaned = (name or "").strip()
+            if not cleaned:
+                raise ValidationError("项目名不能为空")
+            async with session_scope() as session:
+                project = Project(
+                    owner_id=owner, name=cleaned[:160], description=(description or "")[:2000]
+                )
+                session.add(project)
+                await session.flush()
+                return {
+                    "item": {
+                        "id": str(project.id),
+                        "name": project.name,
+                        "status": project.status,
+                        "description": project.description or "",
+                    }
+                }
+
+        self._submit(request_id, work)
+
+    # ------------------------------------------------------------------- notes --
+    @Slot(str)
+    def loadNotes(self, request_id: str) -> None:
+        """The account's notes, newest first.
+
+        Ordered here rather than in QML: the list is paged by the backend eventually, and
+        ordering that lives in the view is ordering that silently changes when the view
+        stops being given the whole list.
+        """
+
+        async def work() -> dict[str, Any]:
+            from app.infrastructure.database import session_scope
+            from app.models.note import Note
+            from sqlalchemy import select
+
+            owner = await self._owner()
+            async with session_scope() as session:
+                rows = list(
+                    (
+                        await session.execute(
+                            select(Note)
+                            .where(Note.owner_id == owner)
+                            .order_by(Note.created_at.desc())
+                            .limit(200)
+                        )
+                    ).scalars()
+                )
+            return {
+                "items": [
+                    {
+                        "id": str(n.id),
+                        "title": n.title or "",
+                        "content": n.content_md or "",
+                        "pinned": bool(n.is_pinned),
+                        "ai_generated": bool(n.is_ai_generated),
+                        "created_at": n.created_at.isoformat() if n.created_at else "",
+                    }
+                    for n in rows
+                ],
+                "total": len(rows),
+            }
+
+        self._submit(request_id, work)
+
+    @Slot(str, str, str)
+    def createNote(self, request_id: str, title: str, content: str) -> None:
+        async def work() -> dict[str, Any]:
+            from app.core.errors import ValidationError
+            from app.infrastructure.database import session_scope
+            from app.models.note import Note
+
+            owner = await self._owner()
+            cleaned = (title or "").strip()
+            body = (content or "").strip()
+            if not cleaned and not body:
+                raise ValidationError("标题和内容不能同时为空")
+            async with session_scope() as session:
+                # `title` is NOT NULL in the schema. Deriving it from the body rather than
+                # defaulting to a placeholder keeps the list readable when the user only
+                # typed content, which is the common case for a quick capture.
+                note = Note(
+                    owner_id=owner,
+                    title=(cleaned or body[:60])[:300],
+                    content_md=body[:20_000],
+                )
+                session.add(note)
+                await session.flush()
+                return {
+                    "item": {
+                        "id": str(note.id),
+                        "title": note.title,
+                        "content": note.content_md,
+                        "pinned": False,
+                        "ai_generated": False,
+                        "created_at": note.created_at.isoformat() if note.created_at else "",
+                    }
+                }
+
+        self._submit(request_id, work)
+
     # ---------------------------------------------------------------- lifecycle --
     @Slot()
     def shutdown(self) -> None:

@@ -21,7 +21,7 @@ Flickable {
     clip: true
 
     property var items: []
-    property bool busy: bool = false
+    property bool busy: false
     property string statusText: ""
     property string errorText: ""
 
