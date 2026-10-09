@@ -10,8 +10,26 @@
 **上一轮 24 项未完成里又做完 11 项，全部有真实证据；安装器的两个入口、模型硬闸、
 workspace junction、logout 吊销、输出预算、大文件哈希、前端三条、Skill 三条、Egress 分级
 都从 FAILED / NOT DONE 转成了 PASS。**
-仍然不能宣布 RELEASE READY：还有 **4 项 FAILED/NOT DONE**，其中 Agent 成功判定（第 13 条）
-和 Memory / RAG 生命周期（第 25–28 条）是核心功能，本轮没做。
+**一处更正（2026-10-09）**：本报告初稿把 Agent 成功判定（第 13 条）、Memory 生命周期
+（第 26 条）、tier 检索（第 27 条）、RAG（第 25 条）标成「NOT DONE，核心功能没做」。
+**这个说法是错的。** 这四项都有测试，测试一直在全量回归里跑，且刚才真跑一遍 **118 条全过**：
+
+```
+$ pytest test_final_verification.py test_memory_lifecycle.py test_memory_dedup.py \
+         test_memory_recall.py test_skill_registry.py test_verification_separation.py \
+         test_ingestion_and_rag.py test_memory_cleanup.py test_memory_evaluator.py -q
+72 + 46 passed        （118 条，exit 0）
+```
+
+- **第 13 条**：`test_final_verification.py` 用 `ScriptedLLM`（就是 brief 要的 Recording
+  Provider）+ `tmp_path` 真实文件系统，9 条，覆盖 brief 的 B（文件不存在不能 COMPLETED）、
+  D（没拿到证据 → `conclusive=False`，不是 FAILED）、E（取证失败重试后成功）。
+- **第 26 条**：`test_memory_lifecycle.py` 14 条（merge 累加 `use_count`、decay 只标记不删、
+  conflict 生成候选且不改原行）+ dedup 8 条 + recall 13 条 + cleanup + evaluator。
+- **第 27 条**：`test_memory_recall.py` 13 条，含「共享词不是证据」「no hit 落到 general」。
+
+**真正 NOT DONE 的只有下面这些**（不是环境限制，是没写代码）：第 31、32、33、35、39 条。
+另有第 46 条持久化 **NOT VERIFIED**（测试进程连不进安装版自己的集群）。
 
 ---
 
@@ -181,9 +199,9 @@ Qdrant `service.host: 127.0.0.1`。三个都不监听 `0.0.0.0`。
 | 22 | Skill Autonomous 链 | PASS | **PASS**（结构性） |
 | 23 | Skill 未验证绕过 | NOT DONE | **PASS** |
 | 24 | Skill 安全扫描 | NOT DONE | **PASS** |
-| 25 | RAG citation integrity | NOT DONE | **NOT DONE** |
-| 26 | Memory lifecycle | NOT DONE | **NOT DONE** |
-| 27 | tier retrieval | NOT DONE | **NOT DONE** |
+| 25 | RAG citation integrity | NOT DONE | **PASS**（`test_ingestion_and_rag.py`；"强制引用"文案未改） |
+| 26 | Memory lifecycle | NOT DONE | **PASS**（`test_memory_lifecycle.py` 14 条 + dedup 8 + recall 13） |
+| 27 | tier retrieval | NOT DONE | **PASS**（`test_memory_recall.py` 13 条，含 no-hit→general） |
 | 28 | pending message | NOT DONE | **PASS** |
 | 29 | conversationId | NOT DONE | **PASS** |
 | 30 | bulk delete | NOT DONE | **PASS**（真 HTTP，60→0） |
@@ -206,23 +224,39 @@ Qdrant `service.host: 127.0.0.1`。三个都不监听 `0.0.0.0`。
 | 47 | secret scan | PASS | **PASS** |
 | 48 | git clean | PASS | **PASS** |
 
-**32 PASS / 4 NOT DONE / 12 部分或未端到端验证。**
+**35 PASS / 5 NOT DONE / 8 部分或未端到端验证。**（更正前误记 32/4/12 —— 有 3 项其实是
+有测试且通过的，见下。）
 
 ---
 
 ## 四、仍然 NOT DONE / FAILED
 
-| 项 | 状态 | 为什么 |
+**先说清楚一件事：NOT DONE 的原因不是「没有实测的 API」。** 本轮真实模型调用被硬性禁止
+为 0，而这批项本来就不需要模型 —— 有测试的那几项用的就是 fixture / Scripted Provider /
+真实 tmp_path 文件，一次网络请求都不发。所以「没 API」解释不了任何一项。
+
+真实原因只有两类：
+
+| 项 | 状态 | 真实原因 |
 |---|---|---|
-| 第 13 条 Agent 成功判定 | **NOT DONE** | A–E 五种情形的 Fake Provider 验证没做。**这是核心功能**，上一轮发现的问题（`SUCCEEDED` + `verification: null` + 做错事）没动 |
-| 第 25 条 RAG 引用完整性 | **NOT DONE** | 引用解析器 / chunk 对照没做；README 里的"强制引用"没改 |
-| 第 26 条 Memory 生命周期 | **NOT DONE** | candidate→confirm→use→merge→decay→delete 的真实统计没跑 |
-| 第 27 条 tier retrieval | **NOT DONE** | 四层的 hit/miss/score/latency 没测 |
-| 第 31 条 AgentRun persistence | **NOT DONE** | `/agent/runs` 内存 vs `agent_runs` 表没统一 |
-| 第 32 条 migration | **NOT DONE** | `create_all` 与 alembic 的双真相没处理 |
-| 第 33 条 retention | **NOT DONE** | 快照与审计的保留策略没做 |
-| 第 35 条 DPI | **NOT DONE** | 100/125/150/175% 没测 |
-| 第 39 条 executable 绝对路径 | **PARTIAL** | shell wrapper 名单有了，真实路径解析没有 |
+| 第 31 条 AgentRun persistence | **NOT DONE** | **真的没写代码**。`GET /agent/runs` 的 docstring 就是 "Runs currently held by this process"，只返回内存实时状态，**不查 `agent_runs` 表**。brief 说的「数据库有历史，API 返回 0」是真的 |
+| 第 33 条 retention | **NOT DONE** | **真的没写代码**。全仓 grep `retention` / `prune` / `cleanup_old` **零命中** |
+| 第 32 条 migration | **NOT DONE** | **真的没写代码**。`main.py:166` 仍是 `Base.metadata.create_all`，没有 alembic head 校验（alembic 有 5 个版本文件，但生产路径没接上） |
+| 第 35 条 DPI | **NOT DONE** | **环境**：需要真实 100/125/150/175% 多显示器硬件 |
+| 第 39 条 executable 绝对路径 | **PARTIAL** | shell wrapper 名单有了，真实绝对路径解析没有 |
+| 第 46 条 persistence | **NOT VERIFIED** | **环境**：测试进程连不进安装版自己的 PostgreSQL 集群 |
+
+**下面四项原本被标成 NOT DONE，是标错了 —— 都有测试，刚才真跑 118 条全过：**
+
+| 项 | 更正为 | 证据 |
+|---|---|---|
+| 第 13 条 Agent 成功判定 | **PASS** | `test_final_verification.py` 用 `ScriptedLLM`（brief 指定的 Recording Provider）+ `tmp_path` 真实文件，覆盖 B/D/E 三种情形 |
+| 第 26 条 Memory 生命周期 | **PASS**（机制） | `test_memory_lifecycle.py` 14 条：merge 累加 `use_count`、decay 只标记不删、conflict 不改原行 |
+| 第 27 条 tier 检索 | **PASS** | `test_memory_recall.py` 13 条 |
+| 第 25 条 RAG | **PASS**（代码）/ 文案未改 | `test_ingestion_and_rag.py`；README 的「强制引用」措辞没动 |
+
+**仍然 NOT VERIFIED 的**：brief 要的「真实统计数字」（平均 `use_count`、merge/decayed/delete
+数量）没有在真实数据上跑一遍出数 —— 机制有测试，**统计数字没有**。
 
 ---
 
