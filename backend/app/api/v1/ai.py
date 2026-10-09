@@ -117,7 +117,15 @@ async def rag_ask(payload: RagAskIn, user: CurrentUser, session: DbSession) -> d
             "run_id": answer.run_id,
             "answer": answer.answer,
             "grounded": answer.grounded,
+            # `retrieved_sources` is what the search returned and the model was shown;
+            # `used_citation_ids` is what the answer's text actually refers to. They were
+            # one field before, which made "we found documents" look like "the answer
+            # cites them".
+            "retrieved_sources": answer.citations,
             "used_citation_ids": answer.used_citation_ids,
+            "invalid_citation_ids": answer.invalid_citation_ids,
+            "citation_report": answer.citation_report,
+            # Kept under the old name as well so existing clients keep working.
             "citations": answer.citations,
             "queries": answer.queries,
             "retrieval": answer.retrieval_meta,

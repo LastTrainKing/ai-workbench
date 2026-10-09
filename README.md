@@ -92,9 +92,14 @@ that would be sent to the model, block by block, with the token cost of each.
 
 **It runs as a desktop application.**
 
-A native window — no browser, no address bar, no console. Closing it stops the backend,
-guaranteed by a Windows job object, so a crash or a force-kill cannot leave PostgreSQL,
-Redis and Qdrant running behind a closed window.
+A Windows window you launch from the Start menu, with no address bar and no console.
+Closing it stops the backend, guaranteed by a Windows job object, so a crash or a
+force-kill cannot leave PostgreSQL, Redis and Qdrant running behind a closed window.
+
+> **Status of the UI.** This build renders its interface with **WebView2** — the window is
+> a native window, but its contents are a web page, not native controls. Moving to a
+> native Qt 6 / QML interface is an open release-blocking work item, tracked as RF-01 in
+> `RELEASE-FREEZE-ISSUES.md`. The earlier wording here ("no browser") overstated it.
 
 **Its workspace is inside the project, not on your desktop.**
 
@@ -164,7 +169,7 @@ AI Workbench attacks that specific problem:
 
 | Symptom | What the product does |
 |---|---|
-| "I have the file but cannot find the answer" | Hybrid retrieval (vector + keyword) with a reranker and **citation-enforced** answers |
+| "I have the file but cannot find the answer" | Hybrid retrieval (vector + keyword) with a reranker, and answers that are labelled as verified **only when every claim-bearing sentence cites a retrieved source** — the citation check is structural, not fact-level entailment (see `docs/rag.md`) |
 | "I read it but did not retain it" | AI extraction of concepts, terms, key points, flashcards and a study plan |
 | "I know what to do but never start" | Goal → phase → task → subtask planning with estimates, dependencies and verifiable completion criteria |
 | "The task and the source are disconnected" | A real `task ↔ document` link, and a knowledge graph over projects, documents, concepts, tasks and AI runs |

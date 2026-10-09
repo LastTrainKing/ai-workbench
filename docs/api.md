@@ -48,7 +48,11 @@ Pagination shape (`data`):
 `User`: `{id, email, username, display_name, avatar_color, is_active, created_at}`
 Login/register return `{access_token, token_type, expires_at, user}`.
 
-Demo account seeded on first boot: **demo / demo1234**
+Demo account: **`demo` / `demo1234`, and only when `APP_ENV=dev`.** It is seeded on first
+boot in a development checkout and refused everywhere else — `auth_service.ensure_demo_user`
+returns `None` unless `APP_ENV=dev`, and `main.py` checks the same condition before calling
+it. A release build seeds nothing, because a known credential on a machine that can read
+your files and run commands is a back door with a sign on it.
 
 ---
 

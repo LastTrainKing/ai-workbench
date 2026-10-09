@@ -33,16 +33,125 @@ logger = get_logger(__name__)
 _CITATION = re.compile(r"\[(\d{1,2})\]")
 _CONTEXT_BUDGET_TOKENS = 6000
 
+#: Sentence/paragraph boundaries used to split an answer into claim-bearing units.
+_CLAIM_BOUNDARY = re.compile(r"[。！？!?\n]+")
+#: A unit shorter than this is a fragment ("见上", "1."), not a claim.
+_MIN_CLAIM_CHARS = 8
+
+
+@dataclass(slots=True)
+class CitationReport:
+    """What the program actually verified about an answer's citations.
+
+    Three different things were being conflated, and they are kept apart here:
+
+    * ``retrieved_sources`` — what the search returned and the model was shown.
+    * ``used_citations`` — the numbers the answer's text actually refers to.
+    * ``grounded`` — what *this program* established, which is structural: every
+      claim-bearing sentence carries a marker that resolves to a real source.
+
+    ``grounded`` is **not** a claim that each sentence is entailed by its source. That
+    would need fact-level verification, which this pipeline does not do, and the reason
+    string says so rather than leaving the reader to infer a stronger guarantee.
+    """
+
+    source_count: int
+    valid_ids: list[int]
+    invalid_ids: list[int]
+    claim_units: int
+    supported_units: int
+    grounded: bool
+    reason: str
+
+    @property
+    def coverage(self) -> float:
+        """Fraction of claim-bearing units that carry a valid citation."""
+        if not self.claim_units:
+            return 0.0
+        return round(self.supported_units / self.claim_units, 4)
+
+    def to_payload(self) -> dict[str, Any]:
+        return {
+            "source_count": self.source_count,
+            "valid_citation_ids": self.valid_ids,
+            "invalid_citation_ids": self.invalid_ids,
+            "claim_units": self.claim_units,
+            "supported_units": self.supported_units,
+            "coverage": self.coverage,
+            "grounded": self.grounded,
+            "reason": self.reason,
+        }
+
+
+def analyse_citations(answer: str, source_count: int) -> CitationReport:
+    """Decide whether every claim in ``answer`` is backed by a retrieved source.
+
+    The previous rule was ``grounded = bool(valid_ids)``: **one** valid number anywhere
+    made the whole answer grounded, including the paragraphs around it that cited
+    nothing. The product's own README then called the result "citation-enforced", which
+    was never true of the code.
+
+    The check here is structural, not semantic. A sentence is *supported* when it carries
+    at least one marker resolving to a real source. Whether that source entails the
+    sentence is a different question and this function does not answer it.
+    """
+    text = answer or ""
+    markers = [int(m) for m in _CITATION.findall(text)]
+    valid = sorted({m for m in markers if 1 <= m <= source_count})
+    invalid = sorted({m for m in markers if m < 1 or m > source_count})
+
+    units = [u.strip() for u in _CLAIM_BOUNDARY.split(text)]
+    units = [u for u in units if len(u) >= _MIN_CLAIM_CHARS]
+
+    def is_supported(unit: str) -> bool:
+        return any(1 <= int(m) <= source_count for m in _CITATION.findall(unit))
+
+    supported_units = sum(1 for u in units if is_supported(u))
+
+    if source_count == 0:
+        reason = "没有检索到任何资料，无从验证"
+    elif not markers:
+        reason = "回答正文没有任何引用编号"
+    elif invalid and not valid:
+        reason = f"引用编号全部越界（{invalid}），可用范围是 1..{source_count}"
+    elif not units:
+        reason = "回答没有可判定的结论句"
+    elif supported_units < len(units):
+        reason = f"只有 {supported_units}/{len(units)} 条结论带有效引用"
+    else:
+        reason = ""
+
+    grounded = bool(
+        source_count > 0
+        and units
+        and not invalid
+        and valid
+        and supported_units == len(units)
+    )
+    return CitationReport(
+        source_count=source_count,
+        valid_ids=valid,
+        invalid_ids=invalid,
+        claim_units=len(units),
+        supported_units=supported_units,
+        grounded=grounded,
+        reason=reason,
+    )
+
 
 @dataclass(slots=True)
 class RAGAnswer:
     answer: str
     citations: list[dict[str, Any]] = field(default_factory=list)
     used_citation_ids: list[int] = field(default_factory=list)
+    invalid_citation_ids: list[int] = field(default_factory=list)
     retrieved: list[RetrievedChunk] = field(default_factory=list)
     queries: list[str] = field(default_factory=list)
     retrieval_meta: dict[str, Any] = field(default_factory=dict)
+    #: True only when `analyse_citations` found every claim-bearing unit cited.
     grounded: bool = False
+    #: The detail behind `grounded`, including why it is false.
+    citation_report: dict[str, Any] = field(default_factory=dict)
     provider: str = ""
     model: str = ""
     run_id: str = ""
@@ -239,16 +348,50 @@ class RAGPipeline:
             recorder.record_usage(chat.usage)
 
             citations = [chunk.to_citation(i) for i, chunk in enumerate(used, start=1)]
-            used_ids = sorted(
-                {int(m) for m in _CITATION.findall(chat.content) if 1 <= int(m) <= len(used)}
-            )
-            grounded = bool(used_ids)
+            report = analyse_citations(chat.content, len(used))
+
+            # §9.2: a missing or broken citation is retried **once**, with the
+            # requirement restated, rather than papered over by appending a source list.
+            # One retry, not a loop: a model that cannot cite on the second attempt will
+            # not cite on the fifth, and each attempt costs the user money.
+            #
+            # Not attempted for the offline engine. It is a deterministic extractor that
+            # strips the source labels rather than citing them, so asking again produces
+            # the same answer at the cost of a second pass — a retry that cannot change
+            # its own outcome is just latency.
+            if not report.grounded and self.llm_info.kind != "offline":
+                retry = await self.llm.chat(
+                    [
+                        ChatMessage(role="system", content=rendered),
+                        ChatMessage(role="user", content=question),
+                        ChatMessage(role="assistant", content=chat.content),
+                        ChatMessage(
+                            role="user",
+                            content=(
+                                "上面的回答没有被接受：每一条结论都必须带上资料编号。"
+                                f"请重写，编号只能使用 1 到 {len(used)} 之间的数字，"
+                                "不要引用范围外的编号，也不要编造资料里没有的内容。"
+                            ),
+                        ),
+                    ],
+                    temperature=settings.ai_temperature,
+                    max_tokens=settings.ai_max_tokens,
+                )
+                recorder.record_usage(retry.usage)
+                retry_report = analyse_citations(retry.content, len(used))
+                if retry_report.grounded:
+                    chat = retry
+                    report = retry_report
+
+            grounded = report.grounded
             if not grounded:
-                # The model produced prose without markers: append the source list
-                # so the answer is still traceable instead of silently ungrounded.
+                # Stated, not hidden. The answer is still returned — it may well be
+                # right — but it is labelled as unverified, and the reason is given.
                 chat.content = (
                     chat.content.rstrip()
-                    + "\n\n> 说明：模型未在正文中标注引用编号，以下为本次检索使用的资料。"
+                    + "\n\n> ⚠️ 未验证：本次回答没有被程序证实为逐条有据。"
+                    + (f"原因：{report.reason}。" if report.reason else "")
+                    + "\n> 下面列出本次检索到的资料，请自行核对。"
                 )
 
             await recorder.add_sources(
@@ -266,7 +409,8 @@ class RAGPipeline:
                 result_payload={
                     "grounded": grounded,
                     "citations": citations,
-                    "used_citation_ids": used_ids,
+                    "used_citation_ids": report.valid_ids,
+                    "citation_report": report.to_payload(),
                 },
                 chat_result=chat,
             )
@@ -274,11 +418,13 @@ class RAGPipeline:
             return RAGAnswer(
                 answer=chat.content,
                 citations=citations,
-                used_citation_ids=used_ids,
+                used_citation_ids=report.valid_ids,
+                invalid_citation_ids=report.invalid_ids,
                 retrieved=used,
                 queries=queries,
                 retrieval_meta=retrieval_meta,
                 grounded=grounded,
+                citation_report=report.to_payload(),
                 provider=chat.provider,
                 model=chat.model,
                 run_id=recorder.run_id,

@@ -147,9 +147,10 @@ cd backend
 ..\.venv\Scripts\python.exe -m app.cli worker --concurrency 2   # separate worker
 ```
 
-On first boot the API creates any missing tables
-(`Base.metadata.create_all`), seeds the ten prompt templates and creates the
-demo account **demo / demo1234** if no user exists. All of this is idempotent.
+On first boot the API brings the schema to head by running the Alembic migrations
+(not `Base.metadata.create_all` — see `app/core/schema_guard.py`), seeds the ten prompt
+templates, and creates the demo account **demo / demo1234** — **only when
+`APP_ENV=dev`**. A release install seeds no account at all. All of this is idempotent.
 
 The ten templates are `rag_answer`, `document_summary`, `knowledge_extraction`,
 `task_planner`, `study_plan`, `interview_generator`, `note_generation`,

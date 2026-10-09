@@ -88,16 +88,38 @@ The prompt's hard rules (from `builtin.py`): use only the supplied fragments; pu
 a `[n]` marker after each conclusion; if the material is insufficient, say so and
 name what is missing; answer in Chinese.
 
-### 9. Citation extraction
+### 9. Citation extraction and grounding
 
-`_CITATION = re.compile(r"\[(\d{1,2})\]")` finds markers in the answer. Only
-markers in the valid range `1..len(used)` count. `grounded` is true when at least
-one valid marker was used. If the model produced prose with no markers, the
-answer is **not** silently treated as grounded: a note is appended listing the
-sources, and `grounded` is reported as `false`.
+`_CITATION = re.compile(r"\[(\d{1,2})\]")` finds markers in the answer.
+`analyse_citations(answer, len(used))` splits the answer at sentence/paragraph
+boundaries into claim-bearing units (anything shorter than 8 characters is a fragment,
+not a claim) and returns a `CitationReport`:
 
-Every retrieved chunk that made it into the context is returned as a citation
-object `{index, document_id, document_title, chunk_id, chunk_index, heading,
+| Field | Meaning |
+|---|---|
+| `valid_citation_ids` | markers that resolve to a real retrieved source |
+| `invalid_citation_ids` | markers outside `1..len(used)` |
+| `claim_units` / `supported_units` | units, and units carrying at least one valid marker |
+| `coverage` | `supported_units / claim_units` |
+| `grounded` | true only when every unit is supported, there is at least one valid marker, and no marker dangles |
+| `reason` | why `grounded` is false, in words |
+
+**What `grounded` does and does not mean.** It is a *structural* check: the answer
+attributes every claim to a source it was given. It is **not** fact-level entailment —
+this pipeline does not verify that source 3 actually supports sentence 3, and nothing here
+should be read as claiming that.
+
+If the answer is not grounded, the pipeline retries **once** with the citation
+requirement restated (skipped for the deterministic offline engine, which cannot change
+its own output). If the retry is still ungrounded, the answer is returned with an explicit
+`⚠️ 未验证` note naming the reason, and `grounded=false` — it is never marked verified
+just because a source list was appended.
+
+Three things that used to be one field are now separate in the API response:
+`retrieved_sources` (what the search returned and the model was shown),
+`used_citation_ids` (what the text actually refers to), and `grounded` (what the program
+established). Every retrieved chunk that made it into the context is also returned as a
+citation object `{index, document_id, document_title, chunk_id, chunk_index, heading,
 score, snippet}` and persisted to `ai_run_sources`.
 
 ### 10. Trace persistence
