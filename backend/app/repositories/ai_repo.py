@@ -8,10 +8,28 @@ from typing import Any
 
 from sqlalchemy import Select, func, select, update
 
-from app.domain.enums import JobStatus, RunStatus
+from app.core.logging import get_logger
+from app.domain.enums import DocumentStatus, JobStatus, RunStatus
 from app.models.ai import AgentRun, AIRun, AIRunSource, Prompt, PromptVersion, ToolCall
 from app.models.job import ActivityEvent, Job
+from app.models.knowledge import Document
 from app.repositories.base import BaseRepository, apply_search
+
+logger = get_logger(__name__)
+
+
+def _document_ids(jobs: list[Job]) -> list[uuid.UUID]:
+    """The document ids an ``INGEST_DOCUMENT`` job payload names, in order."""
+    found: list[uuid.UUID] = []
+    for job in jobs:
+        raw = (job.payload or {}).get("document_id")
+        if not raw:
+            continue
+        try:
+            found.append(uuid.UUID(str(raw)))
+        except (ValueError, TypeError):
+            continue
+    return found
 
 
 class AIRunRepository(BaseRepository[AIRun]):
@@ -266,18 +284,75 @@ class JobRepository(BaseRepository[Job]):
         return (await self.session.execute(stmt)).scalar_one_or_none()
 
     async def requeue_stale(self, older_than_seconds: int) -> int:
-        """Recover jobs orphaned by a crashed worker."""
-        cutoff = datetime.now(UTC) - timedelta(seconds=older_than_seconds)
-        result = await self.session.execute(
-            update(Job)
-            .where(Job.status == JobStatus.RUNNING.value, Job.started_at < cutoff)
-            .values(
-                status=JobStatus.QUEUED.value,
-                scheduled_at=datetime.now(UTC),
-                locked_by="",
-            )
+        """Recover jobs orphaned by a crashed worker — within their attempt budget.
+
+        This used to move **every** stale ``RUNNING`` job back to ``QUEUED`` without
+        looking at ``attempts``. So a job that crashes the worker every time it runs was
+        retried forever: ``claim_next`` increments ``attempts``, and this method ignored
+        the ceiling it was incrementing towards, which meant ``max_attempts`` bounded
+        nothing across restarts. On a desktop product that restarts often, "bounded
+        attempts" has to mean bounded *across* restarts, or it means nothing.
+
+        Now a stale job whose attempts are spent becomes terminal ``FAILED`` with the
+        reason and an end time and is never requeued; one that still has attempts left
+        goes back to the queue **with a backoff**, so a crash loop is slowed rather than
+        spun. Returns the number requeued.
+        """
+        now = datetime.now(UTC)
+        cutoff = now - timedelta(seconds=older_than_seconds)
+
+        stale = list(
+            (
+                await self.session.execute(
+                    select(Job).where(
+                        Job.status == JobStatus.RUNNING.value,
+                        Job.started_at < cutoff,
+                    )
+                )
+            ).scalars()
         )
-        return int(result.rowcount or 0)
+        if not stale:
+            return 0
+
+        requeued = 0
+        exhausted: list[Job] = []
+        for job in stale:
+            if job.attempts >= job.max_attempts:
+                job.status = JobStatus.FAILED.value
+                job.finished_at = now
+                job.locked_by = ""
+                job.error_message = (
+                    f"任务在 {job.attempts} 次尝试后仍未完成（上限 {job.max_attempts}）；"
+                    "运行进程可能反复中断，已停止重试。"
+                )
+                exhausted.append(job)
+                continue
+            # Same backoff shape as the in-run retry, so the two paths cannot disagree
+            # about how long a retry waits.
+            delay = min(300, 5 * (2 ** max(0, job.attempts - 1)))
+            job.status = JobStatus.QUEUED.value
+            job.scheduled_at = now + timedelta(seconds=delay)
+            job.locked_by = ""
+            requeued += 1
+
+        # A terminal job must not leave its document saying PROCESSING. Otherwise the
+        # queue is empty, the job is FAILED, and the document looks busy forever — the
+        # exact split-brain the two status columns have to avoid.
+        for document_id in _document_ids(exhausted):
+            document = await self.session.get(Document, document_id)
+            if document is not None and document.status != DocumentStatus.COMPLETED.value:
+                document.status = DocumentStatus.FAILED.value
+
+        await self.session.flush()
+        if exhausted:
+            logger.error(
+                "stale_jobs_exhausted",
+                extra={
+                    "count": len(exhausted),
+                    "job_ids": [str(j.id) for j in exhausted[:10]],
+                },
+            )
+        return requeued
 
     async def stats(self, owner_id: uuid.UUID | None = None) -> dict[str, int]:
         stmt = select(Job.status, func.count(Job.id))

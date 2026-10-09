@@ -28,6 +28,9 @@ export type RunState =
   | 'FAILED'
   | 'LIMIT_REACHED'
   | 'COMPLETED'
+  // The process driving the run died; the outcome is unknown. Not FAILED (nothing
+  // decided it had failed) and not CANCELLED (nobody cancelled it).
+  | 'INTERRUPTED'
 
 export type StepStatus = 'PENDING' | 'RUNNING' | 'DONE' | 'FAILED' | 'SKIPPED'
 
@@ -313,7 +316,13 @@ export const agentApi = {
 /* ---------------------------------------------------------------- helpers -- */
 
 /** States where the run is over. Kept here so the UI and the backend agree. */
-export const TERMINAL_STATES: RunState[] = ['COMPLETED', 'FAILED', 'CANCELLED', 'LIMIT_REACHED']
+export const TERMINAL_STATES: RunState[] = [
+  'COMPLETED',
+  'FAILED',
+  'CANCELLED',
+  'LIMIT_REACHED',
+  'INTERRUPTED',
+]
 
 export function isTerminal(state: RunState): boolean {
   return TERMINAL_STATES.includes(state)
@@ -334,6 +343,7 @@ export function describeState(state: RunState): { label: string; tone: string } 
     FAILED: { label: '失败', tone: 'danger' },
     LIMIT_REACHED: { label: '达到上限', tone: 'warn' },
     COMPLETED: { label: '已完成', tone: 'success' },
+    INTERRUPTED: { label: '被中断', tone: 'warn' },
   }
   return table[state] ?? { label: state, tone: 'muted' }
 }

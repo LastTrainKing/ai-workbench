@@ -178,8 +178,11 @@ async def _reconcile_interrupted_agent_runs() -> None:
 
     A row that says `RUNNING` when no process is driving it is not running. The registry
     is empty at startup by definition, so every `RUNNING` agent run at this moment is
-    interrupted. Marked `FAILED` rather than `CANCELLED`: nobody cancelled it, and saying
-    otherwise would misattribute the outcome.
+    interrupted. Marked `INTERRUPTED`: nobody cancelled it (so not `CANCELLED`) and
+    nothing decided it had failed (so not `FAILED`) — the outcome is genuinely unknown,
+    and the run's own record is the only thing that can say what it had already produced.
+    Flattening this to `FAILED` threw that distinction away, which is exactly what made
+    "died mid-run" and "failed" the same row.
     """
     from sqlalchemy import select
 
@@ -201,7 +204,7 @@ async def _reconcile_interrupted_agent_runs() -> None:
                 ).scalars()
             )
             for run in rows:
-                run.status = RunStatus.FAILED.value
+                run.status = RunStatus.INTERRUPTED.value
                 run.error_message = (
                     run.error_message or "服务在运行过程中重启，这次运行的结果无法确认"
                 )
@@ -215,7 +218,7 @@ async def _reconcile_interrupted_agent_runs() -> None:
                     ).scalars()
                 )
                 for agent_run in agent_rows:
-                    agent_run.status = RunStatus.FAILED.value
+                    agent_run.status = RunStatus.INTERRUPTED.value
                     # The scratchpad is what the history endpoint reads for the run's
                     # *state*, and it still says whatever the run was doing when the
                     # process died — `EXECUTING`, typically. Updating only `status` left the
@@ -223,7 +226,7 @@ async def _reconcile_interrupted_agent_runs() -> None:
                     # the same run. Reassigned rather than mutated in place, because an
                     # in-place edit of a JSONB column is not tracked and would not be saved.
                     scratchpad = agent_run.scratchpad if isinstance(agent_run.scratchpad, dict) else {}
-                    agent_run.scratchpad = {**scratchpad, "state": RunState.FAILED.value}
+                    agent_run.scratchpad = {**scratchpad, "state": RunState.INTERRUPTED.value}
                 await session.commit()
         if rows:
             logger.warning(

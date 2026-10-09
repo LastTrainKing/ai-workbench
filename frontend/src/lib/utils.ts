@@ -137,6 +137,11 @@ const DOCUMENT_STATUS_TONE: Record<string, Tone> = {
 const RUN_STATUS_TONE: Record<string, Tone> = {
   RUNNING: 'info',
   SUCCEEDED: 'success',
+  // Stopped without finishing (step ceiling, loop guard, empty response, unverified
+  // deliverable) and interrupted by a restart. Both are "not a failure, not a success"
+  // and must not be painted green.
+  INCOMPLETE: 'warn',
+  INTERRUPTED: 'warn',
   FAILED: 'danger',
   TIMEOUT: 'warn',
   CANCELLED: 'neutral',

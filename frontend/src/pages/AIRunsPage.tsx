@@ -43,7 +43,15 @@ const RUN_TYPES = [
   'QUERY_REWRITE',
 ]
 
-const RUN_STATUSES = ['RUNNING', 'SUCCEEDED', 'FAILED', 'TIMEOUT', 'CANCELLED']
+const RUN_STATUSES = [
+  'RUNNING',
+  'SUCCEEDED',
+  'INCOMPLETE',
+  'INTERRUPTED',
+  'FAILED',
+  'TIMEOUT',
+  'CANCELLED',
+]
 
 /** Hand-rolled SVG chart: bars = runs/day, line = tokens/day. */
 function DailyChart({ daily }: { daily: DailyMetric[] }) {

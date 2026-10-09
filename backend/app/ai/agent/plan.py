@@ -39,6 +39,12 @@ class RunState(StrEnum):
     FAILED = "FAILED"  # gave up: unrecoverable, or out of retries
     LIMIT_REACHED = "LIMIT_REACHED"  # hit a resource ceiling
     COMPLETED = "COMPLETED"  # success criteria met
+    #: The process driving the run died. Not `FAILED` (nothing decided it had failed) and
+    #: not `CANCELLED` (nobody cancelled it) — the outcome is genuinely unknown, and the
+    #: run's own record is the only thing that can say what had already been produced.
+    #: Added so this vocabulary and `RunStatus` agree: the row said FAILED while the state
+    #: said EXECUTING for the same interrupted run.
+    INTERRUPTED = "INTERRUPTED"
 
     @property
     def terminal(self) -> bool:
@@ -47,6 +53,7 @@ class RunState(StrEnum):
             RunState.FAILED,
             RunState.CANCELLED,
             RunState.LIMIT_REACHED,
+            RunState.INTERRUPTED,
         }
 
     @property

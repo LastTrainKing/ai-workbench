@@ -46,11 +46,34 @@ class ProjectStatus(StrEnum):
 
 
 class RunStatus(StrEnum):
+    """Terminal vocabulary for an AI run.
+
+    `SUCCEEDED` means the run **completed and its result verified**. It is not a synonym
+    for "the model said something". `INCOMPLETE` and `INTERRUPTED` exist because the
+    previous set had no way to say "this stopped without finishing": an agent that hit
+    `max_steps`, detected a loop or got an empty response was written as `SUCCEEDED`
+    because it had produced explanatory text, which made "stopped" indistinguishable from
+    "done" in the API, the database and the UI.
+    """
+
     RUNNING = "RUNNING"
     SUCCEEDED = "SUCCEEDED"
+    #: Ran to a stop that is not a failure and not a completion — step ceiling, loop
+    #: guard, empty model response, or an unverified deliverable.
+    INCOMPLETE = "INCOMPLETE"
+    #: The process died mid-run and the outcome cannot be determined from the record.
+    INTERRUPTED = "INTERRUPTED"
     FAILED = "FAILED"
     TIMEOUT = "TIMEOUT"
     CANCELLED = "CANCELLED"
+
+    @property
+    def is_terminal(self) -> bool:
+        return self is not RunStatus.RUNNING
+
+    @property
+    def is_success(self) -> bool:
+        return self is RunStatus.SUCCEEDED
 
 
 class RunType(StrEnum):

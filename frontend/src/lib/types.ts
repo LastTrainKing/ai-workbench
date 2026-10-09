@@ -526,7 +526,14 @@ export type RunType =
   | 'EMBEDDING'
   | 'QUERY_REWRITE'
 
-export type RunStatus = 'RUNNING' | 'SUCCEEDED' | 'FAILED' | 'TIMEOUT' | 'CANCELLED'
+export type RunStatus =
+  | 'RUNNING'
+  | 'SUCCEEDED'
+  | 'INCOMPLETE'
+  | 'INTERRUPTED'
+  | 'FAILED'
+  | 'TIMEOUT'
+  | 'CANCELLED'
 
 export interface AIRun {
   run_id: string

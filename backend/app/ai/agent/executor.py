@@ -21,9 +21,12 @@ Guarantees
 from __future__ import annotations
 
 import json
+import os
 import re
 import uuid
 from dataclasses import dataclass, field
+from enum import StrEnum
+from pathlib import Path
 from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -48,6 +51,93 @@ logger = get_logger(__name__)
 
 DEFAULT_MAX_STEPS = 8
 _TOOL_BLOCK = re.compile(r"\{.*?\}", re.DOTALL)
+
+
+class AgentStopReason(StrEnum):
+    """Why the loop ended. One value per ending, and every ending has one.
+
+    The executor used to record this as a free string and then ignore it when deciding
+    the run's status: `bool(final_answer)` was the whole test, so an agent that ran out of
+    steps produced an explanation, the explanation was truthy, and the run was written as
+    `SUCCEEDED`. "I stopped" and "I finished" became the same row.
+    """
+
+    FINAL_ANSWER = "final_answer"
+    MAX_STEPS = "max_steps"
+    LOOP_DETECTED = "loop_detected"
+    EMPTY_RESPONSE = "empty_response"
+    TOOL_VERIFICATION_FAILED = "tool_verification_failed"
+    CANCELLED = "cancelled"
+    TIMEOUT = "timeout"
+    INTERRUPTED = "interrupted"
+    ERROR = "error"
+
+
+#: The single place a stop reason becomes a status.
+#:
+#: `FINAL_ANSWER` is the only reason that can reach `SUCCEEDED`, and even it has to pass
+#: deliverable verification first (see `_verify_deliverables`). Everything else stopped
+#: short of finishing, and says so.
+_STOP_REASON_STATUS: dict[AgentStopReason, RunStatus] = {
+    AgentStopReason.FINAL_ANSWER: RunStatus.SUCCEEDED,
+    AgentStopReason.MAX_STEPS: RunStatus.INCOMPLETE,
+    AgentStopReason.LOOP_DETECTED: RunStatus.INCOMPLETE,
+    AgentStopReason.EMPTY_RESPONSE: RunStatus.INCOMPLETE,
+    AgentStopReason.TOOL_VERIFICATION_FAILED: RunStatus.FAILED,
+    AgentStopReason.CANCELLED: RunStatus.CANCELLED,
+    AgentStopReason.TIMEOUT: RunStatus.TIMEOUT,
+    AgentStopReason.INTERRUPTED: RunStatus.INTERRUPTED,
+    AgentStopReason.ERROR: RunStatus.FAILED,
+}
+
+
+def _as_stop_reason(value: str) -> AgentStopReason:
+    """Parse a recorded reason, refusing to guess in the optimistic direction.
+
+    An unrecognised value means the reason was not recorded properly. It maps to `ERROR`
+    — a failure — rather than to `FINAL_ANSWER`, so a bug in the recording code cannot
+    turn an unknown ending into a success.
+    """
+    try:
+        return AgentStopReason(value)
+    except ValueError:
+        logger.warning("unknown_agent_stop_reason", extra={"reason": value})
+        return AgentStopReason.ERROR
+
+
+def _looks_like_a_path(value: str) -> bool:
+    """Whether an artifact id names a file rather than a database row.
+
+    `ctx.artifacts` holds both: business tools register entity UUIDs, computer tools
+    register paths. Only the second kind can be checked against the filesystem, and
+    guessing wrong would report a missing file for every created task.
+    """
+    return bool(value) and (os.sep in value or "/" in value or (len(value) > 2 and value[1] == ":"))
+
+
+def _verify_deliverables(artifacts: dict[str, list[str]] | None) -> tuple[bool, list[str]]:
+    """Check that every file the run claims to have produced is really there.
+
+    "The model said it wrote the file" is not evidence that the file exists. A delivery
+    task's success is the file: present, and not empty. Only path-shaped artifacts are
+    checked — an id for a created task is not a file and must not be reported as a
+    missing one.
+    """
+    problems: list[str] = []
+    for _kind, ids in (artifacts or {}).items():
+        for item in ids or []:
+            text = str(item)
+            if not _looks_like_a_path(text):
+                continue
+            path = Path(text)
+            try:
+                if not path.exists():
+                    problems.append(f"产出物不存在：{text}")
+                elif path.is_file() and path.stat().st_size == 0:
+                    problems.append(f"产出物是空文件：{text}")
+            except OSError as exc:
+                problems.append(f"无法读取产出物 {text}：{exc}")
+    return (not problems, problems)
 
 
 @dataclass(slots=True)
@@ -258,7 +348,7 @@ class AgentExecutor:
         steps: list[AgentStep] = []
         seen_calls: dict[str, int] = {}
         final_answer = ""
-        stopped_reason = "final_answer"
+        stopped_reason = AgentStopReason.FINAL_ANSWER.value
 
         try:
             for step_index in range(1, steps_allowed + 1):
@@ -273,7 +363,7 @@ class AgentExecutor:
                 if not chat.tool_calls:
                     final_answer = chat.content or ""
                     if not final_answer.strip():
-                        stopped_reason = "empty_response"
+                        stopped_reason = AgentStopReason.EMPTY_RESPONSE.value
                         final_answer = (
                             "Agent 未能生成最终答复（模型返回空内容）。"
                             "请查看 AI 执行记录中的工具调用轨迹。"
@@ -284,7 +374,7 @@ class AgentExecutor:
                 signature = f"{request.name}:{json.dumps(request.arguments, sort_keys=True, default=str)}"
                 seen_calls[signature] = seen_calls.get(signature, 0) + 1
                 if seen_calls[signature] > 1:
-                    stopped_reason = "loop_detected"
+                    stopped_reason = AgentStopReason.LOOP_DETECTED.value
                     final_answer = (
                         f"检测到重复调用 `{request.name}`（相同参数），已主动终止以避免死循环。\n\n"
                         f"已完成的步骤：{len(steps)} 步。"
@@ -374,7 +464,7 @@ class AgentExecutor:
                     )
                 )
             else:
-                stopped_reason = "max_steps"
+                stopped_reason = AgentStopReason.MAX_STEPS.value
                 final_answer = (
                     f"已达到最大步数（{steps_allowed} 步），Agent 停止继续调用工具。\n\n"
                     f"本次共执行 {len(steps)} 个工具调用，结果已记录在 AI 执行记录中。"
@@ -388,15 +478,30 @@ class AgentExecutor:
                     len(ctx.sources),
                 )
 
-            agent_run.status = (
-                RunStatus.SUCCEEDED.value if final_answer else RunStatus.FAILED.value
-            )
+            # One mapping decides the status, and only `final_answer` can reach SUCCEEDED.
+            # An explanation the agent wrote on its way out is not a completed task: this
+            # is where "the agent stopped" stopped being written as "the agent finished".
+            reason = _as_stop_reason(stopped_reason)
+            status = _STOP_REASON_STATUS[reason]
+
+            verified = True
+            problems: list[str] = []
+            if status is RunStatus.SUCCEEDED:
+                # For a delivery task the file is the evidence, not the sentence about
+                # it. A run whose deliverable is missing or empty has not succeeded,
+                # whatever it says.
+                verified, problems = _verify_deliverables(ctx.artifacts)
+                if not verified:
+                    status = RunStatus.INCOMPLETE
+                    reason = AgentStopReason.TOOL_VERIFICATION_FAILED
+
+            agent_run.status = status.value
             agent_run.final_answer = final_answer[:20_000]
             agent_run.created_entity_ids = ctx.artifacts
             await session.flush()
 
             await recorder.finish(
-                status=RunStatus.SUCCEEDED,
+                status=status,
                 response_text=final_answer,
                 result_payload={
                     "steps": [
@@ -412,13 +517,16 @@ class AgentExecutor:
                     ],
                     "created": ctx.artifacts,
                     "stopped_reason": stopped_reason,
+                    "status_reason": reason.value,
+                    "verified": verified,
+                    "verification_problems": problems,
                 },
                 chat_result=None,
             )
 
             return AgentOutcome(
                 run_id=recorder.run_id,
-                status=RunStatus.SUCCEEDED.value,
+                status=status.value,
                 goal=goal,
                 final_answer=final_answer,
                 steps=steps,
