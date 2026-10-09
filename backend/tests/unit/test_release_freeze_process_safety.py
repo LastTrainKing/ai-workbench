@@ -25,7 +25,7 @@ SCRIPTS = REPO_ROOT / "scripts"
 if str(SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SCRIPTS))
 
-import _process_guard as guard  # noqa: E402
+import _process_guard as guard
 
 VERIFY_SCRIPTS = [
     "verify_installer.py",
@@ -156,7 +156,7 @@ def test_installer_runner_does_not_pass_shell_true(tmp_path: Path, monkeypatch: 
     setup.write_bytes(b"stub")
     captured: dict[str, object] = {}
 
-    def fake_run(args, **kwargs):  # noqa: ANN001, ANN003, ANN202
+    def fake_run(args, **kwargs):
         captured["args"] = args
         captured.update(kwargs)
         return None
