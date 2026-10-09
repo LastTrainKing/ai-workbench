@@ -17,9 +17,10 @@ Rectangle {
 
     readonly property var entries: [
         { key: "dashboard", label: "总览",   hint: "Ctrl+1" },
-        { key: "tasks",     label: "任务",   hint: "Ctrl+2" },
-        { key: "runs",      label: "Agent",  hint: "Ctrl+3" },
-        { key: "settings",  label: "设置",   hint: "Ctrl+4" }
+        { key: "knowledge", label: "知识库", hint: "Ctrl+2" },
+        { key: "tasks",     label: "任务",   hint: "Ctrl+3" },
+        { key: "runs",      label: "Agent",  hint: "Ctrl+4" },
+        { key: "settings",  label: "设置",   hint: "Ctrl+5" }
     ]
 
     ColumnLayout {

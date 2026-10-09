@@ -17,7 +17,6 @@ import ast
 import json
 import os
 import pathlib
-import socket
 import sys
 import threading
 import time
@@ -223,7 +222,7 @@ def audit_in_process_calls() -> None:
     opened: list[tuple[str, int]] = []
     original_connect = _socket.socket.connect
 
-    def spy(self, address):  # noqa: ANN001, ANN202
+    def spy(self, address):
         try:
             if isinstance(address, tuple) and len(address) >= 2:
                 opened.append((str(address[0]), int(address[1])))
@@ -236,7 +235,8 @@ def audit_in_process_calls() -> None:
         from PySide6.QtCore import QEventLoop, QTimer
         from PySide6.QtGui import QGuiApplication
 
-        app = QGuiApplication.instance() or QGuiApplication(sys.argv[:1])
+        # Held for the side effect: Qt requires an application object to exist.
+        _app = QGuiApplication.instance() or QGuiApplication(sys.argv[:1])
         from awbnative.bridge import ServiceBridge
 
         bridge = ServiceBridge()
@@ -284,7 +284,8 @@ def audit_file_permissions() -> None:
     from PySide6.QtCore import QEventLoop, QTimer
     from PySide6.QtGui import QGuiApplication
 
-    app = QGuiApplication.instance() or QGuiApplication(sys.argv[:1])
+    # Held for the side effect, as above.
+    _app = QGuiApplication.instance() or QGuiApplication(sys.argv[:1])
     from awbnative.bridge import ServiceBridge
 
     bridge = ServiceBridge()

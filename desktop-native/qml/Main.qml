@@ -22,6 +22,9 @@ ApplicationWindow {
     readonly property real railWidth: Theme.scale(220, uiScale)
 
     property string activePage: "dashboard"
+    //: Parameters for the pages that need one (a knowledge base, say). Held here rather
+    //: than passed through the Loader, which would recreate the page on every change.
+    property var pageParams: ({})
     property string toastText: ""
     property string toastLevel: "info"
     property bool toastVisible: false
@@ -119,10 +122,22 @@ ApplicationWindow {
                 // file and not a new branch in a switch.
                 sourceComponent: {
                     switch (shell.activePage) {
-                    case "tasks":    return tasksPage
-                    case "runs":     return runsPage
-                    case "settings": return settingsPage
-                    default:         return dashboardPage
+                    case "knowledge": return knowledgePage
+                    case "documents": return documentsPage
+                    case "ask":       return askPage
+                    case "tasks":     return tasksPage
+                    case "runs":      return runsPage
+                    case "settings":  return settingsPage
+                    default:          return dashboardPage
+                    }
+                }
+                onLoaded: {
+                    // Parameters are applied once, when the page instance appears, so a
+                    // page cannot be recreated by a change it caused itself.
+                    if (item && shell.pageParams) {
+                        for (var key in shell.pageParams) {
+                            item[key] = shell.pageParams[key]
+                        }
                     }
                 }
             }
@@ -130,6 +145,25 @@ ApplicationWindow {
     }
 
     Component { id: dashboardPage; DashboardPage { shell: shell } }
+    Component { id: knowledgePage; KnowledgePage {
+        shell: shell
+        onOpenDocuments: function (kbId, kbName) {
+            shell.pageParams = { kbId: kbId, kbName: kbName }
+            shell.activePage = "documents"
+        }
+    } }
+    Component { id: documentsPage; DocumentsPage {
+        shell: shell
+        onBack: shell.activePage = "knowledge"
+        onAsk: function (kbId, kbName) {
+            shell.pageParams = { kbId: kbId, kbName: kbName }
+            shell.activePage = "ask"
+        }
+    } }
+    Component { id: askPage; AskPage {
+        shell: shell
+        onBack: shell.activePage = "documents"
+    } }
     Component { id: tasksPage;     TasksPage     { shell: shell } }
     Component { id: runsPage;      RunsPage      { shell: shell } }
     Component { id: settingsPage;  SettingsPage  { shell: shell } }
@@ -165,7 +199,8 @@ ApplicationWindow {
     // shell is used from a couch; the mouse is the second-class citizen.
     Shortcut { sequence: "Escape"; onActivated: shell.toastVisible = false }
     Shortcut { sequence: "Ctrl+1"; onActivated: shell.activePage = "dashboard" }
-    Shortcut { sequence: "Ctrl+2"; onActivated: shell.activePage = "tasks" }
-    Shortcut { sequence: "Ctrl+3"; onActivated: shell.activePage = "runs" }
-    Shortcut { sequence: "Ctrl+4"; onActivated: shell.activePage = "settings" }
+    Shortcut { sequence: "Ctrl+2"; onActivated: shell.activePage = "knowledge" }
+    Shortcut { sequence: "Ctrl+3"; onActivated: shell.activePage = "tasks" }
+    Shortcut { sequence: "Ctrl+4"; onActivated: shell.activePage = "runs" }
+    Shortcut { sequence: "Ctrl+5"; onActivated: shell.activePage = "settings" }
 }

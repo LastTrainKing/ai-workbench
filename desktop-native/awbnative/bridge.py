@@ -72,8 +72,24 @@ class ServiceBridge(QObject):
         self._runner.submit(request_id, factory, timeout=timeout)
 
     async def _owner(self) -> uuid.UUID:
-        """This install's account. Resolved once and remembered."""
+        """This install's account, and **bind the call to it**.
+
+        The second half is not decoration. `build_llm_provider()` takes no owner and reads
+        the request context instead — which the HTTP application sets in its auth
+        dependency. This bridge had no equivalent, so every provider built inside it
+        resolved the *installation-level* configuration while `loadAiConfig` returned the
+        account's. The settings page showed a key and a model; the calls used whatever the
+        machine had.
+
+        That is exactly the failure the acceptance round warned about — do not assume a call
+        reaches the real model because the interface says it is configured — and it was
+        here, in the newest code, because a contextvar is invisible unless you know to set
+        it.
+        """
+        from app.ai.runtime_config import set_current_owner
+
         if self._owner_id:
+            set_current_owner(self._owner_id)
             return uuid.UUID(self._owner_id)
         from app.infrastructure.database import session_scope
         from app.models.user import User
@@ -88,6 +104,7 @@ class ServiceBridge(QObject):
         if row is None:
             raise RuntimeError("这台机器上还没有账号，请先在原应用中创建一个")
         self._owner_id = str(row.id)
+        set_current_owner(self._owner_id)
         return row.id
 
     # ---------------------------------------------------------------- read side --
@@ -167,6 +184,315 @@ class ServiceBridge(QObject):
             }
 
         self._submit(request_id, work)
+
+    # ------------------------------------------------------- knowledge bases --
+    @Slot(str)
+    def loadKnowledgeBases(self, request_id: str) -> None:
+        """The account's knowledge bases, with how much is actually in each one.
+
+        The document count and the embedded-chunk count are read from the database rather
+        than from a cached field, so a knowledge base that has documents but no vectors
+        looks different from one that is ready — which is the difference between "my
+        upload did nothing" and "my upload worked".
+        """
+
+        async def work() -> dict[str, Any]:
+            from app.infrastructure.database import session_scope
+            from app.models.knowledge import Document, DocumentChunk, KnowledgeBase
+            from sqlalchemy import func, select
+
+            owner = await self._owner()
+            async with session_scope() as session:
+                rows = list(
+                    (
+                        await session.execute(
+                            select(KnowledgeBase)
+                            .where(KnowledgeBase.owner_id == owner)
+                            .order_by(KnowledgeBase.updated_at.desc())
+                        )
+                    ).scalars()
+                )
+                items = []
+                for kb in rows:
+                    documents = int(
+                        (
+                            await session.execute(
+                                select(func.count(Document.id)).where(
+                                    Document.knowledge_base_id == kb.id
+                                )
+                            )
+                        ).scalar_one()
+                    )
+                    chunks = int(
+                        (
+                            await session.execute(
+                                select(func.count(DocumentChunk.id)).where(
+                                    DocumentChunk.knowledge_base_id == kb.id,
+                                    DocumentChunk.embedding_status == "EMBEDDED",
+                                )
+                            )
+                        ).scalar_one()
+                    )
+                    items.append(
+                        {
+                            "id": str(kb.id),
+                            "name": kb.name,
+                            "description": kb.description or "",
+                            "documents": documents,
+                            "embedded_chunks": chunks,
+                            "embedding_model": kb.embedding_model or "",
+                            "vector_size": kb.vector_size or 0,
+                        }
+                    )
+            return {"items": items, "total": len(items)}
+
+        self._submit(request_id, work)
+
+    @Slot(str, str)
+    def createKnowledgeBase(self, request_id: str, name: str) -> None:
+        async def work() -> dict[str, Any]:
+            from app.infrastructure.database import session_scope
+            from app.models.knowledge import KnowledgeBase
+
+            owner = await self._owner()
+            title = (name or "").strip()
+            if not title:
+                raise ValueError("知识库名称不能为空")
+            async with session_scope() as session:
+                kb = KnowledgeBase(owner_id=owner, name=title[:200])
+                session.add(kb)
+                await session.flush()
+                await session.commit()
+                return {"id": str(kb.id), "name": kb.name}
+
+        self._submit(request_id, work)
+
+    @Slot(str, str)
+    def loadDocuments(self, request_id: str, knowledge_base_id: str) -> None:
+        async def work() -> dict[str, Any]:
+            from app.infrastructure.database import session_scope
+            from app.models.knowledge import Document
+            from sqlalchemy import select
+
+            owner = await self._owner()
+            async with session_scope() as session:
+                rows = list(
+                    (
+                        await session.execute(
+                            select(Document)
+                            .where(
+                                Document.owner_id == owner,
+                                Document.knowledge_base_id == uuid.UUID(knowledge_base_id),
+                            )
+                            .order_by(Document.created_at.desc())
+                        )
+                    ).scalars()
+                )
+                return {
+                    "items": [
+                        {
+                            "id": str(d.id),
+                            "title": d.title,
+                            "status": d.status,
+                            "chunks": d.chunk_count or 0,
+                            "embedded": d.embedded_chunk_count or 0,
+                            "error": (d.error_message or "")[:200],
+                        }
+                        for d in rows
+                    ],
+                    "total": len(rows),
+                }
+
+        self._submit(request_id, work)
+
+    @Slot(str, str, str)
+    def importDocument(self, request_id: str, knowledge_base_id: str, source_path: str) -> None:
+        """Import a file through the **real** upload path, not a shortcut.
+
+        `save_upload` then `register_upload` then `ingest` — the same three calls the HTTP
+        upload route makes. The file is hashed, deduplicated, parsed and embedded by the
+        product's own code, so what this proves is the product's pipeline and not a
+        bespoke path written for the UI.
+        """
+
+        async def work() -> dict[str, Any]:
+            from app.infrastructure.database import session_scope
+            from app.infrastructure.files import save_upload
+            from app.services.document_service import DocumentService
+
+            owner = await self._owner()
+            path = Path(source_path).expanduser()
+            if not path.is_file():
+                raise FileNotFoundError(f"文件不存在：{path}")
+
+            class _Stream:
+                def __init__(self, data: bytes) -> None:
+                    self._data = data
+                    self._pos = 0
+
+                async def read(self, size: int = -1) -> bytes:
+                    chunk = (
+                        self._data[self._pos :]
+                        if size is None or size < 0
+                        else self._data[self._pos : self._pos + size]
+                    )
+                    self._pos += len(chunk)
+                    return chunk
+
+            data = path.read_bytes()
+            self.progress.emit(request_id, f"正在保存 {path.name}（{len(data)} 字节）…")
+            async with session_scope() as session:
+                stored = await save_upload(
+                    _Stream(data), path.name, content_type=None
+                )
+                document, _job, duplicate = await DocumentService(session).register_upload(
+                    owner_id=owner,
+                    knowledge_base_id=uuid.UUID(knowledge_base_id),
+                    stored=stored,
+                )
+                document_id = document.id
+                await session.commit()
+
+            if duplicate:
+                return {
+                    "document_id": str(document_id),
+                    "duplicate": True,
+                    "message": "同样的文件已经导入过，未重复建立。",
+                }
+
+            self.progress.emit(request_id, "正在解析并向量化…")
+            async with session_scope() as session:
+                result = await DocumentService(session).ingest(document_id)
+                await session.commit()
+            return {"document_id": str(document_id), "duplicate": False, **result}
+
+        self._submit(request_id, work, timeout=600.0)
+
+    # ------------------------------------------------------------------ RAG --
+    @Slot(str, str, str)
+    def askKnowledge(self, request_id: str, knowledge_base_id: str, question: str) -> None:
+        """One grounded answer, with its citations and the program's own grounding verdict.
+
+        `grounded` here is the structural check from `analyse_citations` — every
+        claim-bearing sentence cites a source that exists — and not a claim that the
+        sources entail the answer. The UI shows the same distinction rather than a green
+        tick.
+        """
+
+        async def work() -> dict[str, Any]:
+            from app.infrastructure.database import session_scope
+            from app.services.ai_services import ChatService
+
+            owner = await self._owner()
+            text = (question or "").strip()
+            if not text:
+                raise ValueError("问题不能为空")
+            async with session_scope() as session:
+                answer = await ChatService(session).ask(
+                    owner_id=owner,
+                    question=text,
+                    knowledge_base_ids=[uuid.UUID(knowledge_base_id)],
+                    mode="hybrid",
+                )
+                await session.commit()
+            return {
+                "run_id": answer.run_id,
+                "answer": answer.answer,
+                "grounded": answer.grounded,
+                "used_citation_ids": answer.used_citation_ids,
+                "invalid_citation_ids": answer.invalid_citation_ids,
+                "citation_report": answer.citation_report,
+                "provider": answer.provider,
+                "model": answer.model,
+                "sources": [
+                    {
+                        "index": c.get("index"),
+                        "document_title": c.get("document_title"),
+                        "chunk_index": c.get("chunk_index"),
+                        "score": c.get("score"),
+                        "snippet": (c.get("snippet") or "")[:300],
+                    }
+                    for c in answer.citations
+                ],
+            }
+
+        self._submit(request_id, work, timeout=300.0)
+
+    @Slot(str, str, str)
+    def streamAnswer(self, request_id: str, knowledge_base_id: str, question: str) -> None:
+        """The same answer, streamed, when the configured provider can stream.
+
+        A separate slot rather than a flag on `askKnowledge`, because the two produce
+        different signals: this one emits `progress` for every delta, and the caller needs
+        to know which it is getting. When the provider cannot stream, this reports that
+        rather than pretending — the base-class default would deliver one chunk and a UI
+        that animated it would be animating nothing.
+        """
+
+        async def work() -> dict[str, Any]:
+            from app.ai.providers.factory import build_llm_provider
+            from app.ai.rag.retriever import Retriever
+            from app.ai.types import ChatMessage
+            from app.infrastructure.database import session_scope
+
+            # Called for the binding, not the value: `_owner()` also sets the request
+            # context the provider factory reads.
+            await self._owner()
+            text = (question or "").strip()
+            if not text:
+                raise ValueError("问题不能为空")
+
+            llm, info = build_llm_provider()
+            if not llm.supports_streaming:
+                return {
+                    "streamed": False,
+                    "provider": info.kind,
+                    "reason": f"provider '{info.kind}' 不支持流式输出",
+                    "answer": "",
+                }
+
+            async with session_scope() as session:
+                retrieval = await Retriever().retrieve(
+                    session,
+                    query=text,
+                    knowledge_base_ids=[uuid.UUID(knowledge_base_id)],
+                    mode="hybrid",
+                    top_k=4,
+                )
+            context = "\n\n".join(
+                f"【资料 {i}】{c.document_title}\n{c.content[:1200]}"
+                for i, c in enumerate(retrieval.chunks, start=1)
+            )
+            messages = [
+                ChatMessage(
+                    role="system",
+                    content=(
+                        "只能依据下面提供的资料回答。每一条结论后面必须标注 [编号]。"
+                        "资料里没有的不要编。\n\n" + (context or "（没有检索到资料）")
+                    ),
+                ),
+                ChatMessage(role="user", content=text),
+            ]
+
+            parts: list[str] = []
+            self.progress.emit(request_id, "")
+            async for chunk in llm.stream_chat(messages, temperature=0.2, max_tokens=600):
+                if chunk.delta:
+                    parts.append(chunk.delta)
+                    self.progress.emit(request_id, chunk.delta)
+            await llm.aclose()
+            return {
+                "streamed": True,
+                "provider": info.kind,
+                "model": info.model,
+                "answer": "".join(parts),
+                "sources": [
+                    {"index": i, "document_title": c.document_title, "score": c.score}
+                    for i, c in enumerate(retrieval.chunks, start=1)
+                ],
+            }
+
+        self._submit(request_id, work, timeout=300.0)
 
     # --------------------------------------------------------------- write side --
     @Slot(str, str, str)
