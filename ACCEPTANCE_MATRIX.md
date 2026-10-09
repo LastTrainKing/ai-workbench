@@ -1,5 +1,11 @@
 # ACCEPTANCE MATRIX — AI Workbench release freeze
 
+> **Superseded by `RELEASE-ACCEPTANCE.md`.** This matrix covers the first fix round. The
+> second round re-ran everything, rebuilt the installer from the final commit, and ran a
+> fresh install end to end; its results are in `RELEASE-ACCEPTANCE.md`, and its verdict is
+> in `FINAL-VERDICT.md`. This file is kept because it records what was true at that point —
+> several rows below were `NOT RUN` there and are `PASS` now.
+
 Branch `fix/release-freeze-20261009` · version **2.2.0** · base `682ed8d`
 
 **Verdict vocabulary is exactly four values.** No "mostly", no "verified except". A `PASS`

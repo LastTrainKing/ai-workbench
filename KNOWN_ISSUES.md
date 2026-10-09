@@ -9,13 +9,36 @@ chose not to fix, with the reason stated. Nothing here is a fixable defect renam
 
 ## Release blockers
 
+### KI-00 — No API key exists, so no model-dependent behaviour is verified
+
+**What.** The user closed the previous API key. Everything that needs a real model call is
+unverified: provider returns, timeouts, network failures, malformed responses, tool calling
+against a real model, real RAG grounding, real embeddings, and whether the old key was
+revoked at the vendor.
+
+**Why it is not fixed here.** There is no key, and this round is explicitly forbidden from
+finding, borrowing or substituting one.
+
+**What was done instead.** Offline and mock providers were used, and they verify real
+business state rather than a success string: the agent run is checked against `ai_runs` and
+required to report `INCOMPLETE` / `max_steps`. Six of the thirteen blocked items need no key
+at all — only a local stub server — and are listed as such in `RELEASE-ACCEPTANCE.md` §3.
+
+**What would close it.** A key, and the seven-test list in `FINAL-VERDICT.md`. The entry
+point is already in place: Settings → AI Provider, or `POST /api/v1/ai-config`. No source
+edit, no rebuild.
+
 ### KI-01 — The desktop UI is a WebView2 page, not a native interface
 
 **What.** The window is native; its contents are a React build rendered by WebView2. The
 requirement is a native Windows UI (Qt 6 / Qt Quick preferred) with no embedded web page.
 
-**Why it is not fixed here.** It is a rewrite of the presentation layer, not a repair. The
-estimate below is deliberately rough and deliberately not compressed to look small.
+**Why it is not fixed here.** It is a rewrite of the presentation layer, not a repair.
+
+**The estimate below is superseded.** A runnable Qt 6 / QML proof of concept was built and
+measured in the next round, and the figure derived from it does not agree with the one that
+was written from reading the code. Use `NATIVE-UI-MIGRATION.md` — **~134.5 engineer-days,
+15–17 weeks for two engineers** — and treat the table below as the withdrawn first guess.
 
 | Phase | Work | Rough effort |
 |---|---|---|
@@ -134,12 +157,13 @@ rate limiter: a user who configures a provider and hammers a button can still ge
 requests. Acceptable for a single-user desktop product; it would not be for a shared
 service.
 
-### KI-11 — The development `.runtime` grew during this round
+### KI-11 — The development `.runtime` grew during these rounds
 
 24,156 → 59,430 files. The growth is the test suite's own footprint (`pgdata` test database,
-`test-storage`, `logs`). No user document, snapshot, memory entry or configuration file was
-deleted or rewritten. The **installed** data directory is byte-identical (see
-`ACCEPTANCE_MATRIX.md` 4.1). Recorded because "the file count changed" is exactly the kind
+`test-storage`, `logs`) plus the Qdrant API key file the launcher now writes there. No user
+document, snapshot, memory entry or configuration file was deleted or rewritten. The
+**installed** data directory is byte-identical (1,530 files / 51,775,575 bytes / same mtime,
+before and after both rounds). Recorded because "the file count changed" is exactly the kind
 of thing a report should say rather than leave for someone to find.
 
 ### KI-12 — DeepSeek key rotation is unconfirmed
@@ -148,6 +172,18 @@ A live-looking key sat in a commented line of the development `.env`. It has bee
 and is not reproduced anywhere. Whether it was revoked at the vendor **could not be
 checked** — this round permits no real model calls. Treat it as "assume compromised until
 the vendor dashboard says otherwise".
+
+### KI-13 — `verify_installer_acceptance.py` leaves ~50 MB of test data behind
+
+**What.** The script wipes `%LOCALAPPDATA%\AI Workbench Data TEST` at the start of a run and
+does not remove it at the end. It is clearly named as test data and is separate from the
+real directory, but it is 50 MB of residue on the user's machine.
+
+**Why it is not fixed here.** Non-blocking tidiness, and the discipline rule for this round
+is that non-blocking improvements are registered for the next version rather than expanding
+the current scope. The residue from this round's own runs was removed.
+
+**What would close it.** A cleanup step at the end of the script with a `--keep` opt-out.
 
 ---
 
