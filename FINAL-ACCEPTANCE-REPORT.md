@@ -198,13 +198,23 @@ scratchpad 里更细的真相（`LIMIT_REACHED` 与 `CANCELLED` 的区分）仍�
 | 交付物 | 路径 | 体积 | SHA256 |
 |---|---|---|---|
 | 前端产物 | `frontend/dist/` | `index.html` 1,284 B | `8e8fe568969cfe79c1c9356ae9a87d9f73a1b9f56baaf093eba8c36613569a2b` |
-| Tauri 壳 EXE | `desktop/src-tauri/target/release/ai-workbench-desktop.exe` | 3,572,736 B | `08727c2c04f76701dcad5e6adfc864442e40014b22766eb8ff1808f3486cfb70` |
-| Tauri 自带 NSIS | `desktop/src-tauri/target/release/bundle/nsis/AI Workbench_2.0.0_x64-setup.exe` | 1,130,696 B | `f61c26c5ad46bdac8df98654265eb3b56c5cb240dae0cedad0d0614e14909783` |
-| **最终安装包** | `build/installer/AI-Workbench-Setup.exe` | 97,273,186 B | `cb6957cc2b283b991a197718025cede73e39a37125f831dcd7e951bf6113cbba` |
-| **交付 ZIP** | `archive/releases/AI-Workbench-<commit>-final.zip` | 13,146,126 B | `d76ef0ef3ccd79a2ecc57c16acd6f4aa28acf997a5eda4c98f062254b46939b7` |
+| Tauri 壳 EXE | `desktop/src-tauri/target/release/ai-workbench-desktop.exe` | 3,572,736 B | `55b210790bf6593c059c87088c357651ed610fa74390bbdab972d67f759b9ba8` |
+| Tauri 自带 NSIS | `desktop/src-tauri/target/release/bundle/nsis/AI Workbench_2.0.0_x64-setup.exe` | 1,130,770 B | `05b019c3e374fd23dd1ad4abeebe485dc9c2b0d735fa585d0eb7d3f4bc7617f2` |
+| **最终安装包** | `build/installer/AI-Workbench-Setup.exe` | 97,277,746 B | `9582576705f977d3004f6924eb838ec97db20a943cf9dd0984c65146cf01964c` |
+| **交付 ZIP** | `archive/releases/AI-Workbench-de4dae1-final.zip` | 13,168,889 B | `4299c07577541e5a686416eb6c31798b53c99b5b883c045c94c2999c8936148a` |
 
-安装包 payload：8,741 文件 / 443.9 MB → 压缩后 20.9%，构建耗时 371s。
-ZIP：612 个受版本控制的文件，凭据扫描通过。
+以上全部由提交 **`de4dae1`** 重新构建。
+
+安装包 payload：8,742 文件 / 444.0 MB → 压缩后 20.9%，构建耗时 375s。
+ZIP：616 个受版本控制的文件，凭据扫描通过。
+
+---
+
+### 一个顺序问题，值得写下来
+
+我第一次打的 ZIP 基于起点提交 `a1ae8cd`，**不含本轮改动**；安装包也早于最后几处修改。
+「文件名叫得对、内容不对」不会自己暴露。发现后改为：**先提交 → 再从提交后的源码重建全部交付物**，
+然后对**新安装包**重跑一次完整验收。中途那一个 `a1ae8cd` 的 ZIP 已删除，避免"哪个是最新的"继续变模糊。
 
 ---
 
@@ -306,7 +316,7 @@ ZIP：612 个受版本控制的文件，凭据扫描通过。
 
 ```
 分支      master
-起点      a1ae8cd
-本轮提交   见下方 git log
+起点      a1ae8cd（核对时即 HEAD，无后续提交）
+本轮提交   de4dae1
 工作区     clean
 ```
