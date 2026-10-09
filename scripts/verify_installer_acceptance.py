@@ -39,6 +39,8 @@ from _test_data_guard import (  # noqa: E402
     safe_rmtree,
 )
 
+from _process_guard import run_nsis_installer, stop_app_processes  # noqa: E402
+
 SETUP = ROOT / "build" / "installer" / "AI-Workbench-Setup.exe"
 INSTALL_DIR = Path(os.environ["LOCALAPPDATA"]) / "AI Workbench AcceptTest"
 EXE = INSTALL_DIR / "AI Workbench.exe"
@@ -204,9 +206,8 @@ def _stop_app() -> None:
     dev_stop = ROOT / "scripts" / "stop.bat"
     if dev_stop.is_file():
         subprocess.run(["cmd", "/C", str(dev_stop)], capture_output=True, check=False, timeout=300)
-    subprocess.run(
-        ["taskkill", "/F", "/IM", "AI Workbench.exe", "/T"], capture_output=True, check=False
-    )
+    # Only the instances under this test's install directory; never by image name.
+    stop_app_processes([INSTALL_DIR])
     deadline = time.time() + 60
     while time.time() < deadline and any(listening(port) for port in PORTS):
         time.sleep(1)
@@ -249,9 +250,7 @@ def main() -> int:
     _stop_app()
     safe_rmtree(INSTALL_DIR, who="verify_installer_acceptance (clean slate)")
     safe_rmtree(TEST_DATA_DIR, who="verify_installer_acceptance (clean slate)")
-    subprocess.run(
-        f'"{SETUP}" /S /D={INSTALL_DIR}', shell=True, capture_output=True, check=False, timeout=900
-    )
+    run_nsis_installer(SETUP, INSTALL_DIR, timeout=900)
     for _ in range(120):
         if EXE.is_file():
             break

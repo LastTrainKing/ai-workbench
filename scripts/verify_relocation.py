@@ -27,6 +27,8 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+from _process_guard import run_nsis_installer, stop_app_processes  # noqa: E402
+
 ORIGINAL = Path(r"C:\Users\user\Desktop\ai-workbench")
 RELOCATED = Path(r"C:\Temp\AIW Relocated Test")
 EXE = RELOCATED / "AI Workbench.exe"
@@ -60,7 +62,8 @@ def stop_stack(root: Path) -> None:
 
 
 def kill_shells() -> None:
-    subprocess.run(["taskkill", "/F", "/IM", "AI Workbench.exe"], capture_output=True, check=False)
+    """Stop the app instances under the relocated directory, and no others."""
+    stop_app_processes([RELOCATED])
 
 
 def hide(root: Path) -> list[tuple[Path, Path]]:

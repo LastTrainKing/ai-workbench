@@ -35,6 +35,8 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "scripts"))
 from _test_data_guard import TEST_DATA_DIR, TEST_INSTALL_DIR, safe_rmtree  # noqa: E402
 
+from _process_guard import run_nsis_installer, stop_app_processes  # noqa: E402
+
 SETUP = ROOT / "build" / "installer" / "AI-Workbench-Setup.exe"
 results: list[tuple[str, bool, str]] = []
 
@@ -60,11 +62,12 @@ def main() -> int:
     print("=== install to the test path ===")
     # A previous run's window holds `AI Workbench.exe` open, and `safe_rmtree` no longer
     # swallows that — it raises, which is how this was noticed. Close it first.
-    subprocess.run(["taskkill", "/F", "/IM", "AI Workbench.exe", "/T"], capture_output=True, check=False)
+    # Only the instances under this test's install directory; never by image name.
+    stop_app_processes([TEST_INSTALL_DIR])
     time.sleep(3)
     safe_rmtree(TEST_INSTALL_DIR, who="verify_installer_entries (clean slate)")
     safe_rmtree(TEST_DATA_DIR, who="verify_installer_entries (clean slate)")
-    subprocess.run(f'"{SETUP}" /S /D={TEST_INSTALL_DIR}', shell=True, capture_output=True, check=False)
+    run_nsis_installer(SETUP, TEST_INSTALL_DIR)
     for _ in range(60):
         if (TEST_INSTALL_DIR / "AI Workbench.exe").is_file():
             break

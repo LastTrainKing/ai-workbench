@@ -47,6 +47,8 @@ from _test_data_guard import (  # noqa: E402
     safe_rmtree,
 )
 
+from _process_guard import run_nsis_installer, stop_app_processes  # noqa: E402
+
 SETUP = ROOT / "build" / "installer" / "AI-Workbench-Setup.exe"
 INSTALL_DIR = Path(os.environ["LOCALAPPDATA"]) / "AI Workbench InstallTest"
 EXE_NAME = "AI Workbench.exe"
@@ -105,7 +107,13 @@ def shells() -> list[int]:
 
 
 def kill_shells() -> None:
-    subprocess.run(["taskkill", "/F", "/IM", EXE_NAME], capture_output=True, check=False)
+    """Stop the app instances under *this* install directory, and no others.
+
+    This was `taskkill /F /IM "AI Workbench.exe"`, which stops every instance on the
+    machine - including the one the user has open. The test owns its own install
+    directory, so its executable path is what identifies the processes it may close.
+    """
+    stop_app_processes([INSTALL_DIR])
 
 
 def browser_count() -> int:
@@ -170,17 +178,12 @@ def main() -> int:
             safe_rmtree(path, who="verify_installer.py step 1 (clean slate)")
         check("1", "target path does not exist beforehand", not INSTALL_DIR.exists(), str(INSTALL_DIR))
 
-        install = subprocess.run(
-            # `/D=` must be the last parameter and must NOT be quoted. NSIS does not
-            # strip quotes from it, so passing it as a separate argv element lets
-            # Python quote the whole thing because the path contains a space - and
-            # NSIS then installs to its default directory, silently. The command line
-            # is therefore built as one string and handed to cmd.
-            f'"{SETUP}" /S /D={INSTALL_DIR}',
-            shell=True,
-            capture_output=True,
-            check=False,
-        )
+        # `/D=` must be the last parameter and must NOT be quoted. NSIS does not strip
+        # quotes from it, so passing it as a separate argv element lets Python quote the
+        # whole thing because the path contains a space — and NSIS then installs to its
+        # default directory, silently. `run_nsis_installer` keeps the raw command line
+        # NSIS needs and rejects a path cmd.exe would reinterpret.
+        install = run_nsis_installer(SETUP, INSTALL_DIR)
         for _ in range(60):
             if (INSTALL_DIR / EXE_NAME).is_file():
                 break

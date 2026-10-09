@@ -35,6 +35,8 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "scripts"))
 from _test_data_guard import REAL_DATA_DIR  # noqa: E402
 
+from _process_guard import run_nsis_installer, stop_app_processes  # noqa: E402
+
 SETUP = ROOT / "build" / "installer" / "AI-Workbench-Setup.exe"
 INSTALL_DIR = Path(os.environ["LOCALAPPDATA"]) / "AI Workbench"
 DATA_DIR = Path(os.environ["LOCALAPPDATA"]) / "AI Workbench Data"
@@ -156,7 +158,8 @@ def stop_everything() -> None:
     dev_stop = ROOT / "scripts" / "stop.bat"
     if dev_stop.is_file():
         subprocess.run(["cmd", "/C", str(dev_stop)], capture_output=True, check=False)
-    subprocess.run(["taskkill", "/F", "/IM", "AI Workbench.exe", "/T"], capture_output=True, check=False)
+    # Only the instances under this test's install directory; never by image name.
+    stop_app_processes([INSTALL_DIR])
     # Wait for the ports rather than guessing a duration: the launcher refuses to start
     # while they are held, so a fixed sleep that is too short produces a false failure.
     for _ in range(40):
@@ -198,7 +201,7 @@ def main() -> int:
 
     print("=== 1. install the current build ===")
     stop_everything()
-    subprocess.run(f'"{SETUP}" /S /D={INSTALL_DIR}', shell=True, capture_output=True, check=False)
+    run_nsis_installer(SETUP, INSTALL_DIR)
     for _ in range(60):
         if (INSTALL_DIR / "AI Workbench.exe").is_file():
             break
