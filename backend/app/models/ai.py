@@ -187,6 +187,24 @@ class ToolCall(Base, UUIDPrimaryKeyMixin):
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
 
+    #: Stable id for this invocation, minted **before** the tool runs.
+    #:
+    #: It is what makes the record usable after a crash: recovery can find a row in
+    #: `RUNNING` and know which invocation it was, without guessing from the arguments.
+    #: Unique, so a retry of the same invocation cannot create a second row that looks
+    #: like a second execution.
+    invocation_id: Mapped[str | None] = mapped_column(
+        String(64), nullable=True, index=True, unique=True
+    )
+    #: When the tool was handed to the executor, and when its outcome was written. A row
+    #: with `started_at` and no `finished_at` is the window this column exists for.
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    #: True when the tool can change something — a file, a row, a process. Recovery
+    #: refuses to re-run these from an `UNKNOWN` state, because it cannot know whether the
+    #: effect already happened.
+    mutates_state: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+
     ai_run: Mapped[AIRun] = relationship(back_populates="tool_calls")
 
 

@@ -102,6 +102,32 @@ class JobType(StrEnum):
     REINDEX_KNOWLEDGE_BASE = "REINDEX_KNOWLEDGE_BASE"
 
 
+class ToolCallStatus(StrEnum):
+    """Where one tool invocation got to.
+
+    The distinction that matters is `UNKNOWN`. Everything else can be decided from the
+    record; `UNKNOWN` means the process died between the tool starting and the outcome
+    being written, and **nothing in the system can say whether the side effect happened**.
+
+    `ToolCall` rows used to be written only after the tool returned, so that window left no
+    row at all — a crash mid-tool produced a run with no evidence it had ever called
+    anything, and re-running the goal would repeat the tool. The intent is now recorded
+    before the tool runs, so the window leaves a row that says `RUNNING`, and recovery can
+    turn that into `UNKNOWN` rather than into silence.
+    """
+
+    #: The intent is recorded; the tool has not started.
+    PENDING = "PENDING"
+    #: The tool was handed to the executor. Its side effect may or may not have happened.
+    RUNNING = "RUNNING"
+    SUCCEEDED = "SUCCEEDED"
+    FAILED = "FAILED"
+    #: The loop guard refused a duplicate call; nothing ran.
+    SKIPPED = "SKIPPED"
+    #: The process died mid-invocation. **Never auto-retried.**
+    UNKNOWN = "UNKNOWN"
+
+
 class ConceptSource(StrEnum):
     AI = "AI"
     MANUAL = "MANUAL"

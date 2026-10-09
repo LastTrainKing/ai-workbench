@@ -187,6 +187,34 @@ class ToolSpec:
     audit_policy: str = "always"
     #: True when the tool can change something on the machine or in the database.
     mutates_state: bool = False
+    #: True when repeating the call with the same arguments leaves the same state.
+    #:
+    #: Only meaningful when `mutates_state` is True; a read-only tool is replayable
+    #: by construction and is classified as such without asking.
+    #:
+    #: **The default is False, and that is the safe direction.** Claiming a tool is
+    #: idempotent is a claim about its implementation, and getting that claim wrong is
+    #: precisely the failure the invocation record exists to prevent — a duplicated
+    #: `file_append` corrupts a file, a duplicated `git_commit` writes a second commit.
+    #: A tool nobody has classified is therefore treated as unsafe to replay, so the
+    #: cost of forgetting to classify is a manual check rather than a repeated side
+    #: effect. The four tools that are marked idempotent are marked because their
+    #: implementation was read, not because their name sounded harmless.
+    idempotent: bool = False
+
+    def replay_class(self) -> str:
+        """How a recovery may treat a repeat of this call.
+
+        ``read_only``  — repeating is free; there is no state to duplicate.
+        ``idempotent`` — repeating converges to the same state.
+        ``unsafe``     — repeating may duplicate a side effect. **Never auto-replayed.**
+
+        This is the single place the three-way classification is decided, so the
+        executor, the recovery pass and the UI cannot drift apart on what a tool is.
+        """
+        if not self.mutates_state:
+            return "read_only"
+        return "idempotent" if self.idempotent else "unsafe"
 
     def to_openai(self) -> dict[str, Any]:
         return {
@@ -206,6 +234,10 @@ class ToolSpec:
             "timeout_seconds": self.timeout_seconds,
             "audit_policy": self.audit_policy,
             "mutates_state": self.mutates_state,
+            # The derived three-way classification, so the UI does not have to
+            # re-implement the rule from `mutates_state` + `idempotent` and get it
+            # subtly different.
+            "replay_class": self.replay_class(),
             "output_schema": self.output_schema,
         }
 

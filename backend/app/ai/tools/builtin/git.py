@@ -298,6 +298,12 @@ class GitAddTool(_GitTool):
         risk_level="low",
         timeout_seconds=GIT_TIMEOUT,
         mutates_state=True,
+        # Replay-safe: the index records paths, and staging the same paths twice records
+        # the same paths. The caveat is honest rather than hidden — `git add -A` (empty
+        # `paths`) stages *all* changes, so a repeat picks up anything that changed in
+        # between. That only matters if something else wrote to the tree concurrently,
+        # which is not the situation a crash-replay is in.
+        idempotent=True,
     )
     is_write = True
 

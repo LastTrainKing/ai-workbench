@@ -40,10 +40,12 @@ from app.ai.prompts.registry import get_prompt
 from app.ai.providers.budget import REASONING_TOKENS, reasoning_budget
 from app.ai.tools.executor import ResourceLimits
 from app.ai.tools.permissions import AgentPolicy
-from app.ai.tools.registry import ARTIFACT_TOOLS
-from app.ai.types import ChatMessage
+from app.ai.tools.registry import ARTIFACT_TOOLS, spec_for
+from app.ai.tracing import begin_tool_call, finish_tool_call
+from app.ai.types import ChatMessage, ToolResult
 from app.core.config import settings
 from app.core.logging import get_logger
+from app.models.ai import AIRun
 
 logger = get_logger(__name__)
 
@@ -56,6 +58,12 @@ EVIDENCE_TOOLS = {
 
 #: How many tool calls a single step may use before it is considered stuck.
 MAX_TOOLS_PER_STEP = 12
+
+#: The step index recorded for tool calls the *final verifier* makes. It checks the whole
+#: plan, so it belongs to no plan step — and a plan step id is a 1-based string the model
+#: writes, which is why this is negative rather than 0: 0 is a value a model could emit,
+#: and a collision would file a verification read under a real step.
+FINAL_VERIFY_STEP_INDEX = -1
 
 #: A single step may never consume more than this fraction of the run's whole
 #: tool-call budget.
@@ -374,6 +382,7 @@ class AutonomousAgent:
         limits: ResourceLimits | None = None,
         working_directory: str = "",
         deliverable_kind: str = "",
+        ai_run_id: Any = None,
     ) -> None:
         # What the user asked to be produced, when they said so. Empty means "any".
         #
@@ -388,6 +397,13 @@ class AutonomousAgent:
         self.controller = controller
         self.session = session
         self.owner_id = owner_id
+        #: The `ai_runs` row this run belongs to, so tool invocations can be attached to
+        #: it. Optional because tests drive this class directly with no run row; when it
+        #: is absent the invocation record is skipped **and logged**, rather than
+        #: silently pretending the call was recorded.
+        self.ai_run_id = ai_run_id
+        self._ai_run_row: Any = None
+        self._invocation_warning_logged = False
         self.working_directory = working_directory
         self.limits = limits or ResourceLimits(
             max_output_bytes=policy.max_output_bytes,
@@ -421,6 +437,61 @@ class AutonomousAgent:
         #: the first place the difference between the two shows up.
         self.constraints = TaskConstraints()
         self.preferences = PreferenceResolution()
+
+    async def _call_tool(self, request: Any, *, step_index: int) -> ToolResult:
+        """Run one tool call with its invocation recorded **before** it can have an effect.
+
+        The runner had no invocation record at all: `registry.execute` was called
+        directly and nothing was ever written to `tool_calls`. So a run interrupted
+        mid-tool left a plan and an event stream that both said a step was in progress,
+        and no record of which concrete operation was in flight — which is the one fact
+        needed to decide whether repeating it is safe.
+
+        Two commits bracket the call, and both are load-bearing: the first makes the
+        intent durable before the tool can change anything, the second makes the outcome
+        durable as soon as it is known. See `app.ai.tracing.begin_tool_call`.
+        """
+        invocation = await self._begin_invocation(request, step_index=step_index)
+        if invocation is not None:
+            await self.session.commit()
+
+        result = await self.registry.execute(self.ctx, request.name, request.arguments)
+
+        if invocation is not None:
+            await finish_tool_call(
+                self.session,
+                invocation,
+                ok=result.ok,
+                result=result.to_payload(),
+                latency_ms=result.latency_ms,
+                error_message=result.error,
+            )
+            await self.session.commit()
+        return result
+
+    async def _begin_invocation(self, request: Any, *, step_index: int) -> Any:
+        """Record the intent for one call, or return None when there is nowhere to put it."""
+        if self.ai_run_id is None:
+            if not self._invocation_warning_logged:
+                self._invocation_warning_logged = True
+                logger.warning(
+                    "tool_invocation_not_recorded",
+                    extra={"reason": "no ai_run_id", "tool": request.name},
+                )
+            return None
+        if self._ai_run_row is None:
+            self._ai_run_row = await self.session.get(AIRun, self.ai_run_id)
+        if self._ai_run_row is None:
+            return None
+        spec = spec_for(self.registry, request.name)
+        return await begin_tool_call(
+            self.session,
+            run=self._ai_run_row,
+            tool_name=request.name,
+            arguments=request.arguments,
+            step_index=step_index,
+            mutates_state=bool(getattr(spec, "mutates_state", False)),
+        )
 
     async def _resolve_requirements(self, goal: str) -> None:
         """Work out the hard constraints and what each preference becomes.
@@ -728,7 +799,7 @@ class AutonomousAgent:
                 data={"tool": request.name, "arguments": _trim(request.arguments)},
             )
 
-            result = await self.registry.execute(self.ctx, request.name, request.arguments)
+            result = await self._call_tool(request, step_index=_step_index(step))
             self.controller.tool_calls += 1
             step.tool_calls += 1
 
@@ -853,7 +924,7 @@ class AutonomousAgent:
             }
 
         request = chat.tool_calls[0]
-        result = await self.registry.execute(self.ctx, request.name, request.arguments)
+        result = await self._call_tool(request, step_index=_step_index(step))
         self.controller.tool_calls += 1
 
         exit_code = getattr(result, "exit_code", None)
@@ -1300,7 +1371,7 @@ class AutonomousAgent:
                 continue
 
             request = chat.tool_calls[0]
-            result = await self.registry.execute(self.ctx, request.name, request.arguments)
+            result = await self._call_tool(request, step_index=FINAL_VERIFY_STEP_INDEX)
             self.controller.tool_calls += 1
             exit_code = getattr(result, "exit_code", None)
 
@@ -1505,6 +1576,19 @@ class AutonomousAgent:
 
 def plan_goal(plan: ExecutionPlan | None) -> str:
     return plan.goal if plan else "（未知目标）"
+
+
+def _step_index(step: Any) -> int:
+    """The numeric step index for the invocation record.
+
+    `PlanStep.id` is a string (the model writes it), and `tool_calls.step_index` is an
+    integer column. A non-numeric id would raise inside the tool loop and turn a working
+    run into a crash, so the coercion is guarded rather than assumed.
+    """
+    try:
+        return int(getattr(step, "id", 0))
+    except (TypeError, ValueError):
+        return 0
 
 
 def _trim(value: Any, limit: int = 400) -> Any:

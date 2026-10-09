@@ -21,7 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai.types import ChatResult, Usage, estimate_tokens
 from app.core.logging import get_logger, new_run_id, run_id_var
-from app.domain.enums import RunStatus, RunType
+from app.domain.enums import RunStatus, RunType, ToolCallStatus
 from app.models.ai import AgentRun, AIRun, AIRunSource, ToolCall
 
 logger = get_logger(__name__)
@@ -139,39 +139,6 @@ class RunRecorder:
             )
         await self.session.flush()
 
-    async def record_tool_call(
-        self,
-        *,
-        tool_name: str,
-        arguments: dict[str, Any],
-        result: dict[str, Any],
-        status: str,
-        step_index: int,
-        latency_ms: int,
-        error_message: str = "",
-        agent_run_id: uuid.UUID | None = None,
-    ) -> ToolCall:
-        call = ToolCall(
-            ai_run_id=self.model_row.id,
-            agent_run_id=agent_run_id,
-            step_index=step_index,
-            tool_name=tool_name,
-            arguments=_sanitize(arguments),
-            result=_sanitize(result),
-            status=status,
-            error_message=error_message[:2000],
-            latency_ms=latency_ms,
-            created_at=datetime.now(UTC),
-        )
-        self.session.add(call)
-        used = list(self.model_row.tools_used or [])
-        if tool_name not in used:
-            used.append(tool_name)
-        self.model_row.tools_used = used
-        self.model_row.tool_call_count = (self.model_row.tool_call_count or 0) + 1
-        await self.session.flush()
-        return call
-
     async def attach_agent_run(self, *, goal: str, max_steps: int) -> AgentRun:
         agent = AgentRun(
             ai_run_id=self.model_row.id,
@@ -237,6 +204,227 @@ class RunRecorder:
         )
         run_id_var.set("-")
         return row
+
+
+# --------------------------------------------------------------------------- #
+# Tool invocations: intent before execution, outcome after
+# --------------------------------------------------------------------------- #
+def new_invocation_id() -> str:
+    """A stable id for one tool invocation, minted before anything runs."""
+    return f"inv_{uuid.uuid4().hex}"
+
+
+def replay_class_of(spec: Any) -> str:
+    """`read_only` | `idempotent` | `unsafe` for a tool spec, tolerating a missing one.
+
+    A tool the registry cannot describe is treated as `unsafe`. Guessing "read-only"
+    for an unknown tool would be the one guess that turns a recovery into a duplicate
+    side effect, so the unknown case falls to the conservative answer.
+    """
+    if spec is None:
+        return "unsafe"
+    classifier = getattr(spec, "replay_class", None)
+    if callable(classifier):
+        return str(classifier())
+    if not getattr(spec, "mutates_state", False):
+        return "read_only"
+    return "idempotent" if getattr(spec, "idempotent", False) else "unsafe"
+
+
+async def begin_tool_call(
+    session: AsyncSession,
+    *,
+    run: AIRun,
+    tool_name: str,
+    arguments: dict[str, Any],
+    step_index: int,
+    mutates_state: bool = False,
+    agent_run_id: uuid.UUID | None = None,
+    invocation_id: str | None = None,
+) -> ToolCall:
+    """Persist the **intent** to call a tool, and hand back the row.
+
+    This is the half that did not exist. `record_tool_call` wrote the row only after
+    the tool returned, so the window between "the tool started" and "the tool's result
+    was written" left no evidence at all — a process killed inside it produced a run
+    that showed no tool call had ever been attempted, and re-running the goal repeated
+    the tool. For a `file_append` or a `git_commit` that is a duplicated side effect.
+
+    The caller **must commit** before handing the call to the executor. A flush only
+    puts the row in an uncommitted transaction, which is invisible to any other session
+    and is discarded outright if the process dies — exactly the failure being fixed.
+
+    `invocation_id` is an optional caller-supplied idempotency key. Passing the same one
+    twice returns the existing row rather than creating a second one, so a retry that
+    repeats an already-accepted invocation is visible as a retry rather than as a second
+    execution.
+
+    The row is created as `RUNNING`: from this instant, if the process dies, nothing can
+    say whether the side effect landed. That is the honest state, and it is what makes
+    `UNKNOWN` reachable — a row that never existed could not be recovered as anything.
+    """
+    from sqlalchemy import select
+
+    if invocation_id:
+        existing = (
+            await session.execute(select(ToolCall).where(ToolCall.invocation_id == invocation_id))
+        ).scalar_one_or_none()
+        if existing is not None:
+            logger.info(
+                "tool_invocation_replayed",
+                extra={"invocation_id": invocation_id, "tool": existing.tool_name},
+            )
+            return existing
+
+    now = datetime.now(UTC)
+    call = ToolCall(
+        ai_run_id=run.id,
+        agent_run_id=agent_run_id,
+        step_index=step_index,
+        tool_name=tool_name,
+        arguments=_sanitize(arguments),
+        result={},
+        status=ToolCallStatus.RUNNING.value,
+        error_message="",
+        latency_ms=0,
+        created_at=now,
+        invocation_id=invocation_id or new_invocation_id(),
+        started_at=now,
+        mutates_state=bool(mutates_state),
+    )
+    session.add(call)
+
+    used = list(run.tools_used or [])
+    if tool_name not in used:
+        used.append(tool_name)
+    run.tools_used = used
+    run.tool_call_count = (run.tool_call_count or 0) + 1
+
+    await session.flush()
+    return call
+
+
+async def finish_tool_call(
+    session: AsyncSession,
+    call: ToolCall,
+    *,
+    ok: bool,
+    result: dict[str, Any] | None = None,
+    latency_ms: int = 0,
+    error_message: str = "",
+) -> ToolCall:
+    """Persist the **outcome** of an invocation whose intent was already recorded.
+
+    `finished_at` is what closes the window `begin_tool_call` opened. A row that has
+    `started_at` and no `finished_at` is the definition of "we do not know".
+    """
+    call.status = (
+        ToolCallStatus.SUCCEEDED.value if ok else ToolCallStatus.FAILED.value
+    )
+    call.result = _sanitize(result or {})
+    call.latency_ms = int(latency_ms or 0)
+    call.error_message = (error_message or "")[:2000]
+    call.finished_at = datetime.now(UTC)
+    await session.flush()
+    return call
+
+
+async def record_skipped_call(
+    session: AsyncSession,
+    *,
+    run: AIRun,
+    tool_name: str,
+    arguments: dict[str, Any],
+    step_index: int,
+    reason: str,
+    agent_run_id: uuid.UUID | None = None,
+) -> ToolCall:
+    """Record a call that was refused before dispatch, so nothing ran and nothing can have.
+
+    Written in one phase on purpose: there is no window here. `SKIPPED` is a terminal
+    state, and `finished_at` is set immediately because the decision and its outcome are
+    the same event.
+    """
+    now = datetime.now(UTC)
+    call = ToolCall(
+        ai_run_id=run.id,
+        agent_run_id=agent_run_id,
+        step_index=step_index,
+        tool_name=tool_name,
+        arguments=_sanitize(arguments),
+        result=_sanitize({"skipped": True, "reason": reason}),
+        status=ToolCallStatus.SKIPPED.value,
+        error_message=reason[:2000],
+        latency_ms=0,
+        created_at=now,
+        invocation_id=new_invocation_id(),
+        started_at=now,
+        finished_at=now,
+        mutates_state=False,
+    )
+    session.add(call)
+    used = list(run.tools_used or [])
+    if tool_name not in used:
+        used.append(tool_name)
+    run.tools_used = used
+    run.tool_call_count = (run.tool_call_count or 0) + 1
+    await session.flush()
+    return call
+
+
+async def resolve_orphan_tool_calls(session: AsyncSession) -> list[ToolCall]:
+    """Turn `RUNNING` invocations left by a dead process into `UNKNOWN`.
+
+    A `RUNNING` row at startup is not running: the registry is empty by definition, so
+    no process is driving it. But it is not `FAILED` either — the tool may have completed
+    its side effect and died before the result was written. `UNKNOWN` is the only status
+    that does not assert something the system cannot know.
+
+    `finished_at` is deliberately left `NULL`. Stamping it would say the invocation
+    ended, and the whole point of the row is that its end was never observed.
+    """
+    from sqlalchemy import select
+
+    rows = list(
+        (
+            await session.execute(
+                select(ToolCall).where(ToolCall.status == ToolCallStatus.RUNNING.value)
+            )
+        ).scalars()
+    )
+    for call in rows:
+        call.status = ToolCallStatus.UNKNOWN.value
+        call.error_message = (
+            call.error_message
+            or "进程在工具调用期间终止，无法确认该操作是否已经产生效果"
+        )
+    if rows:
+        await session.flush()
+        logger.warning(
+            "orphan_tool_calls_resolved",
+            extra={
+                "count": len(rows),
+                "unsafe": [c.tool_name for c in rows if c.mutates_state][:10],
+            },
+        )
+    return rows
+
+
+async def unresolved_tool_calls(session: AsyncSession, ai_run_id: uuid.UUID) -> list[ToolCall]:
+    """The invocations of one run whose effect cannot be determined, mutating first."""
+    from sqlalchemy import select
+
+    rows = list(
+        (
+            await session.execute(
+                select(ToolCall).where(
+                    ToolCall.ai_run_id == ai_run_id,
+                    ToolCall.status == ToolCallStatus.UNKNOWN.value,
+                )
+            )
+        ).scalars()
+    )
+    return [c for c in rows if c.mutates_state]
 
 
 async def persist_terminal_record(session: AsyncSession, *, context: str) -> None:

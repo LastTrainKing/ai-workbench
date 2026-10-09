@@ -127,6 +127,113 @@ CASES: list[tuple[str, str, str, str, str]] = [
         "async def delivery_states() -> dict[str, Any]:",
         "tests/api/test_release_freeze_ownership.py::test_every_route_refuses_an_unauthenticated_request[GET-/api/v1/delivery/states]",
     ),
+    # --- RF-18: the tool-invocation window ---------------------------------- #
+    # Each of these reintroduces one half of the ordering that makes a crash survivable.
+    (
+        "RF-18a intent flushed, not committed, before the tool runs",
+        "backend/app/ai/agent/executor.py",
+        "                await session.commit()\n\n                result: ToolResult = await registry.execute(\n"
+        "                    ctx, request.name, request.arguments\n                )",
+        "                await session.flush()\n\n                result: ToolResult = await registry.execute(\n"
+        "                    ctx, request.name, request.arguments\n                )",
+        "tests/integration/test_release_freeze_tool_invocation.py"
+        "::test_the_executor_commits_the_intent_before_the_tool_runs",
+    ),
+    (
+        "RF-18b the outcome never closes the window",
+        "backend/app/ai/tracing.py",
+        "    call.error_message = (error_message or \"\")[:2000]\n"
+        "    call.finished_at = datetime.now(UTC)",
+        "    call.error_message = (error_message or \"\")[:2000]",
+        "tests/integration/test_release_freeze_tool_invocation.py"
+        "::test_window_4_a_committed_outcome_is_decided",
+    ),
+    (
+        "RF-18c recovery only looks at calls that changed nothing",
+        "backend/app/ai/tracing.py",
+        "    rows = list(\n"
+        "        (\n"
+        "            await session.execute(\n"
+        "                select(ToolCall).where(ToolCall.status == ToolCallStatus.RUNNING.value)\n"
+        "            )\n"
+        "        ).scalars()\n"
+        "    )",
+        "    rows = list(\n"
+        "        (\n"
+        "            await session.execute(\n"
+        "                select(ToolCall).where(\n"
+        "                    ToolCall.status == ToolCallStatus.RUNNING.value,\n"
+        "                    ToolCall.mutates_state.is_(False),\n"
+        "                )\n"
+        "            )\n"
+        "        ).scalars()\n"
+        "    )",
+        "tests/integration/test_release_freeze_tool_invocation.py"
+        "::test_recovery_closes_the_open_windows_and_leaves_decided_ones_alone",
+    ),
+    (
+        "RF-18d the idempotency key is ignored",
+        "backend/app/ai/tracing.py",
+        "    if invocation_id:\n"
+        "        existing = (\n"
+        "            await session.execute(select(ToolCall).where(ToolCall.invocation_id == invocation_id))\n"
+        "        ).scalar_one_or_none()",
+        "    if False:\n"
+        "        existing = (\n"
+        "            await session.execute(select(ToolCall).where(ToolCall.invocation_id == invocation_id))\n"
+        "        ).scalar_one_or_none()",
+        "tests/integration/test_release_freeze_tool_invocation.py"
+        "::test_the_same_invocation_id_does_not_create_a_second_row",
+    ),
+    (
+        "RF-18e a refusal is recorded as a run",
+        "backend/app/ai/tracing.py",
+        "        status=ToolCallStatus.SKIPPED.value,\n"
+        "        error_message=reason[:2000],\n"
+        "        latency_ms=0,\n"
+        "        created_at=now,\n"
+        "        invocation_id=new_invocation_id(),\n"
+        "        started_at=now,\n"
+        "        finished_at=now,",
+        "        status=ToolCallStatus.RUNNING.value,\n"
+        "        error_message=reason[:2000],\n"
+        "        latency_ms=0,\n"
+        "        created_at=now,\n"
+        "        invocation_id=new_invocation_id(),\n"
+        "        started_at=now,\n"
+        "        finished_at=None,",
+        "tests/integration/test_release_freeze_tool_invocation.py"
+        "::test_a_duplicate_call_is_recorded_as_skipped_not_as_a_second_execution",
+    ),
+    (
+        "RF-18f an unclassified write is treated as replayable",
+        "backend/app/ai/types.py",
+        "        return \"idempotent\" if self.idempotent else \"unsafe\"",
+        "        return \"idempotent\"",
+        "tests/unit/test_release_freeze_tool_replay.py"
+        "::test_a_write_that_nobody_classified_is_unsafe",
+    ),
+    (
+        "RF-18g an unknown tool is assumed harmless",
+        "backend/app/ai/tracing.py",
+        "    if spec is None:\n        return \"unsafe\"",
+        "    if spec is None:\n        return \"read_only\"",
+        "tests/unit/test_release_freeze_tool_replay.py"
+        "::test_an_unknown_tool_is_treated_as_unsafe",
+    ),
+    (
+        "RF-18h the resolver only understands one registry shape",
+        "backend/app/ai/tools/registry.py",
+        "    lister = getattr(registry, \"specs\", None)\n"
+        "    if callable(lister):\n"
+        "        for spec in lister():\n"
+        "            if getattr(spec, \"name\", \"\") == name:\n"
+        "                return spec\n"
+        "    return None",
+        "    return None",
+        "tests/unit/test_release_freeze_tool_replay.py"
+        "::test_spec_for_resolves_through_specs_when_there_is_no_get_spec",
+    ),
 ]
 
 

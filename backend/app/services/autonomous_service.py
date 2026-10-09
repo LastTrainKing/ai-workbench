@@ -48,6 +48,7 @@ def _build_agent(
     owner_id: uuid.UUID,
     controller: RunController,
     deliverable_kind: str = "",
+    ai_run_id: uuid.UUID | None = None,
 ) -> AutonomousAgent:
     """Assemble an autonomous agent for one run."""
     # Scoped to the owner. A shared policy file meant one account's permission level
@@ -80,6 +81,10 @@ def _build_agent(
         limits=limits,
         working_directory=str(policy.workspace),
         deliverable_kind=deliverable_kind,
+        # So each tool invocation can be recorded against the run before it runs. The
+        # runner used to write nothing to `tool_calls`, which meant an interrupted run
+        # left no record of which concrete operation was in flight.
+        ai_run_id=ai_run_id,
     )
 
 
@@ -96,7 +101,7 @@ async def _execute_run(
     """The background half: run the agent and persist the outcome."""
     try:
         async with session_scope() as session:
-            agent = _build_agent(session, owner_id, controller, deliverable_kind)
+            agent = _build_agent(session, owner_id, controller, deliverable_kind, db_run_id)
             result = await agent.run(goal, context=context)
 
             # Persist the plan, the event stream and the outcome onto the AI run,

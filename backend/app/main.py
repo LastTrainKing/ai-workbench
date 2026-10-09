@@ -187,12 +187,21 @@ async def _reconcile_interrupted_agent_runs() -> None:
     from sqlalchemy import select
 
     from app.ai.agent.plan import RunState
+    from app.ai.tracing import resolve_orphan_tool_calls
     from app.domain.enums import RunStatus, RunType
     from app.infrastructure.database import session_scope
     from app.models.ai import AgentRun, AIRun
 
     try:
         async with session_scope() as session:
+            # Tool invocations first: a `RUNNING` row is the record of a tool that may
+            # have already changed something. Closing the *run* without closing its
+            # invocations would leave a run marked INTERRUPTED whose tool calls still
+            # claimed to be in flight — the run-level status and the call-level status
+            # would disagree about the same moment, which is the pairing that has to
+            # stay consistent for "was this already done?" to be answerable at all.
+            orphans = await resolve_orphan_tool_calls(session)
+
             rows = list(
                 (
                     await session.execute(
@@ -228,6 +237,14 @@ async def _reconcile_interrupted_agent_runs() -> None:
                     scratchpad = agent_run.scratchpad if isinstance(agent_run.scratchpad, dict) else {}
                     agent_run.scratchpad = {**scratchpad, "state": RunState.INTERRUPTED.value}
                 await session.commit()
+        if orphans:
+            logger.warning(
+                "orphan_tool_invocations_closed",
+                extra={
+                    "count": len(orphans),
+                    "undetermined_writes": [c.tool_name for c in orphans if c.mutates_state][:10],
+                },
+            )
         if rows:
             logger.warning(
                 "interrupted_agent_runs_closed",

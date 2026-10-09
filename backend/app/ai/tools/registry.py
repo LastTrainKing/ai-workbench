@@ -141,6 +141,16 @@ class ComputerToolRegistry:
     def get(self, name: str) -> Tool | None:
         return self._tools.get(name)
 
+    def get_spec(self, name: str) -> Any | None:
+        """The spec for `name`, or None.
+
+        The executor needs this to ask one question before a call runs: *can repeating
+        this be harmful?* `specs()` returns a list, and scanning it per call would work
+        but hides the intent; the lookup is the point.
+        """
+        tool = self._tools.get(name)
+        return tool.spec if tool is not None else None
+
     def names(self) -> list[str]:
         return sorted(self._tools)
 
@@ -201,10 +211,40 @@ def build_computer_registry(
     return ComputerToolRegistry(policy, enabled=enabled)
 
 
+def spec_for(registry: Any, name: str) -> Any | None:
+    """The spec for `name`, from any registry shape, or None.
+
+    **Why this exists rather than a call to `registry.get_spec`.** `get_spec` is a
+    convenience that `ToolRegistry` and `UnifiedToolRegistry` happen to provide. `specs()`
+    is the contract *every* registry satisfies — including the small stand-ins the test
+    suite drives the executor with. The executor asked for `get_spec` directly and four
+    tests that had nothing to do with tool classification stopped passing, because their
+    registry was a stub with `specs()`, `names()` and `execute()` and no reason to have
+    anything else.
+
+    The answer has to be right, not merely present: the executor uses it to decide whether a
+    call can be repeated after a crash, so a miss means "unknown tool", which is treated as
+    unsafe. Falling through to a linear scan of `specs()` is not a fallback that weakens the
+    check — it is the same question asked of the interface that is actually guaranteed.
+    """
+    getter = getattr(registry, "get_spec", None)
+    if callable(getter):
+        found = getter(name)
+        if found is not None:
+            return found
+    lister = getattr(registry, "specs", None)
+    if callable(lister):
+        for spec in lister():
+            if getattr(spec, "name", "") == name:
+                return spec
+    return None
+
+
 __all__ = [
     "ARTIFACT_TOOLS",
     "CAPABILITIES",
     "CapabilityGroup",
     "ComputerToolRegistry",
     "build_computer_registry",
+    "spec_for",
 ]

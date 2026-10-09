@@ -38,9 +38,15 @@ from app.ai.tools.audit import make_audit_sink
 from app.ai.tools.confirmation import get_broker
 from app.ai.tools.executor import ResourceLimits, ToolExecutor
 from app.ai.tools.permissions import AgentPolicy, default_workspace
-from app.ai.tools.registry import ComputerToolRegistry, build_computer_registry
+from app.ai.tools.registry import ComputerToolRegistry, build_computer_registry, spec_for
 from app.ai.tools.unified import UnifiedToolRegistry
-from app.ai.tracing import RunRecorder, persist_terminal_record
+from app.ai.tracing import (
+    RunRecorder,
+    begin_tool_call,
+    finish_tool_call,
+    persist_terminal_record,
+    record_skipped_call,
+)
 from app.ai.types import ChatMessage, ToolResult, estimate_tokens
 from app.core.config import settings
 from app.core.errors import AIError
@@ -392,17 +398,48 @@ class AgentExecutor:
                         f"检测到重复调用 `{request.name}`（相同参数），已主动终止以避免死循环。\n\n"
                         f"已完成的步骤：{len(steps)} 步。"
                     )
-                    await recorder.record_tool_call(
+                    # Nothing ran, so this row is written in one phase: there is no
+                    # window in which a side effect could have happened without being
+                    # recorded. Committed for the same reason every other terminal
+                    # record is — the caller's rollback must not erase it.
+                    await record_skipped_call(
+                        session,
+                        run=recorder.model_row,
                         tool_name=request.name,
                         arguments=request.arguments,
-                        result={"skipped": True, "reason": "duplicate call"},
-                        status="SKIPPED",
                         step_index=step_index,
-                        latency_ms=0,
-                        error_message="duplicate tool call detected",
+                        reason="duplicate tool call detected",
                         agent_run_id=agent_run.id,
                     )
+                    await session.commit()
                     break
+
+                # --- persist the intent, commit, *then* run the tool -------------
+                #
+                # The order is the fix. This row used to be written after
+                # `registry.execute` returned, so a process killed while the tool ran left
+                # no evidence the call had been attempted at all — and re-running the goal
+                # repeated it. For `file_append` or `git_commit` that is a duplicated side
+                # effect that nothing in the system could detect, because nothing had been
+                # written down.
+                #
+                # The commit is not optional and not interchangeable with a flush. A flush
+                # leaves the row inside this session's transaction: invisible to any other
+                # session, and discarded outright if the process dies — which is precisely
+                # the scenario the row exists for. The cost is one extra commit per tool
+                # call; the benefit is that "this call may have happened" is true from the
+                # moment the tool can start, rather than only if it finishes.
+                spec = spec_for(registry, request.name)
+                invocation = await begin_tool_call(
+                    session,
+                    run=recorder.model_row,
+                    tool_name=request.name,
+                    arguments=request.arguments,
+                    step_index=step_index,
+                    mutates_state=bool(getattr(spec, "mutates_state", False)),
+                    agent_run_id=agent_run.id,
+                )
+                await session.commit()
 
                 result: ToolResult = await registry.execute(
                     ctx, request.name, request.arguments
@@ -420,15 +457,14 @@ class AgentExecutor:
                 )
                 steps.append(step)
 
-                await recorder.record_tool_call(
-                    tool_name=request.name,
-                    arguments=request.arguments,
+                # Closes the window: `finished_at` is set, so this invocation is decided.
+                await finish_tool_call(
+                    session,
+                    invocation,
+                    ok=result.ok,
                     result=result.to_payload(),
-                    status="SUCCEEDED" if result.ok else "FAILED",
-                    step_index=step_index,
                     latency_ms=result.latency_ms,
                     error_message=result.error,
-                    agent_run_id=agent_run.id,
                 )
                 agent_run.steps_used = step_index
                 agent_run.scratchpad = [

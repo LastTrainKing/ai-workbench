@@ -230,6 +230,10 @@ class FileWriteTool(Tool):
         risk_level="low",
         timeout_seconds=20,
         mutates_state=True,
+        # Replay-safe: the tool overwrites, and the file it leaves behind is a function
+        # of `path` and `content` alone. Writing the same bytes twice leaves the same
+        # file with the same SHA-256, which is exactly what the result reports.
+        idempotent=True,
     )
 
     async def execute(
@@ -588,6 +592,9 @@ class DirectoryCreateTool(Tool):
         risk_level="low",
         timeout_seconds=15,
         mutates_state=True,
+        # Replay-safe: `mkdir(parents=True, exist_ok=True)` — the second call reports
+        # `created: false` and the filesystem is unchanged.
+        idempotent=True,
     )
 
     async def execute(self, ctx: ToolContext, path: str) -> ToolResult:

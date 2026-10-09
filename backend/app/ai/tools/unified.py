@@ -95,6 +95,20 @@ class UnifiedToolRegistry:
             names += self.computer.names()
         return sorted(set(names))
 
+    def get_spec(self, name: str) -> Any | None:
+        """The spec for `name`, across both halves of the union.
+
+        Resolved through `specs()` rather than through each half's own lookup, because
+        `specs()` is where the business-wins deduplication is decided. Asking the halves
+        separately would let this return the *computer* tool for a name that the model
+        was actually offered as a *business* tool — the same name resolving to two
+        different specs depending on who asked.
+        """
+        for spec in self.specs():
+            if spec.name == name:
+                return spec
+        return None
+
     def specs(self) -> list[Any]:
         """Business first, then computer tools, deduplicated by name.
 
