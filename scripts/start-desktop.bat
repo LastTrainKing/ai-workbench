@@ -96,6 +96,22 @@ if not exist "%ROOT%\frontend\dist\index.html" (
     )
 )
 
+REM --------------------------------------------- production environment file --
+REM Generated here, on first launch, and never overwritten.
+REM
+REM The installer used to copy `.env.example` to `.env`, which selects APP_ENV=dev,
+REM DEBUG=true and a placeholder SECRET_KEY - and under that configuration the backend
+REM seeds `demo / demo1234`. A fresh install came up in development mode with a known
+REM account. `init-env` writes APP_ENV=prod with a per-install random key instead.
+REM
+REM It runs on every launch and writes only when the file is absent, so a repair, an
+REM upgrade or a restart never rotates the key (which would sign the user out and can
+REM strand data encrypted under the old value).
+call :log "ensuring the production .env exists"
+set "PYTHONPATH=%ROOT%\backend"
+"%PYTHON%" -m app.cli init-env --root "%ROOT%" >>"%STARTUPLOG%" 2>&1
+if errorlevel 1 call :log "init-env exited non-zero; continuing with whatever .env is present"
+
 call :log "api: start requested"
 %PS% "scripts\dev.ps1" start -Only api
 if errorlevel 1 (

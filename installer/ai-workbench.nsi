@@ -314,14 +314,29 @@ Section "Install"
   ; a previous uninstall. An earlier design moved it aside on uninstall and moved it
   ; back here; that move is what failed and lost a database, and it is gone.
 
-  ; The environment file is written from the example, never from the developer's
-  ; own `.env` - that file holds an API key, and shipping it would put a real
-  ; credential inside the installer.
-  IfFileExists "$INSTDIR\.env" env_exists 0
-    IfFileExists "$INSTDIR\.env.example" 0 env_exists
-      CopyFiles /SILENT "$INSTDIR\.env.example" "$INSTDIR\.env"
-      DetailPrint "已生成 .env（不含任何密钥）"
-  env_exists:
+  ; The environment file is **generated on first launch**, not copied from the example.
+  ;
+  ; This used to be `CopyFiles .env.example .env`. The example selects `APP_ENV=dev`,
+  ; sets `DEBUG=true` and carries a placeholder `SECRET_KEY` — and under that
+  ; configuration the backend seeds `demo / demo1234`. So a fresh install came up in
+  ; development mode, with a known account, on a machine where this product reads the
+  ; user's files, runs commands and reaches the network. The sign-in screen printed the
+  ; credentials.
+  ;
+  ; `app.cli init-env` now writes a production file with a per-install random key, and
+  ; leaves an existing file untouched so an upgrade does not rotate the key and sign the
+  ; user out. It runs from `scripts\start-desktop.bat` before the API starts — the
+  ; launcher, not the installer, because the key must survive reinstalls and repairs, and
+  ; an installer step that runs again on every repair is the wrong place for it.
+  ;
+  ; `.env.example` is still shipped as a reference. It is never copied to `.env`.
+  IfFileExists "$INSTDIR\.env" env_present env_absent
+  env_absent:
+    DetailPrint "首次启动时会生成生产环境 .env（随机 SECRET_KEY，APP_ENV=prod）"
+    Goto env_done
+  env_present:
+    DetailPrint "检测到已有 .env，将保留（升级不会更换 SECRET_KEY）"
+  env_done:
 
   ; Point the copy at a data directory **outside** the program directory.
   ;

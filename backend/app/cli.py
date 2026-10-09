@@ -9,6 +9,7 @@ Usage::
     python -m app.cli reindex --knowledge-base <uuid>
     python -m app.cli stats
     python -m app.cli create-user --username alice --email a@b.com --password secret123
+    python -m app.cli init-env
 """
 
 from __future__ import annotations
@@ -17,6 +18,7 @@ import argparse
 import asyncio
 import sys
 import uuid
+from pathlib import Path
 
 from app.core.logging import configure_logging, get_logger
 
@@ -125,6 +127,31 @@ async def _create_user(username: str, email: str, password: str, display_name: s
     print(f"[+] user created: {user.username} <{user.email}> id={user.id}")
 
 
+def _init_env(root: Path | None) -> int:
+    """Create the production environment file, or leave an existing one alone.
+
+    Runs on every launch, so "already there" must mean "untouched" — rotating the key
+    each time would sign the user out of their own machine.
+    """
+    from app.core.config import PROJECT_ROOT
+    from app.core.production_env import ensure_production_env, env_problems
+
+    target_root = root or PROJECT_ROOT
+    written = ensure_production_env(target_root)
+    if written is not None:
+        print(f"[+] wrote {written} with a new random SECRET_KEY (APP_ENV=prod, DEBUG=false)")
+        return 0
+
+    env_path = target_root / ".env"
+    problems = env_problems(env_path)
+    print(f"[=] {env_path} already exists; left untouched")
+    if problems:
+        # Not a failure: this is a development checkout or a hand-edited install, and
+        # stopping the launcher over it would be worse than saying so.
+        print(f"[!] it is not production-safe: {', '.join(problems)}")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="app.cli", description="AI Workbench CLI")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -149,6 +176,14 @@ def main(argv: list[str] | None = None) -> int:
     create.add_argument("--email", required=True)
     create.add_argument("--password", required=True)
     create.add_argument("--display-name", default="")
+
+    init_env = sub.add_parser(
+        "init-env",
+        help="write a production .env on first run; never overwrites an existing one",
+    )
+    init_env.add_argument(
+        "--root", default="", help="project root to write into; defaults to this checkout"
+    )
 
     args = parser.parse_args(argv)
     configure_logging("cli")
@@ -193,6 +228,8 @@ def main(argv: list[str] | None = None) -> int:
             _create_user(args.username, args.email, args.password, args.display_name)
         )
         return 0
+    if args.command == "init-env":
+        return _init_env(Path(args.root) if args.root else None)
 
     parser.print_help()
     return 1
