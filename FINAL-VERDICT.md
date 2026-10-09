@@ -98,8 +98,12 @@ SYSTEM-level symlink behaviour, a clean-room machine, and Qt packaging.
 
 ## Minimum test list for when the new API key arrives
 
-Seven tests. They are the ones that cannot be done without a real endpoint, and they are
-ordered so the cheapest failure is found first.
+**Seven remain.** Six were closed in the next round using a local stub endpoint, because they
+never needed a key — only a controllable endpoint. See `ROUND-3-REPORT.md`.
+
+**Closed without a key** (all passing, against a real HTTP stub on loopback):
+empty response, malformed response, invalid JSON, loop detection, step ceiling, mid-run
+process kill, plus HTTP 503 and client timeout.
 
 | # | Test | Pass condition |
 |---|---|---|
@@ -107,14 +111,9 @@ ordered so the cheapest failure is found first.
 | 2 | One real agent run whose goal needs a tool | The tool actually ran; the observation reached the next turn |
 | 3 | RAG grounding on a real answer | `grounded=true` **and** every claim-bearing sentence carries a citation that resolves to a retrieved source |
 | 4 | Key entry through the native UI Settings page | Key saves, survives a restart, reads back as `api_key_set` with a mask and never in plaintext |
-| 5 | Provider timeout | Point `base_url` at a black-hole address → `TIMEOUT` recorded, no hang |
-| 6 | Provider network failure | Point `base_url` at a closed port → classified error, no retry storm |
-| 7 | Embedding with a real provider | Collection dimension matches; switching provider does not mix old vectors into the new collection |
-
-**Six more tests need no key at all** and could be done now with a local stub server:
-empty response, malformed response, loop detection, max steps, mid-run process kill, and
-invalid JSON from the provider. They are listed in `RELEASE-ACCEPTANCE.md` §3 with the
-others because they were not run this round — not because they are impossible.
+| 5 | Embedding with a real provider | Collection dimension matches; switching provider does not mix old vectors into the new collection |
+| 6 | Vendor-specific error semantics | A real 401/429 from DeepSeek is classified as the code claims, not only a synthetic one |
+| 7 | Whether the old key was revoked | The vendor dashboard says so |
 
 The provider entry point is in place for when the key arrives: **Settings → AI Provider** in
 the native UI, or `POST /api/v1/ai-config` in the WebView build. Either writes to the

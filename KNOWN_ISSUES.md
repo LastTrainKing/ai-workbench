@@ -19,10 +19,13 @@ revoked at the vendor.
 **Why it is not fixed here.** There is no key, and this round is explicitly forbidden from
 finding, borrowing or substituting one.
 
-**What was done instead.** Offline and mock providers were used, and they verify real
-business state rather than a success string: the agent run is checked against `ai_runs` and
-required to report `INCOMPLETE` / `max_steps`. Six of the thirteen blocked items need no key
-at all — only a local stub server — and are listed as such in `RELEASE-ACCEPTANCE.md` §3.
+**What was done instead.** Offline providers and a **real local HTTP stub** were used, and
+they verify real business state rather than a success string: the agent run is checked
+against `ai_runs` and required to report `INCOMPLETE` / `max_steps`. Eight of the items that
+were carried as blocked are now **closed** — empty response, malformed response, invalid
+JSON, loop detection, step ceiling, mid-run process kill, HTTP 503 and client timeout — all
+against the real transport. They never needed a key, only a controllable endpoint. See
+`ROUND-3-REPORT.md`.
 
 **What would close it.** A key, and the seven-test list in `FINAL-VERDICT.md`. The entry
 point is already in place: Settings → AI Provider, or `POST /api/v1/ai-config`. No source
