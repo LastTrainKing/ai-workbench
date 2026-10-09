@@ -149,6 +149,18 @@ async def test_a_run_that_is_also_live_appears_once(client: httpx.AsyncClient, s
 
 @pytest.mark.asyncio
 async def test_one_account_cannot_read_anothers_runs(client: httpx.AsyncClient, session) -> None:
+    """And the refusal is provably the ownership rule, not a malformed request.
+
+    The run-scoped routes used to raise `ValidationError`, which is **422 with
+    `code="validation_error"`** — byte-identical to what FastAPI returns when a request
+    body or path parameter fails validation. So "422" on its own proved nothing: a test
+    asserting `status == 422` would have passed just as happily if the request had simply
+    been broken, and a person reading a log could not tell the two apart.
+
+    Now the ownership refusal is 404 with `code="run_not_found"`, and this test pins both
+    halves of that: the refusal is a 404/`run_not_found`, and a genuinely malformed request
+    is a 422/`validation_error`. If they ever converge again, one of these fails.
+    """
     token_a, user_a = await _register(client)
     token_b, _user_b = await _register(client)
     run_id = await _store_run(
@@ -161,12 +173,65 @@ async def test_one_account_cannot_read_anothers_runs(client: httpx.AsyncClient, 
     assert run_id not in [entry["run_id"] for entry in listing["runs"]]
 
     by_id = await client.get(f"/agent/runs/{run_id}", headers={"Authorization": f"Bearer {token_b}"})
-    assert by_id.status_code != 200, "another account read the run by id"
+    body = by_id.json()
+    assert by_id.status_code == 404, f"expected the not-found answer, got {by_id.status_code}"
+    assert body["error"]["code"] == "run_not_found", body["error"]
 
-    # And the owner still can, so the refusal is about ownership and not about the route.
+    # The owner still gets it, so the refusal is about ownership and not about the route.
     own = await client.get(f"/agent/runs/{run_id}", headers={"Authorization": f"Bearer {token_a}"})
     assert own.status_code == 200
     assert own.json()["data"]["run_id"] == run_id
+
+    # **Existence is not confirmed.** A run id that does not exist at all produces the same
+    # status and the same code as one that exists but is not this account's — otherwise the
+    # endpoint would be an oracle for "does this run id exist".
+    missing = await client.get(
+        "/agent/runs/run_000000000000", headers={"Authorization": f"Bearer {token_b}"}
+    )
+    assert missing.status_code == by_id.status_code
+    assert missing.json()["error"]["code"] == body["error"]["code"]
+
+    # And the two failure kinds are still distinguishable. A malformed request is a 422
+    # with `validation_error`; the ownership refusal above is not.
+    malformed = await client.post(
+        "/agent/runs",
+        headers={"Authorization": f"Bearer {token_a}"},
+        json={"goal": "x"},  # shorter than the 3-character minimum
+    )
+    assert malformed.status_code == 422, malformed.status_code
+    assert malformed.json()["error"]["code"] == "validation_error"
+    assert malformed.json()["error"]["code"] != body["error"]["code"], (
+        "the ownership refusal and a malformed request are indistinguishable again"
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_refusal_comes_from_the_ownership_rule_not_the_route(client: httpx.AsyncClient, session) -> None:
+    """A wrong account is refused for a run that *does* exist and *is* readable by someone.
+
+    This is the control for the test above: the same id, the same route, the same token
+    shape — the only variable is which account the token belongs to. A 404 here cannot be
+    "the id was malformed" (the owner reads it fine) or "the route is missing" (the owner
+    gets a 200 from it).
+    """
+    token_a, user_a = await _register(client)
+    token_b, _user_b = await _register(client)
+    run_id = await _store_run(
+        session, owner_id=user_a, goal="归属对照", status=RunStatus.SUCCEEDED, state="COMPLETED"
+    )
+
+    owner_response = await client.get(
+        f"/agent/runs/{run_id}", headers={"Authorization": f"Bearer {token_a}"}
+    )
+    stranger_response = await client.get(
+        f"/agent/runs/{run_id}", headers={"Authorization": f"Bearer {token_b}"}
+    )
+
+    assert owner_response.status_code == 200, "the id or the route is wrong, not the account"
+    assert stranger_response.status_code == 404
+    assert stranger_response.json()["error"]["code"] == "run_not_found"
+    # The two accounts differ in exactly one thing: who they are.
+    assert owner_response.json()["data"]["run_id"] == run_id
 
 
 @pytest.mark.asyncio
@@ -250,3 +315,35 @@ async def test_the_status_filter_is_applied_by_the_database(
     ).json()["data"]
     assert [entry["goal"] for entry in body["runs"]] == ["坏的"]
     assert body["total"] == 1
+
+
+@pytest.mark.asyncio
+async def test_a_terminal_row_never_reports_a_running_state(client: httpx.AsyncClient, session) -> None:
+    """A row that has ended must not display as still going.
+
+    This is the shape of a real bug: the startup reconcile marked an interrupted run's row
+    `FAILED` while the run's scratchpad still said `EXECUTING`, and the history endpoint
+    reported `EXECUTING` — for a run that was over. The scratchpad is usually the more
+    informative source (it distinguishes `LIMIT_REACHED` from `CANCELLED`), so it is still
+    preferred when it agrees; it is only overridden when it contradicts a terminal row.
+    """
+    token, user_id = await _register(client)
+
+    stale = await _store_run(
+        session, owner_id=user_id, goal="被中断", status=RunStatus.FAILED, state="EXECUTING"
+    )
+    detailed = await _store_run(
+        session, owner_id=user_id, goal="超限", status=RunStatus.CANCELLED, state="LIMIT_REACHED"
+    )
+    running = await _store_run(
+        session, owner_id=user_id, goal="进行中", status=RunStatus.RUNNING, state="EXECUTING"
+    )
+
+    body = (
+        await client.get("/agent/runs?limit=50", headers={"Authorization": f"Bearer {token}"})
+    ).json()["data"]
+    by_id = {entry["run_id"]: entry for entry in body["runs"]}
+
+    assert by_id[stale]["state"] == "FAILED", "a finished run is being shown as still running"
+    assert by_id[detailed]["state"] == "LIMIT_REACHED", "the more specific state was flattened"
+    assert by_id[running]["state"] == "EXECUTING", "a running run lost its live state"

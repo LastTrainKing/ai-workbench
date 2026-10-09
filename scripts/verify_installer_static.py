@@ -108,12 +108,39 @@ def main() -> int:
         check("B", "declares an uninstaller", "WriteUninstaller" in source)
         check("B", "registers in Add/Remove Programs", "Uninstall\\${APP_NAME}" in source)
 
-        # The shortcut must point at the exe. This is the P0 lesson: a shortcut that
+        # Shortcuts must point at a real program. This is the P0 lesson: a shortcut that
         # resolved through wscript once opened Edge instead of the application.
+        #
+        # There are more than two now, and they are of two kinds. The app shortcuts (Start
+        # Menu and desktop) must target the exe. The repair shortcuts target
+        # `repair-install.bat` — a `.bat` on purpose, because the whole point of that entry
+        # point is that it runs when the installed program is too broken to start. An
+        # earlier version of this check asserted "exactly two shortcuts, all targeting the
+        # exe", which was true when there were two and would now either fail on correct
+        # behaviour or have to be weakened to "at least one is fine". Asserting the two
+        # kinds separately is stronger than either: every shortcut is now checked against
+        # the target its kind requires.
         shortcuts = re.findall(r'CreateShortCut "([^"]+)" "([^"]+)"', source)
-        check("B", "creates two shortcuts", len(shortcuts) == 2, str([s[0].split("\\")[-1] for s in shortcuts]))
-        for _, target in shortcuts:
-            check("B", f"shortcut target is the exe ({target.split(chr(92))[-1]})", target.endswith("${APP_EXE}"))
+        app_shortcuts = [s for s in shortcuts if s[1].endswith("${APP_EXE}")]
+        repair_shortcuts = [s for s in shortcuts if s[1].endswith("repair-install.bat")]
+        check(
+            "B",
+            "**every shortcut targets either the exe or the repair entry point**",
+            len(app_shortcuts) + len(repair_shortcuts) == len(shortcuts),
+            str([(s[0].split("\\")[-1], s[1].split("\\")[-1]) for s in shortcuts]),
+        )
+        check(
+            "B",
+            "creates the app shortcut in the Start Menu and on the desktop",
+            len(app_shortcuts) == 2,
+            f"{len(app_shortcuts)} app shortcuts",
+        )
+        check(
+            "B",
+            "creates at least one repair shortcut",
+            len(repair_shortcuts) >= 1,
+            f"{len(repair_shortcuts)} repair shortcuts",
+        )
         for forbidden in ("wscript", "start-hidden.vbs", "start.bat", "http://", "https://"):
             check("B", f"no shortcut goes through {forbidden}", forbidden not in source.lower())
 
@@ -145,9 +172,16 @@ def main() -> int:
         # Counted from *instructions*, not from the text: the comments explain the rule
         # and name MessageBox while doing so, and counting those reported five boxes
         # for three and a missing guard that was not missing.
+        #
+        # A box is guarded if it cannot appear during `/S`. There are two ways to write
+        # that in NSIS and both are in use here: the raw `IfSilent` jump, and LogicLib's
+        # `${IfNot} ${Silent}` block. The first version of this check only counted
+        # `IfSilent`, so it reported two unguarded boxes that were guarded — the fix is to
+        # teach the check the second form, not to delete the boxes.
         code_lines = [line.strip() for line in source.splitlines() if not line.strip().startswith((";", "#"))]
         boxes = sum(1 for line in code_lines if line.startswith("MessageBox"))
         guards = sum(1 for line in code_lines if line.startswith("IfSilent"))
+        guards += sum(1 for line in code_lines if line.startswith("${IfNot} ${Silent}"))
         check("B", "every MessageBox has a silent-mode branch", guards >= boxes, f"{boxes} boxes, {guards} guards")
 
         # Syntax. `/PPO` preprocesses without compiling, which catches syntax errors

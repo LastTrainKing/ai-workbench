@@ -22,7 +22,7 @@ from fastapi import APIRouter
 from pydantic import BaseModel, Field
 
 from app.api.deps import CurrentUser, DbSession
-from app.core.errors import ValidationError
+from app.core.errors import RunNotFoundError, ValidationError
 from app.core.response import ok
 
 router = APIRouter(prefix="/agent", tags=["agent-runs"])
@@ -67,7 +67,10 @@ def _owned_controller(run_id: str, user: CurrentUser) -> Any:
 
     controller = get_controller(run_id)
     if controller is None or controller.owner_id != user.id:
-        raise ValidationError("该运行不在本进程中（可能已结束或服务已重启）")
+        # 404 with its own code. Not `ValidationError`: that is 422 with
+        # `code="validation_error"`, which is also what FastAPI returns for a malformed
+        # request — so "not yours" and "your request was broken" were indistinguishable.
+        raise RunNotFoundError("该运行不在本进程中（可能已结束、服务已重启，或不属于当前账号）")
     return controller
 
 
@@ -87,7 +90,8 @@ async def _owned_run(run_id: str, user: CurrentUser, session: DbSession) -> dict
 
     row = await history_row_for(session, run_id, user.id)
     if row is None:
-        raise ValidationError("找不到该运行记录")
+        # Same answer for "no such run" and "not yours" — see `RunNotFoundError`.
+        raise RunNotFoundError("找不到该运行记录")
     return row
 
 
@@ -213,6 +217,8 @@ async def pause_run(run_id: str, user: CurrentUser) -> dict[str, Any]:
     _owned_controller(run_id, user)
     result = control(run_id, "pause")
     if not result["ok"]:
+        # A control that cannot be applied *is* a request-level problem, so this stays a
+        # ValidationError — the ownership check above is what must not be one.
         raise ValidationError(result["message"])
     return ok(result, message="已暂停")
 

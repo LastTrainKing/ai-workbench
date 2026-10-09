@@ -35,7 +35,10 @@ release is a preview.
 
 from __future__ import annotations
 
+import hashlib
 import json
+import shutil
+import uuid
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -45,6 +48,46 @@ from app.core.config import runtime_root
 from app.core.logging import get_logger
 
 logger = get_logger(__name__)
+
+#: Read size for hashing archived content.
+_CHUNK = 1024 * 1024
+
+
+def _file_sha256(path: Path) -> str:
+    """SHA-256 of a file, read in chunks."""
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while True:
+            chunk = handle.read(_CHUNK)
+            if not chunk:
+                break
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _tree_checksum(directory: Path) -> str:
+    """A deterministic digest of a directory's contents.
+
+    Sorted by relative path, and the path itself is hashed alongside each file's digest —
+    so a file that was renamed, or moved between two directories with identical contents,
+    produces a different checksum. Hashing only the file contents would call those two
+    archives equal.
+
+    This is what makes "the archive was written" checkable. Counting lines proves a file
+    exists; this proves the bytes are the bytes that were there.
+    """
+    digest = hashlib.sha256()
+    if not directory.is_dir():
+        return ""
+    for path in sorted(directory.rglob("*")):
+        if not path.is_file():
+            continue
+        relative = path.relative_to(directory).as_posix()
+        digest.update(relative.encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(_file_sha256(path).encode("ascii"))
+        digest.update(b"\n")
+    return digest.hexdigest()
 
 
 # --------------------------------------------------------------------------- #
@@ -125,18 +168,36 @@ class CleanupPlan:
 
 
 def _parse_timestamp(value: str) -> datetime | None:
-    """Snapshots store ``%Y-%m-%d %H:%M:%S``; accept ISO too."""
+    """Parse a snapshot timestamp as **local time**, and return it in UTC.
+
+    The snapshots are written by `time.strftime("%Y-%m-%d %H:%M:%S")`, which is local time
+    with no offset attached. The first version of this stamped `tzinfo=UTC` on it, which is
+    a claim the string does not make: on a machine at UTC+8 every snapshot appeared to have
+    been taken eight hours in the future, and a *negative* age is below any limit, so the
+    age rule silently stopped applying to everything.
+
+    It failed safe — everything looked too new to delete — which is why it was not noticed
+    until a test set the age limit to zero and still got no candidates. Failing safe is not
+    the same as being right, and a rule that never fires is not a rule.
+    """
     if not value:
         return None
     for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M:%S.%f"):
         try:
-            return datetime.strptime(value, fmt).replace(tzinfo=UTC)
+            naive = datetime.strptime(value, fmt)
         except ValueError:
             continue
+        # `astimezone` on a naive datetime interprets it in the machine's local zone,
+        # which is the zone it was written in, and converts to UTC.
+        return naive.astimezone(UTC)
     try:
-        return datetime.fromisoformat(value)
+        parsed = datetime.fromisoformat(value)
     except ValueError:
         return None
+    # `astimezone` handles both cases: an aware datetime is converted, and a naive one is
+    # interpreted in the machine's local zone — which is the zone the snapshot was written
+    # in. One call, because the two branches were identical.
+    return parsed.astimezone(UTC)
 
 
 def _age_days(created_at: str, now: datetime) -> float | None:
@@ -242,22 +303,34 @@ def apply_snapshot_cleanup(
     *,
     archive_dir: Path | None = None,
 ) -> dict[str, Any]:
-    """Execute a snapshot plan: archive first, then delete.
+    """Execute a snapshot plan: archive the whole snapshot, verify it, then delete.
 
-    The archive is written and **read back** before the first deletion. If it does not
-    read back, nothing is deleted and the report says so — an archive that silently failed
-    is worse than no archive, because it makes the deletion look recoverable.
+    ## What "archived" has to mean
+
+    The first version wrote each snapshot's `manifest.json` into a JSONL file. That is not
+    an archive. A snapshot directory is `manifest.json` **plus `files/`** — the copied
+    workspace content that `restore` reads — so a manifest-only archive restores a snapshot
+    that cannot restore anything. The whole directory is copied now.
+
+    And a copied directory is not a *verified* one. Each archived tree gets a checksum over
+    its sorted contents, the checksums go into `index.json`, and after writing, every tree
+    is re-hashed and compared against the index. If anything does not match, nothing is
+    deleted. Counting files would have caught a truncated write; only a checksum catches a
+    write that produced the wrong bytes.
     """
     archive_dir = archive_dir or (runtime_root() / "retention-archive")
     stamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
-    archive_path = archive_dir / f"snapshots-{stamp}.jsonl"
+    archive_root = archive_dir / f"snapshots-{stamp}"
+    index_path = archive_root / "index.json"
 
     report: dict[str, Any] = {
         "kind": "snapshot",
         "planned": len(plan.candidates),
+        "archived": 0,
         "deleted": 0,
         "failed": [],
-        "archive_path": str(archive_path),
+        "archive_dir": str(archive_root),
+        "index_path": str(index_path),
         "before": plan.total,
         "after": plan.total,
         "age_range": _age_range(plan.candidates),
@@ -268,25 +341,44 @@ def apply_snapshot_cleanup(
         report["notes"] = ["没有候选，未做任何改动"]
         return report
 
+    entries: list[dict[str, Any]] = []
     try:
-        archive_dir.mkdir(parents=True, exist_ok=True)
-        written = 0
-        with archive_path.open("w", encoding="utf-8") as handle:
-            for item in plan.candidates:
-                snapshot = manager.get(item.id)
-                if snapshot is None:
-                    continue
-                handle.write(
-                    json.dumps(
-                        {"plan_item": item.as_dict(), "manifest": snapshot.as_dict(include_files=True)},
-                        ensure_ascii=False,
-                    )
-                    + "\n"
-                )
-                written += 1
-        # Read it back. A file that exists is not a file that can be restored from.
-        with archive_path.open("r", encoding="utf-8") as handle:
-            recovered = sum(1 for line in handle if line.strip())
+        archive_root.mkdir(parents=True, exist_ok=False)
+        for item in plan.candidates:
+            snapshot = manager.get(item.id)
+            if snapshot is None:
+                report["failed"].append(f"{item.id}: 归档时已找不到该快照，已跳过")
+                continue
+            source = snapshot.directory
+            if not source.is_dir():
+                report["failed"].append(f"{item.id}: 快照目录不存在，已跳过")
+                continue
+            destination = archive_root / item.id
+            shutil.copytree(source, destination)
+            entries.append(
+                {
+                    "id": item.id,
+                    "created_at": item.created_at,
+                    "run_id": item.run_id,
+                    "reason": item.reason,
+                    "checksum": _tree_checksum(destination),
+                    "file_count": sum(1 for path in destination.rglob("*") if path.is_file()),
+                }
+            )
+
+        index_path.write_text(
+            json.dumps(
+                {
+                    "kind": "snapshot",
+                    "created_at": datetime.now(UTC).isoformat(),
+                    "policy": plan.policy,
+                    "entries": entries,
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
     except (OSError, ValueError) as exc:
         # `ValueError` and not just `OSError`: `mkdir` on a path with a NUL byte raises
         # `ValueError`, and an archive failure that escapes as a traceback instead of a
@@ -295,14 +387,16 @@ def apply_snapshot_cleanup(
         logger.error("snapshot_archive_failed", extra={"error": str(exc)})
         return report
 
-    if recovered != written or recovered != len(plan.candidates):
+    # Read the index back and re-hash every tree.
+    verification = verify_snapshot_archive(archive_root)
+    if not verification["ok"]:
         report["failed"].append(
-            f"归档校验失败：写入 {written} 条、读回 {recovered} 条、计划 {len(plan.candidates)} 条；未删除任何快照"
+            f"归档校验失败，未删除任何快照：{verification['mismatched']}"
         )
-        logger.error("snapshot_archive_mismatch", extra={"written": written, "recovered": recovered})
+        logger.error("snapshot_archive_mismatch", extra={"mismatched": verification["mismatched"]})
         return report
 
-    report["archived"] = recovered
+    report["archived"] = verification["verified"]
 
     for item in plan.candidates:
         try:
@@ -318,6 +412,107 @@ def apply_snapshot_cleanup(
     logger.info(
         "snapshot_cleanup_applied",
         extra={"deleted": report["deleted"], "before": report["before"], "after": report["after"]},
+    )
+    return report
+
+
+def verify_snapshot_archive(archive_root: Path) -> dict[str, Any]:
+    """Re-hash every archived tree and compare against the index.
+
+    Returns ``{"ok": bool, "verified": n, "mismatched": [...]}``. A missing index, a missing
+    tree, or a tree whose checksum differs all count as mismatches — "the archive is
+    readable" is not the same claim as "the archive is what was written".
+    """
+    index_path = archive_root / "index.json"
+    result: dict[str, Any] = {"ok": False, "verified": 0, "mismatched": [], "index": str(index_path)}
+    if not index_path.is_file():
+        result["mismatched"].append("index.json 不存在")
+        return result
+    try:
+        index = json.loads(index_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        result["mismatched"].append(f"index.json 无法解析：{type(exc).__name__}: {exc}")
+        return result
+
+    for entry in index.get("entries", []):
+        directory = archive_root / entry["id"]
+        actual = _tree_checksum(directory)
+        if not actual:
+            result["mismatched"].append(f"{entry['id']}: 归档目录不存在或为空")
+            continue
+        if actual != entry["checksum"]:
+            result["mismatched"].append(
+                f"{entry['id']}: 校验值不一致（记录 {entry['checksum'][:12]}… 实际 {actual[:12]}…）"
+            )
+            continue
+        result["verified"] += 1
+
+    result["ok"] = not result["mismatched"]
+    return result
+
+
+def restore_snapshot_archive(
+    archive_root: Path,
+    *,
+    snapshot_root: Path | None = None,
+    overwrite: bool = False,
+) -> dict[str, Any]:
+    """Put an archive's snapshots back, and verify what landed.
+
+    Verifies the archive **before** copying anything and again **after**, so a restore that
+    silently wrote a partial tree is reported rather than assumed good. Refuses to replace a
+    snapshot that already exists unless ``overwrite`` — restoring over a live snapshot would
+    destroy the version the user is actually relying on.
+    """
+    from app.ai.agent.snapshot import snapshot_root as default_root
+
+    target_root = snapshot_root or default_root()
+    report: dict[str, Any] = {
+        "kind": "snapshot",
+        "restored": 0,
+        "skipped": [],
+        "failed": [],
+        "archive_dir": str(archive_root),
+        "target_root": str(target_root),
+    }
+
+    pre = verify_snapshot_archive(archive_root)
+    report["archive_ok"] = pre["ok"]
+    if not pre["ok"]:
+        report["failed"].append(f"归档校验未通过，未恢复任何内容：{pre['mismatched']}")
+        return report
+
+    index = json.loads((archive_root / "index.json").read_text(encoding="utf-8"))
+    try:
+        target_root.mkdir(parents=True, exist_ok=True)
+    except (OSError, ValueError) as exc:
+        report["failed"].append(f"目标目录不可用：{type(exc).__name__}: {exc}")
+        return report
+
+    restored_ids: list[str] = []
+    for entry in index.get("entries", []):
+        destination = target_root / entry["id"]
+        if destination.exists() and not overwrite:
+            report["skipped"].append(f"{entry['id']}: 目标已存在，未覆盖")
+            continue
+        try:
+            if destination.exists():
+                shutil.rmtree(destination)
+            shutil.copytree(archive_root / entry["id"], destination)
+        except (OSError, ValueError) as exc:
+            report["failed"].append(f"{entry['id']}: 恢复失败 {type(exc).__name__}: {exc}")
+            continue
+        # Re-hash in place. A copy that landed with different bytes is not a restore.
+        if _tree_checksum(destination) != entry["checksum"]:
+            report["failed"].append(f"{entry['id']}: 恢复后校验值不一致")
+            continue
+        restored_ids.append(entry["id"])
+        report["restored"] += 1
+
+    report["restored_ids"] = restored_ids
+    logger.info(
+        "snapshot_archive_restored",
+        extra={"restored": report["restored"], "skipped": len(report["skipped"])},
     )
     return report
 
@@ -458,21 +653,33 @@ async def apply_audit_cleanup(
                     )
                     + "\n"
                 )
-        with archive_path.open("r", encoding="utf-8") as handle:
-            recovered = sum(1 for line in handle if line.strip())
     except (OSError, ValueError) as exc:
         report["failed"].append(f"归档失败，未删除任何记录：{type(exc).__name__}: {exc}")
         logger.error("audit_archive_failed", extra={"error": str(exc)})
         return report
 
-    if recovered != len(rows) or recovered != len(ids):
-        report["failed"].append(
-            f"归档校验失败：写入 {recovered} 条、计划 {len(ids)} 条；未删除任何记录"
-        )
-        logger.error("audit_archive_mismatch", extra={"recovered": recovered, "planned": len(ids)})
+    # The archive carries its own digest, and it is checked before anything is deleted —
+    # a row count says the file has lines, not that the lines hold the rows.
+    archive_digest = _file_sha256(archive_path)
+    try:
+        with archive_path.open("r", encoding="utf-8") as handle:
+            recovered_rows = [json.loads(line) for line in handle if line.strip()]
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        report["failed"].append(f"归档回读失败，未删除任何记录：{type(exc).__name__}: {exc}")
         return report
 
-    report["archived"] = recovered
+    if len(recovered_rows) != len(rows) or len(recovered_rows) != len(ids):
+        report["failed"].append(
+            f"归档校验失败：回读 {len(recovered_rows)} 条、计划 {len(ids)} 条；未删除任何记录"
+        )
+        logger.error("audit_archive_mismatch", extra={"recovered": len(recovered_rows), "planned": len(ids)})
+        return report
+    if _file_sha256(archive_path) != archive_digest:
+        report["failed"].append("归档在写入后发生变化，未删除任何记录")
+        return report
+
+    report["archived"] = len(recovered_rows)
+    report["archive_sha256"] = archive_digest
 
     try:
         result = await session.execute(delete(ToolAuditLog).where(ToolAuditLog.id.in_(ids)))
@@ -489,6 +696,96 @@ async def apply_audit_cleanup(
         "audit_cleanup_applied",
         extra={"deleted": report["deleted"], "before": report["before"], "after": report["after"]},
     )
+    return report
+
+
+async def restore_audit_archive(session: Any, archive_path: Path) -> dict[str, Any]:
+    """Insert archived audit rows back, verifying the file before and the rows after.
+
+    Two checks, because they catch different failures: the file digest catches a changed or
+    truncated archive, and the row count after insert catches rows that were written but
+    did not land — a duplicate id, a foreign key that no longer resolves. A restore that
+    reports success without re-reading what it inserted is a claim, not a result.
+    """
+    from sqlalchemy import func, select
+
+    from app.models.ai import ToolAuditLog
+
+    report: dict[str, Any] = {"kind": "audit", "restored": 0, "failed": [], "archive_path": str(archive_path)}
+    if not archive_path.is_file():
+        report["failed"].append("归档文件不存在")
+        return report
+
+    digest = _file_sha256(archive_path)
+    try:
+        rows = [
+            json.loads(line)
+            for line in archive_path.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        report["failed"].append(f"归档无法解析：{type(exc).__name__}: {exc}")
+        return report
+
+    report["archive_sha256"] = digest
+    report["archive_rows"] = len(rows)
+    if not rows:
+        report["failed"].append("归档为空")
+        return report
+
+    existing = set(
+        (
+            await session.execute(
+                select(ToolAuditLog.id).where(ToolAuditLog.id.in_([uuid.UUID(row["id"]) for row in rows]))
+            )
+        ).scalars()
+    )
+
+    inserted = 0
+    for row in rows:
+        row_id = uuid.UUID(row["id"])
+        if row_id in existing:
+            report["failed"].append(f"{row['id']}: 已存在，跳过")
+            continue
+        session.add(
+            ToolAuditLog(
+                id=row_id,
+                ai_run_id=uuid.UUID(row["ai_run_id"]) if row.get("ai_run_id") else None,
+                step_index=row.get("step_index", 0),
+                tool_name=row.get("tool_name", ""),
+                category=row.get("category", "general"),
+                decision=row.get("decision", "allow"),
+                reason=row.get("reason", ""),
+                risk_level=row.get("risk_level", "low"),
+                permission_level=row.get("permission_level", 0),
+                target=row.get("target", ""),
+                status=row.get("status", ""),
+                exit_code=row.get("exit_code"),
+                created_at=datetime.fromisoformat(row["created_at"]) if row.get("created_at") else None,
+            )
+        )
+        inserted += 1
+
+    try:
+        await session.commit()
+    except Exception as exc:
+        await session.rollback()
+        report["failed"].append(f"写入失败：{type(exc).__name__}: {exc}")
+        return report
+
+    # Read back what actually landed.
+    landed = int(
+        (
+            await session.execute(
+                select(func.count())
+                .select_from(ToolAuditLog)
+                .where(ToolAuditLog.id.in_([uuid.UUID(row["id"]) for row in rows]))
+            )
+        ).scalar_one()
+    )
+    report["restored"] = landed
+    if landed != len(rows):
+        report["failed"].append(f"恢复后核对不一致：写入 {inserted} 条，库中查到 {landed} 条，归档 {len(rows)} 条")
     return report
 
 
@@ -537,4 +834,7 @@ __all__ = [
     "plan_audit_cleanup",
     "plan_snapshot_cleanup",
     "policy_from_settings",
+    "restore_audit_archive",
+    "restore_snapshot_archive",
+    "verify_snapshot_archive",
 ]

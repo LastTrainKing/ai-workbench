@@ -159,6 +159,7 @@ async def _reconcile_interrupted_agent_runs() -> None:
     """
     from sqlalchemy import select
 
+    from app.ai.agent.plan import RunState
     from app.domain.enums import RunStatus, RunType
     from app.infrastructure.database import session_scope
     from app.models.ai import AgentRun, AIRun
@@ -191,6 +192,14 @@ async def _reconcile_interrupted_agent_runs() -> None:
                 )
                 for agent_run in agent_rows:
                     agent_run.status = RunStatus.FAILED.value
+                    # The scratchpad is what the history endpoint reads for the run's
+                    # *state*, and it still says whatever the run was doing when the
+                    # process died — `EXECUTING`, typically. Updating only `status` left the
+                    # two disagreeing: the row said FAILED and the API said EXECUTING, for
+                    # the same run. Reassigned rather than mutated in place, because an
+                    # in-place edit of a JSONB column is not tracked and would not be saved.
+                    scratchpad = agent_run.scratchpad if isinstance(agent_run.scratchpad, dict) else {}
+                    agent_run.scratchpad = {**scratchpad, "state": RunState.FAILED.value}
                 await session.commit()
         if rows:
             logger.warning(

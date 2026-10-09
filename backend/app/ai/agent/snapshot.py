@@ -78,6 +78,16 @@ def _snapshot_root() -> Path:
     return runtime_root() / "snapshots"
 
 
+def snapshot_root() -> Path:
+    """Where snapshots live. Public so retention can restore into the same place.
+
+    A restore that guessed its own path would put snapshots somewhere the manager does not
+    look, and the result would be "the archive restored successfully" followed by a list
+    that does not contain them.
+    """
+    return _snapshot_root()
+
+
 @dataclass
 class FileEntry:
     path: str  # relative, POSIX separators

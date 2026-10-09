@@ -295,8 +295,20 @@ def main() -> int:
             "the other account's list does not contain it",
             run_id not in [entry["run_id"] for entry in listing["data"]["runs"]],
         )
-        status, _ = call("GET", f"/agent/runs/{run_id}", token=other_token)
-        check("the other account cannot read it by id", status != 200, f"status={status}")
+        status, body = call("GET", f"/agent/runs/{run_id}", token=other_token)
+        check(
+            "**the other account is refused by the ownership rule, not by request validation**",
+            status == 404 and body.get("error", {}).get("code") == "run_not_found",
+            f"status={status} code={body.get('error', {}).get('code')}",
+        )
+        # The owner can read the same id from the same route, so the refusal above is about
+        # who is asking and not about the id or the route.
+        status, body = call("GET", f"/agent/runs/{run_id}", token=token)
+        check(
+            "the owner reads the same id from the same route",
+            status == 200 and body.get("data", {}).get("run_id") == run_id,
+            f"status={status}",
+        )
 
         print("\n=== 8. clean up the rows this script created ===")
         removed = asyncio.run(_delete_run(run_id))

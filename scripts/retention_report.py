@@ -122,7 +122,40 @@ def main() -> int:
     parser.add_argument("--apply", action="store_true", help="apply the plan (needs --confirm)")
     parser.add_argument("--confirm", action="store_true", help="confirm applying the plan")
     parser.add_argument("--json", action="store_true", help="print the plan as JSON")
+    parser.add_argument(
+        "--verify-archive",
+        metavar="DIR",
+        help="re-hash an archive directory and report mismatches",
+    )
+    parser.add_argument(
+        "--restore-archive",
+        metavar="DIR",
+        help="restore snapshots from an archive directory (refuses a tampered archive)",
+    )
+    parser.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="with --restore-archive, replace a snapshot that is still present",
+    )
     args = parser.parse_args()
+
+    # Recovery is the half of retention nobody exercises until they need it, so it gets a
+    # command of its own rather than being reachable only from Python.
+    if args.verify_archive:
+        from app.ai.agent.retention import verify_snapshot_archive
+
+        result = verify_snapshot_archive(Path(args.verify_archive))
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0 if result["ok"] else 1
+
+    if args.restore_archive:
+        from app.ai.agent.retention import restore_snapshot_archive
+
+        result = restore_snapshot_archive(
+            Path(args.restore_archive), overwrite=args.overwrite
+        )
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0 if not result["failed"] else 1
 
     both = not (args.snapshots or args.audit)
     policy = __import__("app.ai.agent.retention", fromlist=["policy_from_settings"]).policy_from_settings()

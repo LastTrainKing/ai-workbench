@@ -67,6 +67,25 @@ class NotFoundError(AppError):
     code = "not_found"
 
 
+class RunNotFoundError(NotFoundError):
+    """A run that does not exist, or does not belong to the caller.
+
+    **Its own class, because the status code alone was ambiguous.** Run-scoped routes used
+    to raise `ValidationError`, which is 422 with `code="validation_error"` — the exact
+    response FastAPI produces when a request body or path parameter fails validation. Two
+    completely different facts produced byte-identical errors: "the run is not yours" and
+    "your request was malformed". A client, a test, or a person reading a log could not
+    tell them apart, and a test asserting "422 means access was denied" would pass just as
+    happily when the request was simply broken.
+
+    404 rather than 403, and the same answer for "missing" and "not yours", so the response
+    does not confirm that a run id exists to a caller with no right to know. The distinct
+    `code` is what makes it checkable.
+    """
+
+    code = "run_not_found"
+
+
 class ConflictError(AppError):
     status_code = status.HTTP_409_CONFLICT
     code = "conflict"

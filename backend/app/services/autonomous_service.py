@@ -423,9 +423,31 @@ _STATUS_TO_STATE: dict[str, str] = {
 }
 
 
+def _resolve_state(status: str, scratchpad_state: str | None) -> str:
+    """Which `RunState` to report for a stored run.
+
+    The scratchpad holds the finer-grained state the run last set — it distinguishes
+    `LIMIT_REACHED` from `CANCELLED`, which the row status cannot. So a terminal scratchpad
+    state wins: it is strictly more informative and it agrees with the row.
+
+    A **non-terminal** scratchpad state on a row that has ended is stale, and reporting it
+    would tell the user a finished run is still going. That is not hypothetical: the startup
+    reconcile marked an interrupted run's row `FAILED` while its scratchpad still said
+    `EXECUTING`, and the history endpoint showed `EXECUTING` for a run that was over.
+    """
+    terminal_states = {"COMPLETED", "FAILED", "CANCELLED", "LIMIT_REACHED"}
+    mapped = _STATUS_TO_STATE.get(status, status)
+    if scratchpad_state and scratchpad_state in terminal_states:
+        return scratchpad_state
+    if status != RunStatus.RUNNING.value:
+        # The row says the run ended, so the state must say so too.
+        return mapped
+    return scratchpad_state or mapped
+
+
 def _history_row(agent_run: Any, ai_run: Any) -> dict[str, Any]:
     scratchpad = agent_run.scratchpad if isinstance(agent_run.scratchpad, dict) else {}
-    state = scratchpad.get("state") or _STATUS_TO_STATE.get(ai_run.status, ai_run.status)
+    state = _resolve_state(ai_run.status, scratchpad.get("state"))
     return {
         "run_id": ai_run.run_id,
         "db_run_id": str(ai_run.id),
