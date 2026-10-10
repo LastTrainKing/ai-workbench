@@ -449,3 +449,59 @@ SHA-256 `980bae6f…`）静默安装。这是**升级**：同目录、同 `data-
 而页面自己的 `loadPermissions` 是跨线程的往返，400 ms 不总是够——不够时三项检查报
 「页面 '' / 服务 'supervised'」，读起来像产品缺陷，实际是这个文件里的竞态。
 改成**等待它即将断言的那个条件**（`policy` 非空，上限 5 秒）。连跑三次均 21/21。
+
+---
+
+## J. 本轮的验证结果
+
+| 验证 | 命令 | 结果 |
+|---|---|---|
+| 后端全量测试 | `pytest tests -q` | **1341 passed / 10 skipped / 0 failed**（857.91s） |
+| 变异校验 | `scripts/verify_release_freeze_mutations.py` | **33/33 CAUGHT** |
+| 原生安装验收 | `scripts/verify_native_installer.py` | **41/41 PASS** |
+| 权限页（原生） | `desktop-native/verify_permissions_page.py` | **21/21**（连跑三次） |
+| Planner / 搜索 / 图谱（原生） | `desktop-native/verify_planner_search_graph.py` | **22/22** |
+| 用户数据完整性 | `scripts/verify_user_data_integrity.py` | **12/12** |
+| 沙箱越权 | `scripts/verify_workspace_escape.py` | **6/6** |
+| Qdrant key | `scripts/verify_qdrant_key.py` | **12/12** |
+
+**本轮真实模型调用 0 次，¥0.00。** 累计仍是 ¥0.01。
+
+### J.1 关于安装验收 41/41 与 34/37
+
+同一个脚本，两次不同的结果，原因是环境而不是代码：
+
+- **34/37**：跑之前本机没有服务在跑，于是第 7 步「安装后的 EXE 启动」自己把服务栈拉了起来，
+  pgdata 就被建了；第 8 步再检查「数据目录在启动前是空的」自然不成立。
+- **41/41**：跑之前开发栈占着端口，第 7 步拉不起自己的栈，第 8 步停掉开发栈后从零初始化。
+
+也就是说这三项**只有在另一个服务栈占着端口时才通过**。这是验收脚本的顺序依赖，
+不是产品缺陷——两次运行里，安装、启动、服务拉起、schema 从零建成、真实业务写入与读回、
+重启持久化、卸载留数据、重装可启动、真实数据未被动，**全部 PASS**。
+
+### J.2 本轮改动过的文件
+
+| 文件 | 改动 |
+|---|---|
+| `CLEANUP_PLAN.md` | 新增：清理清单与判定理由 |
+| `scripts/cleanup_artifacts.py` | 新增：执行清理并记录失败 |
+| `desktop-native/verify_permissions_page.py` | 修掉导航后的读取竞态 |
+| `NATIVE-MIGRATION-PROGRESS.md` | 本报告 |
+
+**没有改动任何产品代码。** 本轮是收尾与交付，不是开发。
+
+## K. 提交链
+
+```
+18464c3  round 7 结束
+7f606b4  P0 用户数据隔离与结构性防护
+32a22d8  P1 权限：批准必须被兑现，拒绝必须给补救
+bd95a6c  P1 权限页
+d2d657d  P1 搜索 / 图谱 / Planner
+c72f456  P1 embedding 模型守卫
+2a48809  P0 最终安装包与本机安装
+2c45959  chore 清理验收产物
+f0bebf0  docs round 8：清理、最终安装、关闭应用对 PostgreSQL 做了什么
+```
+
+工作区：干净。
