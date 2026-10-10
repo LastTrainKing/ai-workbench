@@ -235,10 +235,17 @@ class ServiceBridge(QObject):
     @Slot(str)
     def loadDashboard(self, request_id: str) -> None:
         async def work() -> dict[str, Any]:
+            from app.infrastructure.database import session_scope
             from app.services.stats_service import StatsService
 
             owner = await self._owner()
-            return await StatsService().dashboard(owner_id=owner)
+            # Inside a session scope, like every other slot here. This one was written as
+            # `StatsService()` — no session, no scope — so the home screen failed on its
+            # first call with "missing 1 required positional argument: 'session'". The page
+            # still rendered, which is why it read as a broken *page* rather than a missing
+            # session: every panel sat on "读取中…" and the toast carried the traceback.
+            async with session_scope() as session:
+                return await StatsService(session).dashboard(owner_id=owner)
 
         self._submit(request_id, work)
 
