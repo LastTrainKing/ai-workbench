@@ -305,3 +305,147 @@ Embedding Provider **和** 向量库，两者都没有时**直接报错**而不�
 
 - `AgentWorkbenchPage` / `ProjectDetailPage` / `WorkbenchPage` 三个页面：本轮未实现，不是测试未跑
 - 验收包中 `docs/`、`screenshots/` 是否与仓库内容重复：删除前未核实（A.4）
+
+---
+
+# Native migration progress — round 8（最终收尾）
+
+把项目从「开发完成」整理成「可以交付和正常使用」。**没有重新设计架构，没有扩大范围。**
+
+本轮起点：`2a48809`（工作区干净）。终点：见文末提交链。
+
+---
+
+## F. 任务一 —— 整理验收产物
+
+清单在 `CLEANUP_PLAN.md`，执行脚本是 `scripts/cleanup_artifacts.py`，结果在 `build/cleanup-report.json`。
+
+**执行结果：删除 37,121 个文件 / 2,381.9 MB，失败 0 项。**
+
+| 已删除 | 文件数 | 大小 | 为什么可以删 |
+|---|---|---|---|
+| `.runtime/snapshots/` | 17,039 | 680.7 MB | 测试生成的文档快照 |
+| `build/native-installer-payload/` | 3,928 | 483.9 MB | `build_native_installer.py` 每次重新装配 |
+| `.runtime/qdrant/` | 1,490 | 462.5 MB | **开发用**向量库 |
+| `build/installer-payload/` | 8,747 | 444.0 MB | 旧 Web 安装器的中间载荷 |
+| `.runtime/pgdata/` | 2,675 | 167.0 MB | **开发用**集群（id `7692108033577590720`） |
+| `desktop-native/build/` | 16 | 66.9 MB | PyInstaller 中间目录 |
+| `.runtime/workspace` 等 | 630 | 29.6 MB | 开发栈运行状态 |
+| `%TEMP%` 下 99 个残留临时目录 | — | 39.6 MB | 验收脚本的一次性目录 |
+
+**保留**：最终安装包、13 个历史归档、`build/install-backup/`（安装前用户数据备份）、
+全部证据 JSON、`desktop-native/dist/`（打包验收的输入）、用户真实数据。
+
+### F.1 两个集群必须分清
+
+| 集群 | system identifier | 属于 |
+|---|---|---|
+| `ai-workbench\.runtime\pgdata` | `7692108033577590720` | 开发栈 |
+| `%LOCALAPPDATA%\AI Workbench Data\.runtime\pgdata` | `7694244596779072996` | **用户真实数据** |
+
+只删了前者。
+
+## G. 任务二 —— 验收包删除问题
+
+**结论：本轮没有需要删的验收包，上一轮的 `AI-Workbench-Review` 已经删掉了。**
+
+对「删不掉」的排查结果（逐项排除，不是猜测）：
+
+| 可能原因 | 检查 | 结果 |
+|---|---|---|
+| 文件句柄占用 | 枚举 `AI-Workbench-Native` / `postgres` / `redis` / `qdrant` / `python` 进程 | 0 个相关进程 |
+| 只读属性 | `build` / `.runtime` / `desktop-native\dist` 递归扫描 | 0 项 |
+| ACL / owner | `Get-Acl` 三项 | owner = `DESKTOP-EQ3UDED\user`，FullControl，继承正常，未阻断 |
+| 路径过长 | 全仓库递归 | 最长 239 字符，0 项 ≥ 260 |
+| junction / 符号链接 | `build` 下递归查 ReparsePoint | 0 个 |
+| 权限不足 | 当前账户 = owner | 有完全控制权 |
+
+**实测**：实际删除 `build/` 与 `.runtime/` 的 2.38 GB、37,121 个文件，**0 失败**。
+删除后复查：目标不存在、无同名残留、Git 仍 clean、安装包仍在、用户数据指纹一致。
+
+**结论：当前不存在「只能靠重启删除」的状态。** 脚本把每个删除失败的文件与异常类型都记进
+`build/cleanup-report.json` 的 `failures` 数组；该数组为空，这就是「没有删不掉的东西」的证据。
+
+### G.1 一件我自己造成的事故（如实记录）
+
+生成清理计划之前，我用「每个目录删一个文件」的方式探测可删性，**误删了 3 个文件**：
+
+| 被删 | 影响 | 处理 |
+|---|---|---|
+| `build/installer/AI-Workbench-Native-Setup.exe` | **主交付物** | 从同一提交重建，SHA-256 与原来**逐字节相同** |
+| `build/native-installer-payload/AI-Workbench-Native.exe` | 中间产物 | 随重建恢复 |
+| `build/restored-user-data/native-startup.log` | 上一轮事故文件的副本 | 事故本身已记录在 round 7 报告，非唯一证据 |
+
+教训已写进 `CLEANUP_PLAN.md` §5：**探测可删性要用改名，不能用删除。**
+
+## H. 任务三 / 四 —— 最终安装与用户环境
+
+### H.1 真实安装
+
+从最终安装包 `build\installer\AI-Workbench-Native-Setup.exe`（124,181,019 字节，
+SHA-256 `980bae6f…`）静默安装。这是**升级**：同目录、同 `data-dir.txt`，不是并列新装。
+
+安装后：安装目录 4,003 个文件；`VERSION` = `2.2.0`；注册表 `DisplayVersion` = `2.2.0`；
+桌面与开始菜单快捷方式都刷新到 `21:52`。
+
+### H.2 模拟普通用户
+
+| 步骤 | 结果 |
+|---|---|
+| 双击桌面 `AI Workbench.lnk` | 启动，进程路径 = 安装目录的 EXE，窗口标题 `AI Workbench` |
+| UI 正常显示 | 自检 9 项全过（标题 / 尺寸 / 可见 / bridge 34 个槽 / QML 对象树 / 字体 / 无 QML 警告） |
+| 服务自动启动 | 应用自己拉起 PostgreSQL 16.4 / Redis / Qdrant，日志 `Infrastructure READY (8.9s total)` |
+| 数据库连接 | 读到 33 张表、2 个账号、1 个项目 |
+| 关闭软件 | 0 个残留应用进程，三个端口全部释放 |
+| 再启动 | 数据仍在（见 H.3 的指纹） |
+
+**创建账号 / 项目 / 知识库 / 导入文件 / 查询这五步没有在真实数据上做** —— 用户明确要求
+「不要在真实用户数据中执行破坏性验收操作」，所以它们在**隔离的安装目录与隔离的数据目录**里
+执行（`scripts/verify_native_installer.py`，41/41）：静默安装 → 清空的数据目录里自己拉起服务
+→ schema 由迁移从零建成 → 通过服务层真实写入一个账号与一个项目 → 由安装后的 EXE 读回
+→ 重启后数据仍在 → 卸载删程序留数据 → 重装仍可启动。
+
+### H.3 用户数据完整性
+
+| 时点 | 文件数 | 字节数 |
+|---|---|---|
+| 本轮开始 | 1540 | 68,476,119 |
+| 清理之后 | 1540 | 68,476,119 |
+| 启动并关闭之后 | 1540 | 68,479,484 |
+| 隔离验收之后 | 1540 | 68,479,484 |
+
+**文件数全程不变。** 启动后变化的 29 个文件全部是运行时簿记：WAL 段、`pg_control`、
+`postmaster.pid`、`pids\postgres.pid`、5 个日志、Qdrant 的 `config.yaml`。
+**没有一个是用户数据文件**，没有新增、没有删除、没有改名。
+
+隔离验收自己也核对了：`(1540, 68479484, '1791640512.210') -> (1540, 68479484, '1791640512.210')`。
+
+## I. 任务五 / 六 / 七
+
+见交付包 `C:\Users\user\Desktop\AI-Workbench-Release\`：
+`文档\FINAL_ACCEPTANCE.md`（版本、哈希、测试数量、能力清单）、
+`文档\SECURITY_REVIEW.md`、`文档\KNOWN_LIMITATIONS.md`。
+
+### I.1 本轮新发现并记录的限制
+
+**关闭应用时 PostgreSQL 不是优雅停止的。** 应用关闭走 `runtime.stop()` →
+`scripts/stop-by-pid.ps1`，该脚本对记录的 pid 执行 `taskkill /PID <pid> /T /F`。
+证据：正常关闭应用后，用户集群的 `pg_controldata` 状态是 `in production`，
+且 `pgdata\postmaster.pid` 残留（pid 40348）。
+
+后果：下次启动时 PostgreSQL 走崩溃恢复。**这是 PostgreSQL 为断电场景设计的常规路径，
+不会丢数据**，但每次启动都要重放 WAL，且留下陈旧 pid 文件。
+
+未修的原因：修它要改关闭路径，而该路径目前验证为可用（0 残留进程、端口全释放）；
+用户明确要求不扩大范围。已记入 `KNOWN_LIMITATIONS.md` D-1 一类。
+
+**静默安装的「应用正在运行」守卫分支逻辑相反**（`installer/ai-workbench-native.nsi:130`
+的 `IfSilent 0 +2`）。只在「应用正在运行 **且** `/S`」时触发，本轮未实测该分支，
+只做了源码级确认，已记入 `KNOWN_LIMITATIONS.md` D-1。
+
+### I.2 本轮修掉的一个验证脚本缺陷
+
+`desktop-native/verify_permissions_page.py` 在导航后固定 `pump(400)` 就去读 `policy`，
+而页面自己的 `loadPermissions` 是跨线程的往返，400 ms 不总是够——不够时三项检查报
+「页面 '' / 服务 'supervised'」，读起来像产品缺陷，实际是这个文件里的竞态。
+改成**等待它即将断言的那个条件**（`policy` 非空，上限 5 秒）。连跑三次均 21/21。

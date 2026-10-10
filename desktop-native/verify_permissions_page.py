@@ -24,6 +24,7 @@ import json
 import os
 import sys
 import tempfile
+import time
 import uuid
 from pathlib import Path
 
@@ -132,6 +133,19 @@ def go_to_permissions(window: object) -> object:
     page = loader.property("item")
     if page is None:
         raise SystemExit("permissions 页面没有加载出来")
+
+    # Wait for the *condition* the checks are about to read, not for a fixed duration.
+    #
+    # `pump(400)` above is enough for the Loader to build the page, and not always enough for
+    # the page's own `loadPermissions` round trip to come back — the bridge runs it on its own
+    # thread. When it had not, `policy` was empty and three checks failed with "页面 '' /
+    # 服务 'supervised'", which reads as a product defect and is a race in this file. Bounded
+    # so a page that genuinely never loads still fails, just after 5 s instead of immediately.
+    deadline = time.monotonic() + 5.0
+    while time.monotonic() < deadline:
+        if read_value(page, "policy"):
+            break
+        pump(100)
     return page
 
 
