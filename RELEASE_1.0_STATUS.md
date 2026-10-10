@@ -6,12 +6,12 @@
 |---|---|
 | 版本 | **2.2.0** |
 | 分支 | `fix/release-freeze-20261009` |
-| 提交 | `d491d8b` 关闭流程 · `45744b6` 三个页面 · `0ef8e65` 快捷键 |
+| 提交 | `d491d8b` 关闭流程 · `45744b6` 三个页面 · `0ef8e65` 快捷键 · `58079c2` 首页 session · `b054105` 图标 |
 | 安装包 | `C:\Users\user\Desktop\AI-Workbench-Release\安装包\AI-Workbench-Native-Setup.exe` |
-| 安装包大小 | 124,194,886 字节（118.4 MB） |
-| 安装包 SHA-256 | `67e5d226453c6540eec302f356ce93352fdda998a89794f565780adf87496437` |
+| 安装包大小 | 124,499,433 字节（118.7 MB） |
+| 安装包 SHA-256 | `e4010b40e5159f7408d63299ee94dc8d5290faa2e09317838db8c057b3e40144` |
 | 已安装 EXE | `C:\Users\user\AppData\Local\AI Workbench\AI-Workbench-Native.exe` |
-| 已安装 EXE SHA-256 | `76d61b3009b7450c1fb85e4f1ada9fe9dc1dae5d4418506a00b707830c334393` |
+| 已安装 EXE SHA-256 | `dbb7c3a15eb1a3abbe68293c7230baa62008b24c214d2a25100fa07c6e756454` |
 | 数据目录 | `C:\Users\user\AppData\Local\AI Workbench Data` |
 | 桌面快捷方式 | `C:\Users\user\Desktop\AI Workbench.lnk` |
 
@@ -42,12 +42,12 @@
 | 运行历史与详情、UNKNOWN 对账 | 可用 |
 | 任务、笔记、搜索、知识图谱、Planner | 可用 |
 | 权限：四档 + 路径级 + 拒绝清单，改动真实生效 | 可用 |
-| 设置：AI Provider 与 API Key | 可用 |
+| 设置：AI Provider 与 API Key | 可用，**已配置 DeepSeek**（见下） |
 | 安装 / 升级 / 卸载 / 重装，保留数据 | 已验证 |
 | **正常关闭不残留进程，数据库优雅停止** | 已验证（连续 10 轮） |
 | 读取迁移之前建立的旧数据库 | 已验证 |
 
-测试：后端 **1343 passed / 10 skipped / 0 failed**；安装验收 **41/41**；原生 shell **31/31**；变异 **33/33**。
+测试：后端 **1344 passed / 10 skipped / 0 failed**；安装验收 **41/41**；原生 shell **31/31**；变异 **33/33**。
 
 ## 5. 未完成
 
@@ -63,9 +63,19 @@
 ## 6. 你的下一步
 
 1. 双击桌面 `AI Workbench` 打开。
-2. 首页右上角「填写 API Key」→ 填入 DeepSeek Key。填之前也能用，用的是内置离线引擎。
+2. **AI 已经配好了**（DeepSeek，模型 `deepseek-flash`），可以直接对话和跑 Agent，不用再填 Key。
+   要换 Key 或换模型：首页「AI 设置」。
 3. 想让它读你的资料：首页「导入资料」→ 建一个知识库 → 导入文件。
 4. 想让 Agent 干活：左侧 **Agent** → 写下目标 → 开始执行。
+
+**关于费用**：用的是你自己的 DeepSeek 额度。当前配置只用 `deepseek-flash` 这一个模型。
+一次真实调用的实测：82 tokens、0.98 秒。注意**应用自己的费用估算对 `deepseek-flash` 显示 0**——
+它的价格表里没有这个模型（只有 `deepseek-chat` / `deepseek-reasoner`），所以「运行记录」里的
+成本是空白的。要知道花了多少，看 DeepSeek 后台，不要看这个数字。
+
+**Key 存在哪里**：`C:\Users\user\AppData\Local\AI Workbench Data\.runtime\ai-config\<账号>.json`。
+不在源码里、不在 Git 里、不在安装包里、不在任何报告里；界面读回时只返回「是否已填」和掩码。
+换机器或重装：这个文件在数据目录里，会跟着数据一起保留（备份时一起复制走）。
 
 **备份数据**：整个 `C:\Users\user\AppData\Local\AI Workbench Data` 目录复制走即可。
 交付包里另有两份数据库转储（`备份\database-backup\`）。
@@ -77,6 +87,6 @@
 
 ## 7. 判断
 
-**RELEASE CANDIDATE 1.0** —— 可安装、可启动、历史数据可读、核心 Agent 页面可用、正常关闭无数据库异常。
+**RELEASE CANDIDATE 1.0** —— 可安装、可启动、历史数据可读、核心 Agent 页面可用、正常关闭无数据库异常、AI 已接入真实模型。
 
 进 1.0 正式版还差：代码签名。
