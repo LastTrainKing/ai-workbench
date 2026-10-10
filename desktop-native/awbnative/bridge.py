@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import uuid
 from pathlib import Path
@@ -35,6 +36,23 @@ from PySide6.QtCore import Property, QObject, QUrl, Signal, Slot
 from PySide6.QtGui import QDesktopServices
 
 from awbnative.async_runner import AsyncRunner
+
+logger = logging.getLogger(__name__)
+
+#: What the banner calls each part of the local environment. The banner is the first thing a
+#: person sees and it is not a place to name an engine: "PostgreSQL 不可用" tells someone who
+#: has never heard of PostgreSQL nothing about whether they can use the product. The engine
+#: names are still in the startup report and in Settings, which is where they are useful.
+_PLAIN_SERVICE_NAMES = {
+    "database": "数据存储",
+    "redis": "缓存",
+    "qdrant": "向量检索",
+    "data_dir": "数据目录",
+}
+
+
+def _plain_names(keys: list[Any]) -> str:
+    return "、".join(_PLAIN_SERVICE_NAMES.get(str(key), str(key)) for key in keys)
 
 
 def _json(payload: Any) -> str:
@@ -175,10 +193,43 @@ class ServiceBridge(QObject):
                 )
             ).scalar_one_or_none()
         if row is None:
-            raise RuntimeError("这台机器上还没有账号，请先在原应用中创建一个")
+            # A machine that has never run this product has no account, and every page needs
+            # one. Refusing here — which is what this used to do, with "请先在原应用中创建
+            # 一个" — means a clean install opens onto a home screen that cannot load
+            # anything, and there is no "original application" to go and create it in.
+            row = await self._create_local_account()
         self._owner_id = str(row.id)
         set_current_owner(self._owner_id)
         return row.id
+
+    async def _create_local_account(self) -> Any:
+        """The account this installation acts as, created once on first run.
+
+        The password is random and never shown. The native application has no sign-in screen
+        — the machine's own user is the identity — so the value exists only because the
+        column is `NOT NULL`. A *known* default would be worse than useless here: this
+        application reads and writes the user's files and runs commands on their behalf, and
+        a published credential on a machine with those powers is a back door with a sign on
+        it.
+        """
+        import secrets
+
+        from app.core.security import hash_password
+        from app.infrastructure.database import session_scope
+        from app.models.user import User
+
+        async with session_scope() as session:
+            user = User(
+                email="local@aiworkbench.local",
+                username="local",
+                display_name="本机账号",
+                hashed_password=hash_password(secrets.token_urlsafe(32)),
+            )
+            session.add(user)
+            await session.flush()
+            session.expunge(user)
+        logger.info("local_account_created", extra={"user_id": str(user.id)})
+        return user
 
     # ---------------------------------------------------------------- read side --
     @Slot(str)
@@ -228,6 +279,73 @@ class ServiceBridge(QObject):
                 ],
                 "total": len(rows),
             }
+
+        self._submit(request_id, work)
+
+    @Slot(str, str)
+    def loadProjectDetail(self, request_id: str, project_id: str) -> None:
+        """One project with the things that belong to it.
+
+        Filtered by `project_id` in the query rather than by pulling everything and sieving it
+        in QML: the point of a project page is that it shows this project, and a page that
+        showed every task while claiming to show one would be wrong the moment there are two.
+        """
+        async def work() -> dict[str, Any]:
+            from app.infrastructure.database import session_scope
+            from app.models.ai import AIRun
+            from app.models.knowledge import Document
+            from app.repositories.work_repo import ProjectRepository, TaskRepository
+            from sqlalchemy import select
+
+            owner = await self._owner()
+            pid = uuid.UUID(project_id)
+            async with session_scope() as session:
+                project = await ProjectRepository(session).get_owned(pid, owner)
+                if project is None:
+                    raise ValueError("找不到该项目")
+                tasks = await TaskRepository(session).all_for_project(owner, pid)
+                runs = list(
+                    (
+                        await session.execute(
+                            select(AIRun)
+                            .where(AIRun.owner_id == owner, AIRun.project_id == pid)
+                            .order_by(AIRun.created_at.desc())
+                            .limit(20)
+                        )
+                    ).scalars()
+                )
+                documents = list(
+                    (
+                        await session.execute(
+                            select(Document)
+                            .where(Document.owner_id == owner, Document.project_id == pid)
+                            .order_by(Document.created_at.desc())
+                            .limit(20)
+                        )
+                    ).scalars()
+                )
+                return {
+                    "project": {
+                        "id": str(project.id),
+                        "name": project.name,
+                        "status": project.status,
+                        "description": project.description or "",
+                    },
+                    "tasks": [
+                        {
+                            "id": str(t.id),
+                            "title": t.title,
+                            "status": t.status,
+                            "priority": t.priority,
+                        }
+                        for t in tasks
+                    ],
+                    "runs": [_run_summary(r) for r in runs],
+                    "documents": [
+                        {"id": str(d.id), "title": d.title, "status": d.status}
+                        for d in documents
+                    ],
+                }
 
         self._submit(request_id, work)
 
@@ -1503,11 +1621,11 @@ class ServiceBridge(QObject):
         failed = list(readiness.get("failed") or [])
         blocked = list(readiness.get("blocked") or [])
         if failed:
-            self._set_startup("failed", "；".join(str(item) for item in failed))
+            self._set_startup("failed", "本地环境没能启动：" + _plain_names(failed) + "。详见设置页。")
         elif blocked:
-            self._set_startup("degraded", "；".join(str(item) for item in blocked))
+            self._set_startup("degraded", "部分功能不可用：" + _plain_names(blocked))
         else:
-            self._set_startup("ready", str(runtime_state.get("detail") or "本地服务已就绪"))
+            self._set_startup("ready", "已就绪，可以开始使用")
 
     def record_startup(self, runtime_state: dict[str, Any], readiness: dict[str, Any]) -> None:
         """Adopt a startup result computed elsewhere.
@@ -1525,7 +1643,7 @@ class ServiceBridge(QObject):
         """Bring up the local stack, then verify the schema. Returns immediately."""
         if self._startup_state == "starting":
             return
-        self._set_startup("starting", "正在启动本地服务…")
+        self._set_startup("starting", "正在准备本地环境…")
         self._runner.submit(self.STARTUP_REQUEST, self._bring_up, timeout=900.0)
 
     async def _bring_up(self) -> dict[str, Any]:
@@ -1535,7 +1653,8 @@ class ServiceBridge(QObject):
         # a database to accept connections. Blocking the loop would stall every other call
         # the interface makes while the banner is up.
         runtime_state = await asyncio.to_thread(runtime.ensure)
-        self._set_startup("starting", str(runtime_state.detail or "正在检查数据库…"))
+        # Deliberately not `runtime_state.detail`: that names the engine it just started.
+        self._set_startup("starting", "正在准备本地环境…")
         readiness = await bootstrap.ensure_ready()
         return {"runtime": runtime_state.as_dict(), "readiness": readiness}
 

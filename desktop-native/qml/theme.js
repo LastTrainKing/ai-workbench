@@ -60,7 +60,8 @@ function scale(base, factor) {
 // opens which page. They were two lists before, and a hint that lies is worse than no
 // hint: it teaches the user a key that does something else.
 var pages = [
-    { key: "dashboard",    label: "总览" },
+    { key: "dashboard",    label: "工作台" },
+    { key: "agent",        label: "Agent" },
     { key: "knowledge",    label: "知识库" },
     { key: "conversation", label: "对话" },
     { key: "permissions",  label: "权限" },
@@ -74,10 +75,19 @@ var pages = [
     { key: "settings",     label: "设置" }
 ]
 
-//: "Ctrl+3" for a numbered page, "" for one that has no shortcut (documents and ask are
-//: reached from a knowledge base rather than from a key).
+//: How many pages have a keyboard shortcut. **Nine, and not `pages.length`.**
+//:
+//: The shell used to advertise "Ctrl+10" for the tenth page and create a `Shortcut` with
+//: that sequence. Qt has `Key_1`..`Key_9` and no `Key_10`, so the sequence never matched
+//: anything: four destinations carried a hint for a key that did nothing. The rail still
+//: lists them, and arrowing through it reaches them.
+var shortcutCount = 9
+
+//: "Ctrl+3" for a page that has one, "" for a page that does not — either because it sits
+//: past the ninth (documents and ask are reached from a knowledge base rather than from a
+//: key, and the rail covers the rest).
 function shortcutFor(key) {
-    for (var i = 0; i < pages.length; i++) {
+    for (var i = 0; i < pages.length && i < shortcutCount; i++) {
         if (pages[i].key === key) return "Ctrl+" + (i + 1)
     }
     return ""

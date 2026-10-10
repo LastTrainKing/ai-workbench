@@ -21,7 +21,8 @@ Rectangle {
     border.width: 0
 
     readonly property var entries: [
-        { key: "dashboard",    label: "总览",   hint: Theme.shortcutFor("dashboard") },
+        { key: "dashboard",    label: "工作台", hint: Theme.shortcutFor("dashboard") },
+        { key: "agent",        label: "Agent",  hint: Theme.shortcutFor("agent") },
         { key: "knowledge",    label: "知识库", hint: Theme.shortcutFor("knowledge") },
         { key: "documents",    label: "文档",   hint: Theme.shortcutFor("documents") },
         { key: "ask",          label: "问答",   hint: Theme.shortcutFor("ask") },

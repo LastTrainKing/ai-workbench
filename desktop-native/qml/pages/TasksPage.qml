@@ -11,6 +11,10 @@ Flickable {
     id: page
     property var shell
 
+    //: Set by the shell when another page sent the user here to create something.
+    property bool autoCreate: false
+    onAutoCreateChanged: if (autoCreate) create()
+
     contentWidth: width
     contentHeight: column.implicitHeight
     clip: true

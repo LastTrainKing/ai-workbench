@@ -27,6 +27,9 @@ ApplicationWindow {
     //: running shell which page each `Ctrl+N` should open instead of keeping its own copy
     //: of the list. A copy in the test would pass while the application was wrong.
     readonly property var pages: Theme.pages
+    //: How many of them have a `Ctrl+N`. Exposed so a keyboard test asks the shell
+    //: instead of assuming every page does.
+    readonly property int shortcutCount: Theme.shortcutCount
     //: The rail's entries, in the order the arrow keys move through them. **A different
     //: list from `pages`**: the rail also carries `documents` and `ask`, which are reached
     //: from a knowledge base and have no shortcut. A test that walked `pages` would stop
@@ -249,15 +252,24 @@ ApplicationWindow {
                     case "notes":        return notesPage
                     case "runs":         return runsPage
                     case "settings":     return settingsPage
+                    case "agent":        return agentWorkbenchPage
+                    case "project":      return projectDetailPage
                     default:             return dashboardPage
                     }
                 }
                 onLoaded: {
                     // Parameters are applied once, when the page instance appears, so a
                     // page cannot be recreated by a change it caused itself.
+                    //
+                    // Only the ones the page declares. Writing an undeclared property is a
+                    // QML error — `Cannot assign to non-existent property "projectId"` —
+                    // and the shell holds one params object for every page, so navigating
+                    // to a page that ignores a parameter logged an error each time.
                     if (item && shellRoot.pageParams) {
                         for (var key in shellRoot.pageParams) {
-                            item[key] = shellRoot.pageParams[key]
+                            if (item[key] !== undefined) {
+                                item[key] = shellRoot.pageParams[key]
+                            }
                         }
                     }
                 }
@@ -279,6 +291,8 @@ ApplicationWindow {
     // a screenshot check and a bridge-level test. `verify_native_shell.py` now presses the
     // buttons, so a page wired to nothing fails there.
     Component { id: dashboardPage; DashboardPage { shell: shellRoot } }
+    Component { id: agentWorkbenchPage; AgentWorkbenchPage { shell: shellRoot } }
+    Component { id: projectDetailPage; ProjectDetailPage { shell: shellRoot } }
     Component { id: knowledgePage; KnowledgePage {
         shell: shellRoot
         onOpenDocuments: function (kbId, kbName) {
@@ -304,7 +318,13 @@ ApplicationWindow {
     Component { id: searchPage; SearchPage { shell: shellRoot } }
     Component { id: graphPage; GraphPage { shell: shellRoot } }
     Component { id: plannerPage; PlannerPage { shell: shellRoot } }
-    Component { id: projectsPage;  ProjectsPage  { shell: shellRoot } }
+    Component { id: projectsPage;  ProjectsPage  {
+        shell: shellRoot
+        onOpenProject: function (projectId, projectName) {
+            shellRoot.pageParams = { projectId: projectId, projectName: projectName }
+            shellRoot.activePage = "project"
+        }
+    } }
     Component { id: notesPage;     NotesPage     { shell: shellRoot } }
     Component { id: runsPage;      RunsPage      { shell: shellRoot } }
     Component { id: settingsPage;  SettingsPage  { shell: shellRoot } }
@@ -349,7 +369,9 @@ ApplicationWindow {
     // its delegate to be an Item. With `Repeater` the whole window failed to load with
     // "Delegate must be of Item type".
     Instantiator {
-        model: Theme.pages.length
+        // `shortcutCount`, not `pages.length`: Qt has no `Key_10`, so a
+        // `Shortcut` past the ninth can never fire. See `theme.js`.
+        model: Math.min(Theme.pages.length, Theme.shortcutCount)
 
         delegate: Shortcut {
             required property int index

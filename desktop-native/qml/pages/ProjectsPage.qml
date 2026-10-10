@@ -17,6 +17,14 @@ Flickable {
     id: page
     property var shell
 
+    //: Raised when a row is activated. The shell turns it into a page change, so this
+    //: page does not need to know the name of the page that shows a project.
+    signal openProject(string projectId, string projectName)
+
+    //: Set by the shell when another page sent the user here to create something.
+    property bool autoCreate: false
+    onAutoCreateChanged: if (autoCreate) create()
+
     contentWidth: width
     contentHeight: column.implicitHeight
     clip: true
@@ -222,6 +230,12 @@ Flickable {
                 Accessible.role: Accessible.ListItem
                 Accessible.name: modelData.name
                 Accessible.description: (modelData.description || "无描述") + "，" + (modelData.status ?? "")
+
+                MouseArea {
+                    anchors.fill: parent
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: page.openProject(modelData.id, modelData.name)
+                }
             }
         }
 
