@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import Boolean, DateTime, String
+from sqlalchemy import Boolean, DateTime, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base, TimestampMixin, UUIDPrimaryKeyMixin, utcnow
@@ -47,6 +47,12 @@ class RevokedToken(Base, UUIDPrimaryKeyMixin):
     """
 
     __tablename__ = "revoked_tokens"
+
+    #: The migration creates both a named unique constraint and a unique index on `jti`, and
+    #: the model only described the index. That made "built from migrations" and "built from
+    #: metadata" two different databases — which is the divergence this module's guard exists
+    #: to catch, sitting inside the module it protects. Declared here so both routes agree.
+    __table_args__ = (UniqueConstraint("jti", name="uq_revoked_tokens_jti"),)
 
     #: The JWT id claim. Unique: revoking the same token twice must not create two rows.
     jti: Mapped[str] = mapped_column(String(64), unique=True, nullable=False, index=True)

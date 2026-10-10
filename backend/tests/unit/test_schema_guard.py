@@ -11,14 +11,16 @@ The assertions here are about the decisions, not about Alembic:
 * a fresh database is built by running the migrations, not by ``create_all``;
 * an existing database whose revision differs from head is refused, with both revisions
   named, and **nothing is stamped** — recording a revision nobody applied is the bug;
-* an existing database with no ``alembic_version`` at all is refused rather than assumed
-  current;
+* an existing database with no ``alembic_version`` at all is **adopted** when the only
+  difference from the migrations is what is missing, and **refused** when anything else
+  differs — "add what is missing" cannot fix a disagreement about something already there;
 * the real test database, which is built from the models and stamped, verifies.
 """
 
 from __future__ import annotations
 
 import pytest
+from sqlalchemy import Column, Integer, MetaData, String, Table
 
 from app.core import schema_guard
 from app.core.schema_guard import SchemaOutOfDateError, ensure_schema, head_revision
@@ -77,8 +79,14 @@ async def test_a_version_mismatch_is_refused_and_nothing_is_stamped(monkeypatch)
 
 
 @pytest.mark.asyncio
-async def test_a_database_without_a_version_is_refused_not_assumed_current(monkeypatch) -> None:
-    """Tables but no `alembic_version` is the pre-migration state, and it is not "current"."""
+async def test_a_database_without_a_version_is_adopted_when_only_things_are_missing(monkeypatch) -> None:
+    """Tables but no `alembic_version` is the pre-migration state, and it can be brought forward.
+
+    A database built before migrations existed is a strict subset of what the migrations
+    describe. Refusing it left the user unable to open the product at all; adopting it is
+    safe precisely because "add what is missing" cannot destroy anything.
+    """
+    adopted: dict[str, object] = {}
 
     async def some_tables(_conn):
         return {"users", "tasks", "agent_runs"}
@@ -86,15 +94,63 @@ async def test_a_database_without_a_version_is_refused_not_assumed_current(monke
     async def no_version(_conn):
         return None
 
+    async def fake_adopt(_conn, head):
+        adopted["head"] = head
+        return {"revision": head, "applied": []}
+
     monkeypatch.setattr(schema_guard, "table_names", some_tables)
     monkeypatch.setattr(schema_guard, "current_revision", no_version)
+    monkeypatch.setattr(schema_guard, "adopt_pre_migration_database", fake_adopt)
 
-    with pytest.raises(SchemaOutOfDateError) as excinfo:
-        await ensure_schema(object())
+    outcome = await ensure_schema(object())
+    assert outcome == "adopted"
+    assert adopted["head"] == head_revision(), "the revision recorded is not the head"
 
-    message = str(excinfo.value)
-    assert "alembic_version" in message
-    assert "不会自动 stamp" in message
+
+def test_a_pre_migration_database_is_refused_when_something_disagrees() -> None:
+    """A column nobody declares is a disagreement, not a gap, and adoption must not paper over it.
+
+    This is the property that makes the adoption safe to run at startup: it may only ever add.
+    A database with an extra column is one where the code and the data have already diverged,
+    and guessing which side is right is a decision for a person with a backup.
+    """
+    metadata = MetaData()
+    Table("users", metadata, Column("id", Integer, primary_key=True), Column("email", String(255)))
+
+    reflected = {
+        "tables": ["users"],
+        "columns": {
+            "users": {
+                "id": {"name": "id", "type": Integer(), "nullable": False},
+                "email": {"name": "email", "type": String(255), "nullable": True},
+                "legacy_only": {"name": "legacy_only", "type": String(50), "nullable": True},
+            }
+        },
+    }
+
+    plan = schema_guard._plan_adoption(reflected, metadata)
+    assert plan["ok"] is False
+    assert any("legacy_only" in problem for problem in plan["problems"]), plan["problems"]
+
+
+def test_a_column_of_the_wrong_type_is_refused() -> None:
+    """`Integer` where the model says `String` is not something "add what is missing" can fix."""
+    metadata = MetaData()
+    Table("users", metadata, Column("id", Integer, primary_key=True), Column("email", String(255)))
+
+    reflected = {
+        "tables": ["users"],
+        "columns": {
+            "users": {
+                "id": {"name": "id", "type": Integer(), "nullable": False},
+                "email": {"name": "email", "type": Integer(), "nullable": True},
+            }
+        },
+    }
+
+    plan = schema_guard._plan_adoption(reflected, metadata)
+    assert plan["ok"] is False
+    assert any("类型不一致" in problem for problem in plan["problems"]), plan["problems"]
 
 
 @pytest.mark.asyncio

@@ -80,7 +80,12 @@ async def _check_database() -> dict[str, Any]:
     `ensure_schema` is the right entry point and not `create_all`: a fresh database is
     built by running the migrations, so the first thing it ever has is a migration history
     that matches it. An existing one is verified against the head revision and refused if
-    it disagrees — never stamped.
+    it disagrees. A database built before migrations existed is **adopted** when the only
+    difference is what it is missing — otherwise the user cannot open their own data, which
+    is what the refusal meant in practice.
+
+    The reported `schema=` value is one of `created`, `adopted`, `verified`, so a support
+    conversation can tell which of the three happened.
     """
     from app.core.schema_guard import SchemaOutOfDateError, ensure_schema
     from app.infrastructure.database import get_engine, session_scope
