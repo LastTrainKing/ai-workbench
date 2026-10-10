@@ -45,6 +45,60 @@ if (-not (Test-Path -LiteralPath $RuntimeRoot)) {
     exit 0
 }
 
+# Where the product is installed. `$PSScriptRoot` is this script's directory, so its parent
+# is the product root in both layouts (a checkout and an installed copy) and does not depend
+# on where the data lives. Resolved here rather than further down because the PostgreSQL
+# step below needs it.
+if (-not $ProductRoot) { $ProductRoot = Split-Path -Parent $PSScriptRoot }
+
+# ---------------------------------------------------------------- PostgreSQL, gracefully --
+#
+# PostgreSQL is stopped with `pg_ctl` **before** the sweep, not by it.
+#
+# It used to be swept like everything else: `taskkill /F` on the postmaster. PostgreSQL
+# survives that — the next start replays the WAL — but it is a crash, and every start paid
+# for it. `pg_ctl -m fast` asks the postmaster to disconnect clients, checkpoint and exit,
+# which is what the shutdown path in `infra-stop.ps1` has always done for the development
+# stack. The product was the one place that did not.
+#
+# The escalation is the same shape as `infra-stop.ps1`: one `-m immediate` if `fast` is
+# ignored, then leave it to the sweep. `-m immediate` aborts transactions and skips the
+# shutdown checkpoint; it is a documented mode, and its cost is a WAL replay on the next
+# start — which is where this started.
+$pgData = Join-Path $RuntimeRoot 'pgdata'
+$pgCtl = Join-Path $ProductRoot 'vendor\runtime\pgsql\pgsql\bin\pg_ctl.exe'
+if ((Test-Path -LiteralPath (Join-Path $pgData 'postmaster.pid')) -and (Test-Path -LiteralPath $pgCtl)) {
+    # Output goes to a **file**, not into a variable.
+    #
+    # `$out = & pg_ctl ...` collects through a pipe, and on Windows the postmaster's children
+    # inherit that pipe's write end — so `pg_ctl -w` waits for a handle that stays open, and
+    # the call never returns. The first version of this block did exactly that: the graceful
+    # stop hung, the sweep below never ran, and ten open-and-close cycles left PostgreSQL,
+    # Redis and Qdrant running every time. A file redirect has no such handle.
+    $pgLog = Join-Path $RuntimeRoot 'logs\postgres-stop.log'
+    $null = New-Item -ItemType Directory -Force -Path (Split-Path -Parent $pgLog) -ErrorAction SilentlyContinue
+
+    Write-Output "stopping postgres gracefully (pg_ctl -m fast)"
+    & $pgCtl -D $pgData -m fast -w -t 20 stop *> $pgLog
+    Write-Output "  pg_ctl exit $LASTEXITCODE"
+    if (Test-Path -LiteralPath $pgLog) {
+        Get-Content -LiteralPath $pgLog -ErrorAction SilentlyContinue |
+            ForEach-Object { Write-Output "  $_" }
+    }
+
+    if (Test-Path -LiteralPath (Join-Path $pgData 'postmaster.pid')) {
+        Write-Output "  fast shutdown did not take effect; trying -m immediate"
+        & $pgCtl -D $pgData -m immediate -w -t 20 stop *>> $pgLog
+        Write-Output "  pg_ctl exit $LASTEXITCODE"
+    }
+
+    if (Test-Path -LiteralPath (Join-Path $pgData 'postmaster.pid')) {
+        Write-Output "  postgres is still running; the sweep below will take it"
+    } else {
+        Write-Output "  postgres stopped"
+    }
+}
+
 $targets = @()
 
 # 1. Every pid file this product wrote.
@@ -96,9 +150,7 @@ foreach ($target in $targets) {
     # nothing, and **every** process was skipped. Uninstalling left PostgreSQL, Redis and
     # Qdrant running, holding their ports.
     #
-    # `$PSScriptRoot` is the fix: this script ships in `<product>\scripts\`, so its parent
-    # is the product root in both layouts and does not depend on where the data lives.
-    if (-not $ProductRoot) { $ProductRoot = Split-Path -Parent $PSScriptRoot }
+    # `$ProductRoot` is the fix, and it is resolved at the top of this script.
     $exePath = $null
     try { $exePath = $process.Path } catch { $exePath = $null }
     $roots = @()
