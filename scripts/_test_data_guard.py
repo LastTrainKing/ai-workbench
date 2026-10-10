@@ -35,9 +35,11 @@
 
 from __future__ import annotations
 
+import atexit
 import os
 import shutil
 import sys
+import tempfile
 from pathlib import Path
 
 LOCALAPPDATA = Path(os.environ["LOCALAPPDATA"])
@@ -75,16 +77,16 @@ def refuse_if_real(path: os.PathLike[str] | str, *, who: str) -> Path:
     target = _canonical(path)
     real = _canonical(REAL_DATA_DIR)
     if _overlaps(target, real):
-        print("", file=sys.stderr)
+        print(file=sys.stderr)
         print("=" * 74, file=sys.stderr)
         print(f"  拒绝运行：{who}", file=sys.stderr)
         print("=" * 74, file=sys.stderr)
         print(f"  它要动的路径：{target}", file=sys.stderr)
         print(f"  用户的真实数据：{real}", file=sys.stderr)
-        print("", file=sys.stderr)
+        print(file=sys.stderr)
         print("  这两个路径重叠，继续下去会删掉用户的数据库、记忆、资料库和产出物。", file=sys.stderr)
         print("  第 14 轮已经这样丢过一次 50 MB 数据。", file=sys.stderr)
-        print("", file=sys.stderr)
+        print(file=sys.stderr)
         print(f"  测试请改用：{TEST_DATA_DIR}", file=sys.stderr)
         print("  真实数据要删，请你自己在资源管理器里删 —— 测试脚本不代劳。", file=sys.stderr)
         print("=" * 74, file=sys.stderr)
@@ -119,10 +121,59 @@ def point_install_at_test_data(install_dir: Path) -> Path:
     return runtime
 
 
+def isolated_data_dir(
+    requested: os.PathLike[str] | str | None = None,
+    *,
+    who: str = "验证运行",
+) -> Path:
+    """The data directory a verification run hands to the application. **Never the real one.**
+
+    ## Why this function exists
+
+    Every verifier that starts the application has to give it somewhere to write. The
+    convenient way to do that is to say nothing and let the application resolve its own
+    directory — and for an installed copy that resolution is
+    `%LOCALAPPDATA%\\AI Workbench Data`, the user's real data. `verify_native_package.py`
+    did exactly that at two of its call sites, and `runtime.ensure()` appended
+    `logs\\native-startup.log` into the real directory. Nothing was lost, and it was still
+    wrong: a verification run had written to the one place it is not allowed to write, and
+    it did so silently.
+
+    So the "let the application decide" option is gone. Asking for nothing gets a fresh
+    temporary directory; asking for a path gets that path **or a refusal**. There is no
+    third answer, and no argument that produces one.
+
+    `requested` is checked with `refuse_if_real`, so a caller cannot reach the real
+    directory by passing it explicitly either — not with `..`, not with a different case,
+    not by pointing at a parent or a child of it.
+    """
+    if requested is None:
+        return Path(tempfile.mkdtemp(prefix="aiworkbench-verify-data-"))
+    return refuse_if_real(requested, who=who)
+
+
+def dispose_isolated_data_dir(path: os.PathLike[str] | str) -> bool:
+    """Remove a directory `isolated_data_dir` produced, at process exit.
+
+    Registered rather than called inline because the application is what fills the
+    directory and it may still hold a file open when the last check returns. A file held by
+    a live process cannot be deleted on Windows, so an inline removal would raise out of
+    whatever `finally` happened to be running — which is a failure that looks like a
+    verification problem and is not one.
+    """
+    target = _canonical(path)
+    if target == _canonical(REAL_DATA_DIR):
+        return False
+    atexit.register(shutil.rmtree, target, True)
+    return True
+
+
 __all__ = [
     "REAL_DATA_DIR",
     "TEST_DATA_DIR",
     "TEST_INSTALL_DIR",
+    "dispose_isolated_data_dir",
+    "isolated_data_dir",
     "point_install_at_test_data",
     "refuse_if_real",
     "safe_rmtree",

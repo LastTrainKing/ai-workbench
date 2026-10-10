@@ -26,6 +26,7 @@ import json
 import os
 import re
 import subprocess
+import sys
 import tempfile
 import time
 from pathlib import Path
@@ -274,26 +275,25 @@ def _run_self_check(
     exe = app / "AI-Workbench-Native.exe"
     report = Path(tempfile.mkdtemp(prefix="awbnative-report-")) / "report.json"
 
-    # **Always** an explicit data directory, and a throwaway one when the caller did not ask
-    # for a particular place.
+    # **The guard decides, not this function.**
     #
-    # This used to be conditional. When it was not set, the packaged application resolved its
-    # data directory the way an installed copy does — `%LOCALAPPDATA%\AI Workbench Data\.runtime`
-    # — and `runtime.ensure()` wrote `native-startup.log` **into the user's real data
-    # directory**. Nothing was lost, but a verification run had modified the thing it is not
-    # allowed to touch, and it did so silently. Making the default a fresh temporary
-    # directory means no call site can reach the real one by forgetting an argument.
-    scratch = None
-    if data_dir is None:
-        scratch = Path(tempfile.mkdtemp(prefix="awbnative-data-"))
-        data_dir = scratch
-        # Removed when the process exits, rather than at each of this function's return
-        # points. The application is what creates the directory's contents, and it may still
-        # be holding a file when a check returns.
-        import atexit
-        import shutil
+    # This used to set `AI_WORKBENCH_DATA_DIR` only when the caller passed a directory, and
+    # two call sites did not. The application then resolved its data directory the way an
+    # installed copy does, and `runtime.ensure()` wrote `logs\native-startup.log` into the
+    # real `%LOCALAPPDATA%\AI Workbench Data\.runtime`. Nothing was lost; a verification run
+    # had written to the one place it must never write, silently.
+    #
+    # `isolated_data_dir(None)` now returns a fresh temporary directory and
+    # `isolated_data_dir(path)` refuses anything overlapping the real one, so there is no
+    # argument — including forgetting it — that reaches the user's data.
+    sys.path.insert(0, str(REPO / "scripts"))
+    from _test_data_guard import dispose_isolated_data_dir, isolated_data_dir
 
-        atexit.register(shutil.rmtree, scratch, ignore_errors=True)
+    scratch = data_dir is None
+    data_dir = isolated_data_dir(data_dir, who="打包验收的数据目录")
+    if scratch:
+        # Ours to remove; a caller-supplied directory is theirs to manage.
+        dispose_isolated_data_dir(data_dir)
 
     env = os.environ.copy()
     env["AI_WORKBENCH_DATA_DIR"] = str(data_dir)

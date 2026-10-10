@@ -292,6 +292,50 @@ CASES: list[tuple[str, str, str, str, str]] = [
         "tests/integration/test_release_freeze_tool_reconcile.py"
         "::test_reconciliation_does_not_touch_the_file",
     ),
+    (
+        # Forgetting the argument must not mean "let the application decide" — that is how a
+        # verifier wrote a log file into the user's real data directory.
+        "RF-23 an omitted data directory falls back to the real one",
+        "scripts/_test_data_guard.py",
+        "    if requested is None:\n"
+        "        return Path(tempfile.mkdtemp(prefix=\"aiworkbench-verify-data-\"))",
+        "    if requested is None:\n"
+        "        return REAL_DATA_DIR",
+        "tests/unit/test_user_data_isolation.py"
+        "::test_forgetting_the_argument_still_gives_an_isolated_directory",
+    ),
+    (
+        # The refusal itself, removed. A path that normalises to the real directory *is* the
+        # real directory, and the check has to run on the normalised form.
+        "RF-24 the real data directory is no longer refused",
+        "scripts/_test_data_guard.py",
+        "    if _overlaps(target, real):",
+        "    if False:",
+        "tests/unit/test_user_data_isolation.py"
+        "::test_every_route_to_the_real_directory_is_refused",
+    ),
+    (
+        # The exact shape of the round-6 defect: the environment variable set only when the
+        # caller remembered to pass a directory.
+        "RF-25 the package verifier only isolates when told to",
+        "desktop-native/verify_native_package.py",
+        "    sys.path.insert(0, str(REPO / \"scripts\"))\n"
+        "    from _test_data_guard import dispose_isolated_data_dir, isolated_data_dir\n"
+        "\n"
+        "    scratch = data_dir is None\n"
+        "    data_dir = isolated_data_dir(data_dir, who=\"打包验收的数据目录\")\n"
+        "    if scratch:\n"
+        "        # Ours to remove; a caller-supplied directory is theirs to manage.\n"
+        "        dispose_isolated_data_dir(data_dir)\n"
+        "\n"
+        "    env = os.environ.copy()\n"
+        "    env[\"AI_WORKBENCH_DATA_DIR\"] = str(data_dir)",
+        "    env = os.environ.copy()\n"
+        "    if data_dir is not None:\n"
+        "        env[\"AI_WORKBENCH_DATA_DIR\"] = str(data_dir)",
+        "tests/unit/test_user_data_isolation.py"
+        "::test_the_package_verifier_isolates_even_when_no_directory_is_given",
+    ),
 ]
 
 
