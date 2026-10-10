@@ -173,9 +173,15 @@ async def _teardown(owner: uuid.UUID) -> None:
 # --------------------------------------------------------------------------- #
 # The checks
 # --------------------------------------------------------------------------- #
-def check_shortcuts(window: object, pages: list[dict]) -> None:
-    """Ctrl+N opens the page at position N, for every page the shell advertises."""
-    for index, page in enumerate(pages, start=1):
+def check_shortcuts(window: object, pages: list[dict], count: int) -> None:
+    """Ctrl+N opens the page at position N, for every page that has a shortcut.
+
+    `count` comes from the shell (`shortcutCount`), not from `len(pages)`. Qt has no
+    `Key_10`, so a shell that advertised one shortcut per page was advertising four that
+    could not fire — and this check, which assumed one per page, crashed on the tenth
+    instead of noticing.
+    """
+    for index, page in enumerate(pages[:count], start=1):
         QTest.keyClick(window, key_for(index), Qt.ControlModifier)
         pump()
         current = str(window.property("activePage"))  # type: ignore[attr-defined]
@@ -285,8 +291,13 @@ def check_escape_dismisses_toast(window: object) -> None:
     check("Esc 关闭提示条", before and not after, f"{before} -> {after}")
 
 
-def walk_tab_order(window: object, pages: list[dict], steps: int = 14) -> list[dict]:
+def walk_tab_order(window: object, rail_entries: list[dict], steps: int = 14) -> list[dict]:
     """Navigate to the projects page and Tab forward, recording where focus lands.
+
+    Reached through the **rail**, not through a shortcut. Only the first nine pages have a
+    `Ctrl+N` — Qt has no `Key_10` — and `projects` is not among them once the Agent page
+    sits second. Arrowing to it and pressing Enter is what a user does, and it keeps this
+    check independent of where in the list a page happens to be.
 
     Driven entirely by keys, which is the point: `forceActiveFocus` from Python would test
     Python's ability to set focus, not whether Tab reaches the controls. The page's controls
@@ -294,12 +305,17 @@ def walk_tab_order(window: object, pages: list[dict], steps: int = 14) -> list[d
 
     Returns one entry per Tab, each with the focused object's name and accessible metadata.
     """
-    index = next((i for i, p in enumerate(pages, start=1) if p["key"] == "projects"), None)
+    index = next((i for i, e in enumerate(rail_entries) if e["key"] == "projects"), None)
     if index is None:
-        check("项目页在页面清单里", False, "页面清单中没有 projects")
+        check("项目页在导航栏里", False, "导航栏中没有 projects")
         return []
 
-    QTest.keyClick(window, key_for(index), Qt.ControlModifier)
+    QTest.keyClick(window, key_for(1), Qt.ControlModifier)
+    pump()
+    for _ in range(index):
+        QTest.keyClick(window, Qt.Key_Down)
+        pump(60)
+    QTest.keyClick(window, Qt.Key_Return)
     pump(1500)  # the page is loaded and its list fetched
 
     trail: list[dict] = []
@@ -572,7 +588,7 @@ def main() -> int:
 
     try:
         print("\n=== 1. 快捷键 Ctrl+N ===")
-        check_shortcuts(window, pages)
+        check_shortcuts(window, pages, int(window.property("shortcutCount") or 0))
 
         print("\n=== 2. 导航栏方向键（并逐个读取无障碍名称）===")
         rail = check_rail_arrow_keys(window, rail_order)
@@ -584,7 +600,7 @@ def main() -> int:
         check_escape_dismisses_toast(window)
 
         print("\n=== 5. Tab 焦点顺序 ===")
-        trail = walk_tab_order(window, pages)
+        trail = walk_tab_order(window, [{"key": key} for key in rail_order])
         loaded = check_tab_order(window, trail)
 
         print("\n=== 6. 按钮可以用键盘触发 ===")
