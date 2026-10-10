@@ -336,6 +336,40 @@ CASES: list[tuple[str, str, str, str, str]] = [
         "tests/unit/test_user_data_isolation.py"
         "::test_the_package_verifier_isolates_even_when_no_directory_is_given",
     ),
+    (
+        # An approved confirmation that is then refused by the tool's own path check. The
+        # user says yes and nothing happens, which is worse than not asking.
+        "RF-26 an approved confirmation is refused anyway",
+        "backend/app/ai/agent/tools.py",
+        "        if verdict.allowed or (verdict.needs_confirmation and self.approved):\n"
+        "            return verdict",
+        "        if verdict.allowed:\n"
+        "            return verdict",
+        "tests/integration/test_permissions_effective.py"
+        "::test_an_approved_confirmation_actually_runs",
+    ),
+    (
+        # The verdict the screen shows stops matching the verdict that is enforced: the
+        # settings page promises a prompt that the executor never raises.
+        "RF-27 an outside path reports confirm and is enforced as deny",
+        "backend/app/ai/tools/permissions.py",
+        "        return _deny(\n"
+        "            \"This path is outside the workspace and the allowed directories\",",
+        "        return _confirm(\n"
+        "            \"This path is outside the workspace and the allowed directories\",",
+        "tests/integration/test_permissions_effective.py"
+        "::test_a_path_outside_the_workspace_is_refused_with_the_remedy",
+    ),
+    (
+        # `approved` honoured for a denial as well. A protection that can be lifted by
+        # answering a prompt about something else is not a protection.
+        "RF-28 an approval overrides a denial",
+        "backend/app/ai/agent/tools.py",
+        "        if verdict.allowed or (verdict.needs_confirmation and self.approved):",
+        "        if verdict.allowed or self.approved:",
+        "tests/integration/test_permissions_effective.py"
+        "::test_an_approval_cannot_unlock_a_denied_location",
+    ),
 ]
 
 

@@ -127,6 +127,73 @@ async def reset_permissions(user: CurrentUser) -> dict[str, Any]:
 
 
 # --------------------------------------------------------------------------- #
+# "What would you do about this?"
+# --------------------------------------------------------------------------- #
+class PermissionProbe(BaseModel):
+    """One thing to ask the policy about. Any subset may be supplied."""
+
+    path: str | None = Field(default=None, description="A file or directory to test")
+    write: bool = Field(default=False, description="Test writing rather than reading")
+    domain: str | None = Field(default=None, description="A URL or host to test")
+    command: str | None = Field(default=None, description="A shell command to classify")
+    tool: str | None = Field(default=None, description="A tool name to test against the policy")
+    arguments: dict[str, Any] | None = Field(default=None, description="That tool's arguments")
+
+
+@router.post("/permissions/check", summary="Ask the real permission service about one thing")
+async def check_permission(payload: PermissionProbe, user: CurrentUser) -> dict[str, Any]:
+    """What the policy would decide, and why.
+
+    This runs `PermissionManager` itself — the same object `file_write` and `terminal_exec`
+    consult before they do anything. That is the whole point: a settings screen that
+    re-implemented the rules would be a second source of truth, and the second one is always
+    the one that drifts. The answer here is the answer the next tool call gets.
+
+    A `deny` is a real refusal and a `confirm` is a real prompt; neither is a UI state. The
+    protected-location rules (`.ssh`, credential stores, browser profiles, Windows, Program
+    Files) and the project's own `.env` cannot be lifted from the settings endpoint at all,
+    so a path inside them reports `deny` no matter what the level is set to — which is what
+    the screen needs to be able to show.
+    """
+    from app.ai.tools.permissions import PermissionManager
+
+    policy = policy_store.build_policy(user.id)
+    manager = PermissionManager(policy)
+
+    results: dict[str, Any] = {}
+    if payload.path:
+        results["path"] = manager.check_path(payload.path, write=bool(payload.write)).as_dict()
+    if payload.domain:
+        results["domain"] = manager.check_domain(payload.domain, writes=bool(payload.write)).as_dict()
+    if payload.command:
+        verdict = manager.check_command(payload.command)
+        results["command"] = verdict.as_dict()
+    if payload.tool:
+        from app.ai.tools.registry import build_computer_registry
+
+        registry = build_computer_registry(policy, enabled=policy_store.capability_flags(user.id))
+        tool = registry.get(payload.tool)
+        if tool is None:
+            raise ValidationError(f"Unknown computer tool '{payload.tool}'")
+        results["tool"] = manager.check_tool(tool.spec, payload.arguments or {}).as_dict()
+
+    if not results:
+        raise ValidationError("Supply at least one of: path, domain, command, tool")
+
+    return ok(
+        {
+            "results": results,
+            "policy": {
+                "mode": policy.mode.value,
+                "level": int(policy.level),
+                "level_label": PermissionLevel.label(int(policy.level)),
+            },
+            "workspace": str(policy.workspace),
+        }
+    )
+
+
+# --------------------------------------------------------------------------- #
 # Capabilities and tools
 # --------------------------------------------------------------------------- #
 @router.get("/capabilities", summary="Capability areas and whether each is available")

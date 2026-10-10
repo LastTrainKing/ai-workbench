@@ -75,6 +75,15 @@ class ToolContext:
     #: Absolute working directory for this run. Relative paths resolve here, so
     #: a tool can never be steered by the process's own cwd.
     working_directory: str = ""
+    #: True while the executor is running a call the user was asked about and approved.
+    #:
+    #: Set by `ToolExecutor` immediately before it invokes the tool and cleared afterwards.
+    #: It exists because the two permission checks used to disagree: the executor asks about
+    #: the *tool* and the tool asks about the *path*, and a path verdict of "needs
+    #: confirmation" was raised as a refusal — so at Observe level the user was asked,
+    #: approved, and the write did not happen. Only the executor can ask, so only the
+    #: executor can say the question was answered.
+    approved: bool = False
 
     def require_permission(self, path: str | Any, *, write: bool = False) -> Any:
         """Ask the policy about a path, raising when it is not allowed.
@@ -82,23 +91,28 @@ class ToolContext:
         The executor checks the tool as a whole; this checks the concrete path the
         arguments name. Both checks matter, and the second one is the one that
         stops ``file_read("C:\\Users\\me\\.ssh\\id_rsa")``.
+
+        A `deny` is raised whatever `self.approved` says. Only a prompt that was actually
+        put to someone and answered can be honoured.
         """
         if self.permissions is None:
             return None
         verdict = self.permissions.check_path(path, write=write)
-        if not verdict.allowed:
-            from app.core.errors import PermissionDeniedError
+        if verdict.allowed or (verdict.needs_confirmation and self.approved):
+            return verdict
 
-            raise PermissionDeniedError(
-                verdict.reason,
-                details={
-                    "path": str(path),
-                    "decision": verdict.decision.value,
-                    "risk": verdict.risk.value,
-                    "detail": verdict.detail,
-                },
-            )
-        return verdict
+        from app.core.errors import PermissionDeniedError
+
+        raise PermissionDeniedError(
+            verdict.reason,
+            details={
+                "path": str(path),
+                "decision": verdict.decision.value,
+                "risk": verdict.risk.value,
+                "detail": verdict.detail,
+                "impact": verdict.impact,
+            },
+        )
 
     def resolve(self, path: str) -> str:
         """Resolve a possibly-relative path against the run's working directory."""

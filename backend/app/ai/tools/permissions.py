@@ -533,6 +533,17 @@ class PermissionManager:
             )
 
         # 3. Outside every allowed root.
+        #
+        # **A denial, not a prompt.** This used to return `_confirm`, and nothing could ever
+        # act on it: the only consumer of a `CONFIRM` verdict is the executor's tool-level
+        # check, and at Workspace level and above `check_tool` allows `file_write` outright,
+        # so no prompt was ever raised. The tool then asked this same function, saw a
+        # non-allow verdict, and refused. The screen said "needs confirmation" and the write
+        # was refused — the user was told to expect a question they were never asked.
+        #
+        # The remedy is a settings action and the message names it. Granting a directory is
+        # the product's answer for "the agent needs to work over there"; a per-call prompt
+        # would ask the same question every time and teach people to click through it.
         if self.policy.mode is AgentMode.ASSIST:
             return _deny("Assist mode does not read outside the workspace", target=str(target))
 
@@ -544,13 +555,16 @@ class PermissionManager:
                 target=str(target),
             )
 
-        return _confirm(
+        return _deny(
             "This path is outside the workspace and the allowed directories",
             risk=RiskLevel.MEDIUM,
-            detail=f"{target} is not inside any granted directory.",
+            detail=(
+                f"{target} is not inside any granted directory. "
+                f"Add it under 设置 → Agent 权限 → 允许的目录 to let the agent work there."
+            ),
             operation="Write a file" if write else "Read a file",
             target=str(target),
-            impact="Grant access only if you recognise this location.",
+            impact="Add the directory in Agent permissions, or move the work inside the workspace.",
         )
 
     def is_writable(self, raw: str | Path) -> bool:

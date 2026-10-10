@@ -477,6 +477,17 @@ class ToolExecutor:
 
         # --- 4. run ---------------------------------------------------------
         timeout = float(getattr(spec, "timeout_seconds", 30.0) or 30.0)
+        # Tell the context whether a question was put to someone and answered.
+        #
+        # The two permission checks ask about different things — this one about the tool, the
+        # tool's own about the concrete path — and a path verdict of "needs confirmation"
+        # used to be raised as a refusal *after* the user had already approved it. At Observe
+        # level that meant: asked, approved, nothing happened. `require_permission` honours
+        # the verdict only when this flag says the prompt really happened.
+        had_flag = hasattr(ctx, "approved")
+        previous_approved = getattr(ctx, "approved", False)
+        if had_flag:
+            ctx.approved = bool(confirmed)
         try:
             # Everything the agent does to the machine happens inside this block, and this
             # is the only place a tool is called — the class says so in its own docstring.
@@ -545,6 +556,12 @@ class ToolExecutor:
                 truncated=truncated,
                 output_bytes=size,
             )
+        finally:
+            # Restored on every path, including the one that re-raises a cancellation. The
+            # flag describes one call, and a stale `True` would let the *next* call through
+            # a prompt it never had.
+            if had_flag:
+                ctx.approved = previous_approved
 
         if limits is not None:
             limits.tool_calls += 1
