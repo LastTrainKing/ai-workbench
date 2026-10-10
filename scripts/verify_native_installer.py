@@ -216,6 +216,18 @@ def port_open(port: int) -> bool:
         return False
 
 
+#: Where `_run_bounded` keeps the output of the processes it launches. A directory under
+#: `build/`, **not** a temporary one.
+#:
+#: It was a `TemporaryDirectory`, and that crashed the harness a third time for the same
+#: reason it crashed the application: the engines a launcher starts are not in its process
+#: tree, they inherit the handles it was given, and Windows will not delete a file a live
+#: process holds open — so `__exit__` raised `PermissionError` out of the `finally` that
+#: exists to put the machine back the way it was found. Keeping the logs also means a failed
+#: run leaves the launcher's own output behind to be read.
+_RUN_LOG_DIR = ROOT / "build" / "acceptance-logs"
+
+
 def _run_bounded(
     command: list[str],
     *,
@@ -236,46 +248,52 @@ def _run_bounded(
     Files do not have that property. Nothing waits on a file, so `Popen.wait` returns the
     moment the process exits, and on timeout the tree is killed explicitly.
     """
-    with tempfile.TemporaryDirectory(prefix="aiw-run-") as scratch:
-        out_path = Path(scratch) / "stdout.txt"
-        err_path = Path(scratch) / "stderr.txt"
-        try:
-            with out_path.open("wb") as out_handle, err_path.open("wb") as err_handle:
-                process = subprocess.Popen(
-                    command,
-                    cwd=str(cwd) if cwd else None,
-                    env=env,
-                    stdin=subprocess.DEVNULL,
-                    stdout=out_handle,
-                    stderr=err_handle,
-                )
-        except OSError as exc:
-            return 127, f"could not run {command[0]}: {type(exc).__name__}: {exc}"
+    _RUN_LOG_DIR.mkdir(parents=True, exist_ok=True)
+    stamp = f"{int(time.time() * 1000)}-{abs(hash(tuple(command))) % 10000}"
+    out_path = _RUN_LOG_DIR / f"{stamp}.out.log"
+    err_path = _RUN_LOG_DIR / f"{stamp}.err.log"
 
-        try:
-            code = process.wait(timeout=timeout)
-        except subprocess.TimeoutExpired:
-            subprocess.run(
-                ["taskkill", "/PID", str(process.pid), "/T", "/F"],
-                capture_output=True,
-                check=False,
-            )
-            with contextlib.suppress(subprocess.TimeoutExpired):
-                process.wait(timeout=30)
-            code = 124
+    out_handle = out_path.open("wb")
+    err_handle = err_path.open("wb")
+    try:
+        process = subprocess.Popen(
+            command,
+            cwd=str(cwd) if cwd else None,
+            env=env,
+            stdin=subprocess.DEVNULL,
+            stdout=out_handle,
+            stderr=err_handle,
+        )
+    except OSError as exc:
+        return 127, f"could not run {command[0]}: {type(exc).__name__}: {exc}"
+    finally:
+        out_handle.close()
+        err_handle.close()
 
-        chunks: list[str] = []
-        for path in (out_path, err_path):
-            try:
-                text = path.read_text(encoding="utf-8", errors="replace").strip()
-            except OSError:
-                text = ""
-            if text:
-                chunks.append(text)
-        output = "\n".join(chunks)
-        if code == 124:
-            output = f"did not finish within {timeout:.0f}s\n{output}".strip()
-        return code, output
+    try:
+        code = process.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        subprocess.run(
+            ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+            capture_output=True,
+            check=False,
+        )
+        with contextlib.suppress(subprocess.TimeoutExpired):
+            process.wait(timeout=30)
+        code = 124
+
+    chunks: list[str] = []
+    for path in (out_path, err_path):
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace").strip()
+        except OSError:
+            text = ""
+        if text:
+            chunks.append(text)
+    output = "\n".join(chunks)
+    if code == 124:
+        output = f"did not finish within {timeout:.0f}s\n{output}".strip()
+    return code, output
 
 
 def crash_tail(data_dir: Path, install_dir: Path, limit: int = 900) -> str:
@@ -379,33 +397,23 @@ def run_batch(script: Path, *, timeout: int = 420) -> tuple[int, str]:
     stack running, and the step that exists to test "the installed copy starts its own
     database" would have reported success against a stack it never stopped.
     """
-    completed = subprocess.run(
-        ["cmd", "/C", str(script)],
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        cwd=str(ROOT),
-        timeout=timeout,
-        check=False,
-    )
-    output = "\n".join(part for part in (completed.stdout, completed.stderr) if part).strip()
-    return completed.returncode, output
+    return _run_bounded(["cmd", "/C", str(script)], timeout=timeout, cwd=ROOT)
 
 
 def powershell(script: str, *, timeout: int = 420) -> tuple[int, str]:
-    completed = subprocess.run(
+    """Run a `.ps1` through `_run_bounded`, for the same reason everything else does.
+
+    The last place in this file that used `subprocess.run(capture_output=True, timeout=…)`,
+    and it hung: `infra-start.ps1` starts the engines and does not exit, and the engines hold
+    the inherited pipe, so the 420-second budget expired into a wait that could not end. The
+    harness sat in its own `finally` with no output — the third time this exact defect was
+    found, each time in a different call site.
+    """
+    return _run_bounded(
         ["powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", script],
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        cwd=str(ROOT),
         timeout=timeout,
-        check=False,
+        cwd=ROOT,
     )
-    output = "\n".join(part for part in (completed.stdout, completed.stderr) if part).strip()
-    return completed.returncode, output
 
 
 def count_accounts() -> int:
@@ -861,9 +869,13 @@ def run(*, install_dir: Path, data_dir: Path, keep: bool, services_were_up: dict
     )
     env_rows = {row.get("name"): row for row in (payload2.get("environment") or [])}
     db_row = env_rows.get("database") or {}
+    # `created`, not `verified`. On a first run the schema is **built from the migrations**,
+    # and that is a stronger result than validating one that already existed — which is what
+    # the second start in step 10 must report, and does. The first version of this check
+    # demanded `verified` here and therefore failed on the *better* outcome.
     check(
-        "数据库 schema 由迁移建成并校验通过",
-        db_row.get("state") == "ok" and db_row.get("schema") == "verified",
+        "数据库 schema 由迁移从零建成",
+        db_row.get("state") == "ok" and db_row.get("schema") == "created",
         f"{db_row.get('detail')}",
     )
     check("PostgreSQL 集群建在隔离数据目录里", (data_dir / "pgdata" / "PG_VERSION").is_file(), str(data_dir / "pgdata"))
@@ -921,6 +933,14 @@ def run(*, install_dir: Path, data_dir: Path, keep: bool, services_were_up: dict
         "第二次启动读到同样的账号数",
         (rows4.get("database") or {}).get("accounts") == after_seed,
         f"accounts={(rows4.get('database') or {}).get('accounts')}，期望 {after_seed}",
+    )
+    # The other half of the schema question: a database that already exists is **validated**
+    # against the head revision rather than rebuilt, and refused if it disagrees. `verified`
+    # here is the evidence that the second start took that path and not the first one.
+    check(
+        "第二次启动校验了已有 schema（而不是重建）",
+        (rows4.get("database") or {}).get("schema") == "verified",
+        f"schema={(rows4.get('database') or {}).get('schema')}",
     )
     check("data-dir.txt 未被启动过程改写", (install_dir / "data-dir.txt").read_text(encoding="utf-8").strip() == str(data_dir))
 
