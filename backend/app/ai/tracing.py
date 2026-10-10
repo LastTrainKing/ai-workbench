@@ -241,6 +241,7 @@ async def begin_tool_call(
     mutates_state: bool = False,
     agent_run_id: uuid.UUID | None = None,
     invocation_id: str | None = None,
+    working_directory: str = "",
 ) -> ToolCall:
     """Persist the **intent** to call a tool, and hand back the row.
 
@@ -291,6 +292,7 @@ async def begin_tool_call(
         invocation_id=invocation_id or new_invocation_id(),
         started_at=now,
         mutates_state=bool(mutates_state),
+        working_directory=(working_directory or "")[:1024] or None,
     )
     session.add(call)
 

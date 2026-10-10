@@ -438,6 +438,11 @@ class AgentExecutor:
                     step_index=step_index,
                     mutates_state=bool(getattr(spec, "mutates_state", False)),
                     agent_run_id=agent_run.id,
+                    # Recorded so a later check can resolve the arguments' paths the way
+                    # this run did. A relative path in `arguments` names a different file in
+                    # every run, and reconciliation happens in a process where this context
+                    # no longer exists.
+                    working_directory=ctx.working_directory,
                 )
                 await session.commit()
 

@@ -165,6 +165,56 @@ async def _reconcile_interrupted_runs() -> None:
         )
 
     await _reconcile_interrupted_agent_runs()
+    await _reconcile_unknown_tool_calls()
+
+
+async def _reconcile_unknown_tool_calls() -> None:
+    """Try to turn last session's `UNKNOWN` invocations into an answer.
+
+    `UNKNOWN` is honest and useless on its own: it says a tool call may or may not have had
+    its effect. For some tools the effect is still observable — a file either holds those
+    bytes or does not, a directory either exists or does not, the git index either lists
+    those paths or does not — so a check can settle it. For the rest it cannot, and those
+    stay `UNKNOWN`.
+
+    **Nothing is re-run here.** See `app.ai.tools.reconcile` for why there is no replay path
+    and will not be one.
+
+    The registry is built from a default policy rather than the run's own, because the run's
+    policy is gone by now. That is a real limitation and it is bounded: the checks only
+    *read*, and only paths the invocation itself already held permission for when it was
+    dispatched. The per-run endpoint (`POST /agent/runs/{id}/reconcile`) rebuilds the policy
+    from the run's own record and is the stronger check; this pass is the one that happens
+    without anybody asking.
+    """
+    from app.ai.tools.permissions import AgentPolicy
+    from app.ai.tools.reconcile import reconcile_unknown_calls
+    from app.ai.tools.registry import build_computer_registry
+    from app.infrastructure.database import session_scope
+
+    try:
+        registry = build_computer_registry(AgentPolicy.from_settings(mode="autonomous", level=3))
+        async with session_scope() as session:
+            reports = await reconcile_unknown_calls(session, registry=registry)
+        if reports:
+            decided = [r for r in reports if r.verdict.value != "UNDECIDABLE"]
+            logger.warning(
+                "unknown_tool_calls_reconciled",
+                extra={
+                    "checked": len(reports),
+                    "decided": len(decided),
+                    "applied": sum(1 for r in reports if r.verdict.value == "APPLIED"),
+                    "not_applied": sum(1 for r in reports if r.verdict.value == "NOT_APPLIED"),
+                    "undecidable": sum(1 for r in reports if r.verdict.value == "UNDECIDABLE"),
+                    "examples": [
+                        f"{r.tool_name}:{r.verdict.value}" for r in reports[:8]
+                    ],
+                },
+            )
+    except Exception as exc:
+        logger.error(
+            "tool_call_reconcile_failed", extra={"error": f"{type(exc).__name__}: {exc}"}
+        )
 
 
 async def _reconcile_interrupted_agent_runs() -> None:

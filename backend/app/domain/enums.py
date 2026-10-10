@@ -124,6 +124,16 @@ class ToolCallStatus(StrEnum):
     FAILED = "FAILED"
     #: The loop guard refused a duplicate call; nothing ran.
     SKIPPED = "SKIPPED"
+    #: **Proven** to have had no effect, by checking the world rather than by trusting a
+    #: missing result row.
+    #:
+    #: This is not `SKIPPED` and the difference is the whole point. `SKIPPED` says the
+    #: system decided not to run the tool — a decision, made before dispatch. `NOT_APPLIED`
+    #: says the tool *was* dispatched, the process died before recording an outcome, and a
+    #: later check of the target found nothing there. The first is a choice; the second is
+    #: evidence. Collapsing them would let a check that found nothing be read as a call
+    #: that never happened, and the reader would stop looking.
+    NOT_APPLIED = "NOT_APPLIED"
     #: The process died mid-invocation. **Never auto-retried.**
     UNKNOWN = "UNKNOWN"
 

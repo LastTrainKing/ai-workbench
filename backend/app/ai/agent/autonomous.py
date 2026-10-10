@@ -491,6 +491,7 @@ class AutonomousAgent:
             arguments=request.arguments,
             step_index=step_index,
             mutates_state=bool(getattr(spec, "mutates_state", False)),
+            working_directory=self.ctx.working_directory,
         )
 
     async def _resolve_requirements(self, goal: str) -> None:

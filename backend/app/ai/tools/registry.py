@@ -211,6 +211,47 @@ def build_computer_registry(
     return ComputerToolRegistry(policy, enabled=enabled)
 
 
+def tool_for(registry: Any, name: str) -> Any | None:
+    """The **tool object** for `name`, so its `reconcile` can be asked.
+
+    `spec_for` answers "what is this tool declared to be"; reconciliation needs the
+    implementation, because the check has to match what `execute` actually does and the only
+    place that stays true is the class itself.
+
+    Three registry shapes are in use — the computer registry (a dict of `Tool`), the union
+    (two halves), and the business registry (objects that carry a `spec` and an `execute`
+    but are not `Tool` subclasses). Rather than require one shape, this asks each in turn
+    and returns `None` when none can answer. `None` is a legitimate answer: a tool nobody
+    can hand back is a tool that cannot be reconciled.
+    """
+    getter = getattr(registry, "get", None)
+    if callable(getter):
+        try:
+            found = getter(name)
+        except (KeyError, TypeError):
+            found = None
+        if found is not None:
+            return found
+
+    tools = getattr(registry, "tools", None)
+    if callable(tools):
+        try:
+            for tool in tools():
+                spec = getattr(tool, "spec", None)
+                if spec is not None and getattr(spec, "name", None) == name:
+                    return tool
+        except (TypeError, AttributeError):
+            pass
+
+    for attribute in ("business", "computer"):
+        half = getattr(registry, attribute, None)
+        if half is not None:
+            found = tool_for(half, name)
+            if found is not None:
+                return found
+    return None
+
+
 def spec_for(registry: Any, name: str) -> Any | None:
     """The spec for `name`, from any registry shape, or None.
 

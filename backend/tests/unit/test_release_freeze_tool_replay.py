@@ -13,6 +13,9 @@ to classify costs a manual check rather than a duplicated side effect.
 
 from __future__ import annotations
 
+import tempfile
+import uuid
+
 import pytest
 
 from app.ai.tracing import replay_class_of
@@ -82,16 +85,25 @@ def _real_specs() -> dict[str, ToolSpec]:
     return {spec.name: spec for spec in build_computer_registry(policy).specs()}
 
 
-@pytest.mark.parametrize(
-    "name",
-    ["file_write", "directory_create", "git_add"],
-)
+def _real_registry():
+    """The registry itself, for the tests that need the tool objects rather than the specs."""
+    from app.ai.tools.permissions import AgentPolicy
+    from app.ai.tools.registry import build_computer_registry
+
+    return build_computer_registry(AgentPolicy.from_settings(mode="autonomous", level=3))
+
+
+@pytest.mark.parametrize("name", ["directory_create"])
 def test_the_replay_safe_writes_are_marked(name: str) -> None:
     """Marked because their implementation was read, not because the name sounded safe.
 
-    `file_write` overwrites and its result is a function of `path` + `content`;
-    `directory_create` is `mkdir(exist_ok=True)`; `git add` records paths in an index, and
-    staging the same paths twice records the same paths.
+    One tool is left in this list, and it is the one whose claim survives the question the
+    other two failed. `directory_create`'s entire effect is a single bit — "this directory
+    exists" — and `mkdir(parents=True, exist_ok=True)` produces that bit and nothing else.
+    Repeating it cannot produce a different result, whatever happened in between.
+
+    `file_write` and `git_add` used to be here. They are not, and
+    `test_the_writes_that_cannot_be_repeated_are_not_marked` says why.
     """
     spec = _real_specs().get(name)
     assert spec is not None, f"{name} is no longer registered"
@@ -124,6 +136,22 @@ def test_the_replay_safe_writes_are_marked(name: str) -> None:
         "http_post",
         "run_build",
         "screenshot",
+        # Moved here from the safe list, after re-reading the implementations.
+        #
+        # `file_write` overwrites. The old note argued the file it leaves behind is a
+        # function of `path` + `content`, which is true of the file this call writes and
+        # false of the file it *finds*: a replay writes over whatever is there now. If
+        # anything else wrote there in between, the replay destroys it.
+        #
+        # `git_add` stages whatever the path currently contains. A replay after the user
+        # edited the file stages content the original call never saw; a replay after the
+        # user ran `git reset` puts the path back, undoing a deliberate action. The index
+        # is the user's state, not this program's scratch space.
+        #
+        # Both are still *reconcilable* — see
+        # `test_the_reconcilable_writes_can_be_checked_after_a_crash`.
+        "file_write",
+        "git_add",
     ],
 )
 def test_the_writes_that_cannot_be_repeated_are_not_marked(name: str) -> None:
@@ -141,6 +169,54 @@ def test_the_writes_that_cannot_be_repeated_are_not_marked(name: str) -> None:
         f"{name} is classified {spec.replay_class()}; a recovery would be willing to "
         "repeat it after a crash"
     )
+
+
+@pytest.mark.parametrize("name", ["file_write", "directory_create", "git_add"])
+def test_the_reconcilable_writes_can_be_checked_after_a_crash(name: str) -> None:
+    """Being unsafe to replay is not the same as being unknowable.
+
+    These three tools are the ones the recovery path can actually resolve: each has an
+    observable target — a file's bytes, a directory's existence, the git index's contents —
+    so an interrupted call can be settled by looking instead of by guessing. The check must
+    be overridden on the tool class, because the base implementation reports `UNDECIDABLE`
+    and a subclass that forgot to override it would silently be treated as uncheckable.
+    """
+    from app.ai.agent.tools import Tool
+    from app.ai.tools.registry import tool_for
+
+    registry = _real_registry()
+    tool = tool_for(registry, name)
+    assert tool is not None, f"{name} is no longer registered"
+    assert type(tool).reconcile is not Tool.reconcile, (
+        f"{name} does not override reconcile, so an interrupted call of it can only ever "
+        "be reported as UNDECIDABLE"
+    )
+
+
+def test_the_tools_with_no_check_report_undecidable() -> None:
+    """The default must stay undecidable, and it must be the default for a reason.
+
+    `file_append` is the case worth naming: it has a real, non-repeatable side effect and
+    no way to tell from outside whether it happened. A recovery that guessed either way
+    would be worse than one that says so.
+    """
+    import asyncio
+
+    from app.ai.agent.tools import Tool, ToolContext
+
+    registry = _real_registry()
+    from app.ai.tools.registry import tool_for
+
+    tool = tool_for(registry, "file_append")
+    assert tool is not None
+    assert type(tool).reconcile is Tool.reconcile
+    ctx = ToolContext(
+        session=None,
+        owner_id=uuid.uuid4(),
+        working_directory=tempfile.gettempdir(),
+    )
+    outcome = asyncio.run(tool.reconcile(ctx, {"path": "x.txt", "content": "y"}, {}))
+    assert outcome.verdict.value == "UNDECIDABLE"
 
 
 def test_every_read_only_tool_is_replayable() -> None:

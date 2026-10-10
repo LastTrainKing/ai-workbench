@@ -39,7 +39,7 @@ from typing import Any, ClassVar
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.ai.types import ToolResult, ToolSpec
+from app.ai.types import ReconcileOutcome, ReconcileVerdict, ToolResult, ToolSpec
 from app.core.errors import AppError, NotFoundError, ToolExecutionError, ValidationError
 from app.core.logging import get_logger
 from app.domain.enums import TaskSource
@@ -108,6 +108,29 @@ class ToolContext:
         base = self.working_directory or (self.permissions and str(self.permissions.policy.workspace)) or "."
         return str((Path(base) / candidate).resolve(strict=False))
 
+    def can_resolve(self, path: str) -> bool:
+        """Whether `resolve()` would use a directory this context actually knows.
+
+        `resolve()` has to produce *something*, so it falls back to `.` — the process's own
+        directory. For execution that is fine, because `working_directory` is always set by
+        the run. For **reconciliation** it is not: the run is over, and a context rebuilt
+        from an invocation row whose `working_directory` is empty would resolve `out.txt`
+        against wherever this process happens to be running from. If a file of that name
+        exists there, the check reports a confident verdict about a file the invocation
+        never mentioned — which is worse than reporting that it could not tell.
+
+        This is asked by the tool rather than by the reconciliation driver because only the
+        tool knows which of its arguments are paths. A driver that guessed from argument
+        names would either miss real paths or treat a `content` string as one.
+        """
+        candidate = Path(path).expanduser()
+        if candidate.is_absolute():
+            return True
+        if self.working_directory:
+            return True
+        policy = getattr(self.permissions, "policy", None) if self.permissions else None
+        return bool(getattr(policy, "workspace", None))
+
     def register_artifact(self, kind: str, entity_id: str) -> None:
         self.artifacts.setdefault(kind, []).append(entity_id)
 
@@ -148,6 +171,33 @@ class Tool(ABC):
 
     @abstractmethod
     async def execute(self, ctx: ToolContext, **kwargs: Any) -> ToolResult: ...
+
+    # --------------------------------------------------------- reconciliation --
+    async def reconcile(
+        self, ctx: ToolContext, arguments: dict[str, Any], recorded: dict[str, Any]
+    ) -> ReconcileOutcome:
+        """Check the world and say whether this invocation's intended state is present.
+
+        Called when a tool call was interrupted — the intent was recorded, the process
+        died before the outcome was, and the row is sitting in `UNKNOWN`. Recovery has one
+        question to answer before it can do anything: *is there a side effect here already?*
+        Re-running on a wrong "no" duplicates it; re-running on a wrong "yes" leaves the
+        work undone. Neither is acceptable, so the honest third answer — "I cannot tell" —
+        is what this returns by default.
+
+        **The default is undecidable, and it stays the default.** Implementing a check is a
+        claim that a tool's effect can be observed from outside; the twenty-odd tools that
+        have no such check must not be assumed harmless. A tool that can be checked
+        overrides this next to its `execute`, where the two cannot drift apart.
+
+        `arguments` are what the model asked for; `recorded` is the result payload if there
+        is one (usually empty — that is why reconciliation is being asked).
+        """
+        return ReconcileOutcome(
+            verdict=ReconcileVerdict.UNDECIDABLE,
+            detail=f"{self.spec.name} 没有对账方法，无法确认这次调用的效果是否已经发生",
+            evidence={"tool": self.spec.name},
+        )
 
     # ------------------------------------------------------------ validation --
     def validate(self, arguments: dict[str, Any]) -> dict[str, Any]:

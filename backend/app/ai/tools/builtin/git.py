@@ -24,7 +24,7 @@ from typing import Any
 
 from app.ai.agent.tools import Tool, ToolContext
 from app.ai.tools.builtin.shell import _run_process, _shell_for
-from app.ai.types import ToolResult, ToolSpec
+from app.ai.types import ReconcileOutcome, ReconcileVerdict, ToolResult, ToolSpec
 from app.core.errors import ValidationError
 
 GIT_TIMEOUT = 120.0
@@ -298,12 +298,23 @@ class GitAddTool(_GitTool):
         risk_level="low",
         timeout_seconds=GIT_TIMEOUT,
         mutates_state=True,
-        # Replay-safe: the index records paths, and staging the same paths twice records
-        # the same paths. The caveat is honest rather than hidden — `git add -A` (empty
-        # `paths`) stages *all* changes, so a repeat picks up anything that changed in
-        # between. That only matters if something else wrote to the tree concurrently,
-        # which is not the situation a crash-replay is in.
-        idempotent=True,
+        # **Not replay-safe, and it used to be marked as if it were.**
+        #
+        # The old note argued that staging the same paths twice records the same paths, and
+        # that the `git add -A` caveat "only matters if something else wrote to the tree
+        # concurrently, which is not the situation a crash-replay is in". Both halves are
+        # wrong, and the second one is wrong about the exact situation a replay is in.
+        #
+        # A crash-replay happens *later*. Between the crash and the replay, the user may
+        # have edited the file — and `git add <path>` then stages the new content, so the
+        # index ends up holding something the original invocation never saw. Or the user
+        # may have run `git reset` to unstage it, and the replay puts it back, undoing a
+        # deliberate action on their working tree. The index is the user's state, not this
+        # program's scratch space.
+        #
+        # Reconcilable instead: whether the paths are in the index is readable, and
+        # `GitAddTool.reconcile` reads it.
+        idempotent=False,
     )
     is_write = True
 
@@ -321,6 +332,90 @@ class GitAddTool(_GitTool):
             data={"staged": paths or "all", "output": result["stdout"] + result["stderr"]},
             error="" if result["exit_code"] == 0 else result["stderr"],
             summary="staged " + ("all changes" if not paths else f"{len(paths)} path(s)"),
+        )
+
+    async def reconcile(
+        self, ctx: ToolContext, arguments: dict[str, Any], recorded: dict[str, Any]
+    ) -> ReconcileOutcome:
+        """Read the index and see whether the paths this call staged are in it.
+
+        `git diff --cached --name-only` is the index as git itself reports it, which is the
+        only authority on what is staged. A process exit code is not evidence — `git add`
+        of a path with no changes exits 0 and stages nothing — and the invocation that is
+        being checked never got as far as recording its exit code anyway.
+
+        `APPLIED` here means "the index already contains these paths, so re-running would
+        add nothing", which is the question recovery actually has. It does not claim the
+        original invocation is what put them there; an earlier `git add` in the same run
+        would look identical, and there is no way to tell them apart. That is why the
+        verdict is worded as a statement about the index.
+
+        Empty `paths` means `git add -A`, whose effect is "everything that had changed".
+        Nothing about the index now can be attributed to it, so that is `UNDECIDABLE`.
+        """
+        paths = arguments.get("paths") or []
+        if not isinstance(paths, list) or not paths:
+            return ReconcileOutcome(
+                verdict=ReconcileVerdict.UNDECIDABLE,
+                detail="本次调用是 `git add -A`（全部改动），索引当前的状态无法归因于它",
+                evidence={"staged": "all"},
+            )
+
+        # The repository is located from `path` (or the working directory when absent), so
+        # a missing working directory means the check would look at a different repository —
+        # and a different repository's index would answer the question confidently and
+        # wrongly.
+        repo_hint = arguments.get("path")
+        if isinstance(repo_hint, str) and repo_hint and not ctx.can_resolve(repo_hint):
+            return ReconcileOutcome(
+                verdict=ReconcileVerdict.UNDECIDABLE,
+                detail=f"调用记录里没有工作目录，{repo_hint!r} 无法解析到运行时的那个仓库，不猜",
+                evidence={"path": repo_hint},
+            )
+        if (not isinstance(repo_hint, str) or not repo_hint) and not ctx.can_resolve("."):
+            return ReconcileOutcome(
+                verdict=ReconcileVerdict.UNDECIDABLE,
+                detail="调用记录里没有工作目录，无法确定是哪个仓库，不猜",
+                evidence={"paths": [str(p) for p in paths]},
+            )
+
+        try:
+            root = await self._repo(ctx, arguments.get("path"))
+        except Exception as exc:
+            return ReconcileOutcome(
+                verdict=ReconcileVerdict.UNDECIDABLE,
+                detail=f"无法定位仓库：{type(exc).__name__}: {exc}",
+                evidence={"paths": [str(p) for p in paths]},
+            )
+        if (err := await self._ensure_repo(root)):
+            return ReconcileOutcome(
+                verdict=ReconcileVerdict.UNDECIDABLE,
+                detail=f"无法读取仓库状态：{err}",
+                evidence={"repo": str(root)},
+            )
+
+        staged = await _git_run(root, ["diff", "--cached", "--name-only"])
+        if staged["exit_code"] != 0:
+            return ReconcileOutcome(
+                verdict=ReconcileVerdict.UNDECIDABLE,
+                detail=f"`git diff --cached` 失败：{staged['stderr'].strip()[:200]}",
+                evidence={"repo": str(root)},
+            )
+        in_index = {line.strip().replace("\\", "/") for line in staged["stdout"].splitlines() if line.strip()}
+        wanted = [str(p).replace("\\", "/") for p in paths]
+        missing = [p for p in wanted if p not in in_index]
+        evidence = {"repo": str(root), "index": sorted(in_index), "wanted": wanted}
+
+        if not missing:
+            return ReconcileOutcome(
+                verdict=ReconcileVerdict.APPLIED,
+                detail=f"索引里已经包含 {len(wanted)} 个路径，重跑不会再产生额外效果",
+                evidence=evidence,
+            )
+        return ReconcileOutcome(
+            verdict=ReconcileVerdict.NOT_APPLIED,
+            detail=f"索引里没有这些路径：{missing}",
+            evidence=evidence,
         )
 
 

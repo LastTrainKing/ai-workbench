@@ -7,6 +7,7 @@ application.  Nothing outside ``app.ai.providers`` knows which vendor is in use.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from enum import StrEnum
 from typing import Any, Literal
 
 Role = Literal["system", "user", "assistant", "tool"]
@@ -262,6 +263,50 @@ class ToolResult:
             text = self.data if isinstance(self.data, str) else _json_safe(self.data)
             payload["data"] = text if len(str(text)) <= limit else str(text)[:limit] + "...<truncated>"
         return payload
+
+
+class ReconcileVerdict(StrEnum):
+    """What a check of the world could establish about an interrupted invocation.
+
+    **Every verdict is a statement about the state, not about history.** A crash destroys
+    the only record of what the tool observed; nothing can reconstruct that. What a check
+    can do is look at the target *now* and answer whether the state the invocation intended
+    is there. Recovery does not need history — it needs to know whether re-running is
+    necessary, and for that the state is the right question.
+
+    That framing is also what keeps these three verdicts honest rather than convenient:
+
+      ``APPLIED``      the intended state is present. Re-running would add nothing.
+      ``NOT_APPLIED``  the intended state is absent. The call did not take effect, or was
+                       undone afterwards — either way re-running would not duplicate it.
+      ``UNDECIDABLE``  the check could not tell. This is the default and it stays the
+                       default: a tool with no check reports this, and nothing is replayed
+                       on the strength of a guess.
+    """
+
+    APPLIED = "APPLIED"
+    NOT_APPLIED = "NOT_APPLIED"
+    UNDECIDABLE = "UNDECIDABLE"
+
+
+@dataclass(slots=True)
+class ReconcileOutcome:
+    """The result of checking one invocation against the world."""
+
+    verdict: ReconcileVerdict
+    #: One sentence a person can act on. It is shown in the run detail view, so it says
+    #: what was compared rather than only what was concluded.
+    detail: str = ""
+    #: What the check actually looked at — path, digest, index contents. Recorded so the
+    #: conclusion can be re-examined without re-running the check.
+    evidence: dict[str, Any] = field(default_factory=dict)
+
+    def to_payload(self) -> dict[str, Any]:
+        return {
+            "verdict": self.verdict.value,
+            "detail": self.detail,
+            "evidence": _json_safe(self.evidence),
+        }
 
 
 def _json_safe(value: Any) -> Any:

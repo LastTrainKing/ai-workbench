@@ -205,6 +205,22 @@ class ToolCall(Base, UUIDPrimaryKeyMixin):
     #: effect already happened.
     mutates_state: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
+    #: The working directory relative paths in `arguments` were resolved against.
+    #:
+    #: Without it the arguments are not enough to check anything: `file_write("out.txt")`
+    #: names a different file in every run, and reconciliation — which happens in a later
+    #: process, with no run in flight — would have to guess which one. Recorded at intent
+    #: time, because that is the only moment the answer exists.
+    working_directory: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+
+    #: When a later check of the world decided what this invocation did, if it did.
+    #:
+    #: `finished_at` is when the tool's own process observed the outcome. This is when
+    #: somebody else went and looked. A row can legitimately have this set and
+    #: `finished_at` NULL — that is the `UNKNOWN` that was resolved afterwards — and the
+    #: two must not be confused, which is why they are two columns.
+    reconciled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
     ai_run: Mapped[AIRun] = relationship(back_populates="tool_calls")
 
 

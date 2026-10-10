@@ -29,7 +29,7 @@ from typing import Any
 
 from app.ai.agent.tools import Tool, ToolContext
 from app.ai.tools.builtin.documents import DocumentReadTool, DocumentWriteTool
-from app.ai.types import ToolResult, ToolSpec
+from app.ai.types import ReconcileOutcome, ReconcileVerdict, ToolResult, ToolSpec
 from app.core.errors import ValidationError
 
 #: Refuse to read more than this in one call. Large files are a real thing, but
@@ -230,10 +230,20 @@ class FileWriteTool(Tool):
         risk_level="low",
         timeout_seconds=20,
         mutates_state=True,
-        # Replay-safe: the tool overwrites, and the file it leaves behind is a function
-        # of `path` and `content` alone. Writing the same bytes twice leaves the same
-        # file with the same SHA-256, which is exactly what the result reports.
-        idempotent=True,
+        # **Not replay-safe, and it used to be marked as if it were.**
+        #
+        # The old justification was "the tool overwrites, and the file it leaves behind is
+        # a function of `path` and `content` alone". That is true of the file this call
+        # writes and false of the file it *finds*: replaying after the process died writes
+        # `content` over whatever is at `path` now. If anything else wrote there in the
+        # meantime — the user, another tool call, an editor — the replay destroys it. The
+        # whole question a recovery asks is "what changed since", and this tool's answer is
+        # "whatever was there is gone". That is the definition of unsafe to replay.
+        #
+        # It is still *reconcilable*, which is the better answer: the intended content is
+        # in the invocation's arguments, so `FileWriteTool.reconcile` can compare the file
+        # on disk against it and say whether the effect is present.
+        idempotent=False,
     )
 
     async def execute(
@@ -267,6 +277,74 @@ class FileWriteTool(Tool):
                 "created": not previous_hash,
             },
             summary=("created " if not previous_hash else "updated ") + target.name,
+        )
+
+    async def reconcile(
+        self, ctx: ToolContext, arguments: dict[str, Any], recorded: dict[str, Any]
+    ) -> ReconcileOutcome:
+        """Compare the file on disk with the bytes this call was asked to write.
+
+        Three outcomes, and the third is the one that matters:
+
+        * file missing — the write cannot have landed. `NOT_APPLIED`.
+        * file present and its SHA-256 equals the digest of the intended content — the
+          state the call wanted is there. `APPLIED`.
+        * file present with **different** content — the call's intended bytes are not
+          there. That is not "not applied" and it is not "applied": a later write may have
+          overwritten it, or the write may never have happened and something else created
+          the file. Both are consistent with what can be observed, so it is `UNDECIDABLE`.
+          Reporting `NOT_APPLIED` here would invite a replay that overwrites whatever the
+          user put there in the meantime — the exact harm this whole mechanism exists to
+          prevent.
+        """
+        raw = arguments.get("path")
+        content = arguments.get("content")
+        if not isinstance(raw, str) or not isinstance(content, str):
+            return ReconcileOutcome(
+                verdict=ReconcileVerdict.UNDECIDABLE,
+                detail="调用记录里没有完整的 path/content，无法核对",
+                evidence={"arguments": sorted(arguments)},
+            )
+
+        if not ctx.can_resolve(raw):
+            return ReconcileOutcome(
+                verdict=ReconcileVerdict.UNDECIDABLE,
+                detail=f"调用记录里没有工作目录，{raw!r} 无法解析到运行时的那个文件，不猜",
+                evidence={"path": raw},
+            )
+
+        target = Path(ctx.resolve(raw))
+        expected = hashlib.sha256(content.encode("utf-8")).hexdigest()
+        evidence = {"path": str(target), "expected_sha256": expected}
+
+        if not target.exists():
+            return ReconcileOutcome(
+                verdict=ReconcileVerdict.NOT_APPLIED,
+                detail=f"{target} 不存在，本次写入没有落到磁盘上",
+                evidence=evidence,
+            )
+        if target.is_dir():
+            return ReconcileOutcome(
+                verdict=ReconcileVerdict.UNDECIDABLE,
+                detail=f"{target} 现在是目录，无法判断本次写入是否发生过",
+                evidence=evidence,
+            )
+
+        actual = _hash_file(target)
+        evidence["actual_sha256"] = actual
+        if actual == expected:
+            return ReconcileOutcome(
+                verdict=ReconcileVerdict.APPLIED,
+                detail=f"{target} 的内容与本次调用要写入的内容一致（sha256 相同）",
+                evidence=evidence,
+            )
+        return ReconcileOutcome(
+            verdict=ReconcileVerdict.UNDECIDABLE,
+            detail=(
+                f"{target} 存在，但内容与本次调用要写入的不一致——可能是之后被改写，"
+                "也可能是这次写入根本没有发生。不重放。"
+            ),
+            evidence=evidence,
         )
 
 
@@ -592,8 +670,18 @@ class DirectoryCreateTool(Tool):
         risk_level="low",
         timeout_seconds=15,
         mutates_state=True,
-        # Replay-safe: `mkdir(parents=True, exist_ok=True)` — the second call reports
-        # `created: false` and the filesystem is unchanged.
+        # Replay-safe, and this one holds up under the question the others did not.
+        #
+        # The tool's entire effect is "this directory exists". `mkdir(parents=True,
+        # exist_ok=True)` produces that effect and nothing else: no content, no
+        # attributes, no ordering. Repeating it cannot produce a different result from
+        # the one it produced the first time, whatever happened in between — including
+        # the directory having been removed, in which case recreating it *is* the
+        # contract the caller asked for.
+        #
+        # The weaker version of this claim would be "the second call reports
+        # `created: false`", which is about the return value rather than the state.
+        # The state is what matters, and the state is a single bit.
         idempotent=True,
     )
 
@@ -608,6 +696,54 @@ class DirectoryCreateTool(Tool):
             ok=True,
             data={"path": str(target), "created": not existed},
             summary=("created " if not existed else "already existed: ") + target.name,
+        )
+
+    async def reconcile(
+        self, ctx: ToolContext, arguments: dict[str, Any], recorded: dict[str, Any]
+    ) -> ReconcileOutcome:
+        """Ask the one question this tool's effect consists of.
+
+        The effect is a single bit — "this directory exists" — so the check is a single
+        `is_dir()`, and the answer is exact rather than probable. That is what makes this
+        tool's `idempotent` claim stand up where `file_write`'s did not.
+
+        `exists` but not `is_dir` is `UNDECIDABLE` rather than `NOT_APPLIED`: a file is
+        sitting where the directory was meant to go, and that is not a state this call can
+        have produced, so something else is going on and a replay would fail.
+        """
+        raw = arguments.get("path")
+        if not isinstance(raw, str) or not raw:
+            return ReconcileOutcome(
+                verdict=ReconcileVerdict.UNDECIDABLE,
+                detail="调用记录里没有 path，无法核对",
+                evidence={"arguments": sorted(arguments)},
+            )
+
+        if not ctx.can_resolve(raw):
+            return ReconcileOutcome(
+                verdict=ReconcileVerdict.UNDECIDABLE,
+                detail=f"调用记录里没有工作目录，{raw!r} 无法解析到运行时的那个目录，不猜",
+                evidence={"path": raw},
+            )
+
+        target = Path(ctx.resolve(raw))
+        evidence = {"path": str(target)}
+        if target.is_dir():
+            return ReconcileOutcome(
+                verdict=ReconcileVerdict.APPLIED,
+                detail=f"{target} 是目录，本次调用要的效果已经在了",
+                evidence=evidence,
+            )
+        if target.exists():
+            return ReconcileOutcome(
+                verdict=ReconcileVerdict.UNDECIDABLE,
+                detail=f"{target} 存在但不是目录，本次调用不可能造成这个状态",
+                evidence=evidence,
+            )
+        return ReconcileOutcome(
+            verdict=ReconcileVerdict.NOT_APPLIED,
+            detail=f"{target} 不存在，本次调用没有建成目录",
+            evidence=evidence,
         )
 
 

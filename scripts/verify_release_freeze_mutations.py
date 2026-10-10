@@ -234,6 +234,64 @@ CASES: list[tuple[str, str, str, str, str]] = [
         "tests/unit/test_release_freeze_tool_replay.py"
         "::test_spec_for_resolves_through_specs_when_there_is_no_get_spec",
     ),
+    (
+        # `file_write` was marked idempotent, on the argument that the file it leaves behind
+        # is a function of `path` + `content`. True of the file it writes, false of the file
+        # it finds: a replay writes over whatever is there now.
+        "RF-19 a file write claims to be replay-safe",
+        "backend/app/ai/tools/builtin/filesystem.py",
+        "        mutates_state=True,\n"
+        "        # **Not replay-safe, and it used to be marked as if it were.**",
+        "        mutates_state=True,\n"
+        "        idempotent=True,\n"
+        "        # **Not replay-safe, and it used to be marked as if it were.**",
+        "tests/unit/test_release_freeze_tool_replay.py"
+        "::test_the_writes_that_cannot_be_repeated_are_not_marked[file_write]",
+    ),
+    (
+        # The file on disk does not hold the intended bytes. That is consistent with "the
+        # write never happened" **and** with "it happened and something overwrote it", and
+        # the two have opposite safe responses.
+        "RF-20 a changed file is reported as not applied",
+        "backend/app/ai/tools/builtin/filesystem.py",
+        "        return ReconcileOutcome(\n"
+        "            verdict=ReconcileVerdict.UNDECIDABLE,\n"
+        "            detail=(\n"
+        "                f\"{target} 存在，但内容与本次调用要写入的不一致——可能是之后被改写，\"",
+        "        return ReconcileOutcome(\n"
+        "            verdict=ReconcileVerdict.NOT_APPLIED,\n"
+        "            detail=(\n"
+        "                f\"{target} 存在，但内容与本次调用要写入的不一致——可能是之后被改写，\"",
+        "tests/integration/test_release_freeze_tool_reconcile.py"
+        "::test_a_file_with_different_content_is_undecidable_not_not_applied",
+    ),
+    (
+        # A tool with no check must not be assumed harmless. `file_append` is the case: it
+        # has a real, non-repeatable side effect and no way to observe it from outside.
+        "RF-21 a tool with no check claims to be applied",
+        "backend/app/ai/agent/tools.py",
+        "        return ReconcileOutcome(\n"
+        "            verdict=ReconcileVerdict.UNDECIDABLE,\n"
+        "            detail=f\"{self.spec.name} 没有对账方法，无法确认这次调用的效果是否已经发生\",",
+        "        return ReconcileOutcome(\n"
+        "            verdict=ReconcileVerdict.APPLIED,\n"
+        "            detail=f\"{self.spec.name} 没有对账方法，无法确认这次调用的效果是否已经发生\",",
+        "tests/integration/test_release_freeze_tool_reconcile.py"
+        "::test_a_tool_with_no_check_is_undecidable",
+    ),
+    (
+        # A check is a read. One that re-applied the operation would look identical in the
+        # database and would have destroyed whatever was in the file.
+        "RF-22 reconciliation writes to the target",
+        "backend/app/ai/tools/builtin/filesystem.py",
+        "        actual = _hash_file(target)\n"
+        "        evidence[\"actual_sha256\"] = actual",
+        "        target.write_bytes(content.encode(\"utf-8\"))\n"
+        "        actual = _hash_file(target)\n"
+        "        evidence[\"actual_sha256\"] = actual",
+        "tests/integration/test_release_freeze_tool_reconcile.py"
+        "::test_reconciliation_does_not_touch_the_file",
+    ),
 ]
 
 

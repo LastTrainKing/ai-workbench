@@ -259,6 +259,124 @@ async def get_run_diff(run_id: str, user: CurrentUser, unified: bool = False) ->
     return ok(await diff_for_run(run_id, unified=unified))
 
 
+# --------------------------------------------------------------------------- #
+# Unresolved tool calls
+# --------------------------------------------------------------------------- #
+async def _owned_airun(run_id: str, user: CurrentUser, session: DbSession) -> Any:
+    """The stored run row, for this user only.
+
+    Deliberately not `_owned_controller`: the calls that need reconciling belong to runs
+    that are **over** — the process that drove them died. A registry lookup would find
+    nothing for exactly the runs this endpoint exists for.
+    """
+    from sqlalchemy import select
+
+    from app.models.ai import AIRun
+
+    row = (
+        await session.execute(
+            select(AIRun).where(AIRun.run_id == run_id, AIRun.owner_id == user.id)
+        )
+    ).scalar_one_or_none()
+    if row is None:
+        raise RunNotFoundError("找不到该运行记录")
+    return row
+
+
+@router.get(
+    "/runs/{run_id}/unresolved",
+    summary="Tool calls whose side effect could not be confirmed",
+)
+async def list_unresolved_calls(
+    run_id: str, user: CurrentUser, session: DbSession
+) -> dict[str, Any]:
+    """The invocations an interruption left undecided, and what a check concluded.
+
+    Only calls that **can change something** are listed. A read-only call is also left in
+    `UNKNOWN` — nobody observed whether it ran — but nothing can have been harmed by it, and
+    a list that mixes "we do not know, and it does not matter" with "we do not know, and it
+    might have written a file" is a list nobody reads.
+
+    `replay_allowed` is reported rather than left implicit. It is `false`, always: this
+    system does not re-run an invocation whose outcome it could not observe. Saying so in
+    the payload is the difference between a UI that has to guess and one that can state it.
+    """
+    from sqlalchemy import select
+
+    from app.domain.enums import ToolCallStatus
+    from app.models.ai import ToolCall
+
+    run = await _owned_airun(run_id, user, session)
+    rows = list(
+        (
+            await session.execute(
+                select(ToolCall)
+                .where(
+                    ToolCall.ai_run_id == run.id,
+                    ToolCall.status == ToolCallStatus.UNKNOWN.value,
+                )
+                .order_by(ToolCall.created_at)
+            )
+        ).scalars()
+    )
+    return ok(
+        {
+            "items": [
+                {
+                    "invocation_id": call.invocation_id,
+                    "tool_name": call.tool_name,
+                    "step_index": call.step_index,
+                    "arguments": call.arguments,
+                    "mutates_state": call.mutates_state,
+                    "working_directory": call.working_directory,
+                    "started_at": call.started_at.isoformat() if call.started_at else "",
+                    "note": call.error_message,
+                }
+                for call in rows
+                if call.mutates_state
+            ],
+            "undecided": sum(1 for call in rows if call.mutates_state),
+            "replay_allowed": False,
+        }
+    )
+
+
+@router.post(
+    "/runs/{run_id}/reconcile",
+    summary="Check the world and settle what each interrupted call did",
+)
+async def reconcile_run_calls(
+    run_id: str, user: CurrentUser, session: DbSession
+) -> dict[str, Any]:
+    """Look at the targets and record what can be established.
+
+    Three verdicts per invocation — `APPLIED`, `NOT_APPLIED`, `UNDECIDABLE` — with the
+    evidence that produced each. **Nothing is re-run**, and the endpoint cannot be asked to
+    re-run anything: there is no replay path. A verdict of `NOT_APPLIED` is the closest
+    thing to permission to try again, and acting on it is a decision for a person or for a
+    fresh run that will record its own invocations.
+    """
+    from app.ai.tools.permissions import AgentPolicy
+    from app.ai.tools.reconcile import reconcile_unknown_calls
+    from app.ai.tools.registry import build_computer_registry
+
+    run = await _owned_airun(run_id, user, session)
+    registry = build_computer_registry(AgentPolicy.from_settings(mode="autonomous", level=3))
+    reports = await reconcile_unknown_calls(session, registry=registry, ai_run_id=run.id)
+    await session.commit()
+
+    items = [report.to_payload() for report in reports if report.status_before != report.status_after]
+    return ok(
+        {
+            "checked": len(reports),
+            "decided": len(items),
+            "items": [report.to_payload() for report in reports],
+            "changed": items,
+            "replay_allowed": False,
+        }
+    )
+
+
 @router.post("/runs/{run_id}/rollback", summary="Restore the workspace to before the run")
 async def rollback_run_endpoint(
     run_id: str, payload: RollbackRequest, user: CurrentUser
