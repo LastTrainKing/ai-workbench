@@ -30,6 +30,10 @@ _CMD_METACHARACTERS = frozenset('&|<>^"%!')
 #: The image name the desktop shell runs under. Used for reporting, never for killing.
 APP_IMAGE = "AI Workbench.exe"
 
+#: The native build's executable. A second product image, so the guard takes a list:
+#: a test for the native installer must not stop the Tauri shell, and vice versa.
+NATIVE_APP_IMAGE = "AI-Workbench-Native.exe"
+
 
 def _powershell(command: str, *, timeout: int = 60) -> str:
     """Run PowerShell and return stdout.
@@ -97,22 +101,25 @@ def _is_under(path: str, roots: list[Path]) -> bool:
     return False
 
 
-def app_processes_under(roots: list[Path]) -> list[int]:
+def app_processes_under(roots: list[Path], *, images: tuple[str, ...] = (APP_IMAGE,)) -> list[int]:
     """PIDs of the app whose executable lives inside one of ``roots``."""
+    wanted = {name.lower() for name in images}
     return [
         pid
         for pid, path in processes_with_paths()
-        if Path(path).name.lower() == APP_IMAGE.lower() and _is_under(path, roots)
+        if Path(path).name.lower() in wanted and _is_under(path, roots)
     ]
 
 
-def stop_app_processes(roots: list[Path], *, wait_seconds: int = 20) -> list[int]:
+def stop_app_processes(
+    roots: list[Path], *, images: tuple[str, ...] = (APP_IMAGE,), wait_seconds: int = 20
+) -> list[int]:
     """Stop the app instances that live under ``roots``. Returns the PIDs stopped.
 
     Never ``/IM``. An instance installed anywhere else — the user's, typically — is not
     ours to close, and this function cannot reach it.
     """
-    pids = app_processes_under(roots)
+    pids = app_processes_under(roots, images=images)
     if not pids:
         return []
     for pid in pids:
@@ -122,14 +129,19 @@ def stop_app_processes(roots: list[Path], *, wait_seconds: int = 20) -> list[int
         )
     deadline = time.time() + wait_seconds
     while time.time() < deadline:
-        if not app_processes_under(roots):
+        if not app_processes_under(roots, images=images):
             break
         time.sleep(0.5)
     return pids
 
 
 def run_nsis_installer(
-    setup: Path, target: Path, *, timeout: int = 900
+    setup: Path,
+    target: Path,
+    *,
+    timeout: int = 900,
+    extra_switches: str = "",
+    env: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[bytes]:
     """Run a silent NSIS install into ``target``.
 
@@ -148,6 +160,8 @@ def run_nsis_installer(
     Python escaped the inner quotes, cmd received ``\\"C:\\...\\Setup.exe\\"`` as the
     program name, and the install silently did not happen — the test reported "not
     installed" and the cause was three layers away.
+
+    ``extra_switches`` goes **before** ``/D=``, which has to stay last.
     """
     text = str(target)
     offending = sorted({char for char in text if char in _CMD_METACHARACTERS})
@@ -159,17 +173,44 @@ def run_nsis_installer(
     resolved = Path(setup).resolve()
     if not resolved.is_file():
         raise FileNotFoundError(f"no installer at {resolved}")
-    return subprocess.run(
-        f'"{resolved}" /S /D={text}',
-        shell=False,
-        capture_output=True,
-        check=False,
-        timeout=timeout,
-    )
+    command = " ".join(f'"{resolved}" /S {extra_switches} /D={text}'.split())
+
+    # Output to files, not pipes, and the timeout enforced with `Popen.wait`. The installer
+    # runs PowerShell through `nsExec` for its "is it already running" and "stop what we
+    # started" checks, and those grandchildren inherit the pipe: `subprocess.run(...,
+    # timeout=…)` would kill the installer and then wait forever for the pipes to close.
+    # Measured on the native installer — a 900-second budget that never expired.
+    import tempfile
+
+    with tempfile.TemporaryDirectory(prefix="aiw-nsis-") as scratch:
+        out_path = Path(scratch) / "stdout.txt"
+        err_path = Path(scratch) / "stderr.txt"
+        with out_path.open("wb") as out_handle, err_path.open("wb") as err_handle:
+            process = subprocess.Popen(
+                command,
+                shell=False,
+                stdin=subprocess.DEVNULL,
+                stdout=out_handle,
+                stderr=err_handle,
+                env=env,
+            )
+        try:
+            code = process.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            subprocess.run(
+                ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+                capture_output=True,
+                check=False,
+            )
+            code = 124
+        stdout = out_path.read_bytes() if out_path.is_file() else b""
+        stderr = err_path.read_bytes() if err_path.is_file() else b""
+    return subprocess.CompletedProcess(command, code, stdout, stderr)
 
 
 __all__ = [
     "APP_IMAGE",
+    "NATIVE_APP_IMAGE",
     "app_processes_under",
     "processes_with_paths",
     "run_nsis_installer",

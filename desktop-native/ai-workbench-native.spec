@@ -78,6 +78,15 @@ hiddenimports += [
     "httpx",
     "httpcore",
     "anyio",
+    # `alembic/env.py` calls `fileConfig` from `logging.config`, and nothing imports it
+    # statically, so PyInstaller left it out. The symptom was not a missing-logging warning:
+    # it was `ModuleNotFoundError: No module named 'logging.config'` raised while running the
+    # migrations, reported to the user as "无法连接数据库" — a database problem that was
+    # actually a packaging problem. Found by starting the installed application against an
+    # empty data directory and letting it build the schema, which is the only way this class
+    # of gap shows up.
+    "logging.config",
+    "logging.handlers",
     # The Qt binding layer, named explicitly. PySide6's hook collects these on its own, and
     # a previous version of this spec excluded `shiboken6.Shiboken` by mistake and shipped
     # a build that could not import PySide6 at all. Listing them here means a future

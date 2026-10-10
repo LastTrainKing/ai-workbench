@@ -10,12 +10,12 @@ Or headless, to check it builds and wires up without a display::
 
 What this file is responsible for, and nothing else: resolving where its files and the
 user's data live, creating the Qt application, registering the bridge under the name QML
-expects, and loading `Main.qml`.
+expects, loading `Main.qml`, and starting and stopping the local services.
 
 It is deliberately thin. Everything interesting is in `awbnative/bridge.py` (the backend
-boundary), `awbnative/bootstrap.py` (first-run initialisation) and `qml/` (the interface),
-because a UI entry point that also holds business logic is how a rewrite turns into a
-second implementation of the product.
+boundary), `awbnative/bootstrap.py` (first-run initialisation), `awbnative/runtime.py` (the
+local database stack) and `qml/` (the interface), because a UI entry point that also holds
+business logic is how a rewrite turns into a second implementation of the product.
 
 **The order of the first two statements below is load-bearing.** `resources.configure()`
 must run before anything from `app.*` is imported, because `app.core.config` resolves the
@@ -30,26 +30,74 @@ import argparse
 import json
 import os
 import sys
+import traceback
 from pathlib import Path
 
-# `resources` imports nothing from the backend, so this is safe at module level. It is also
-# the only thing here that may run before the backend is on `sys.path`.
-from awbnative import resources
 
-#: Resolved once. From a checkout this points at `desktop-native/`; frozen, at the bundle.
-PATHS = resources.configure()
+#: Where a fatal startup error is written when nothing else can report it.
+#:
+#: **A packaged build is a GUI-subsystem executable: it has no console.** An exception
+#: raised while the modules are being imported therefore produces a message box that waits
+#: for a click, and nothing at all on disk — which is what happened: the installed
+#: application hung for ten minutes in the installer acceptance and left no trace, because
+#: there was nowhere for the trace to go. The acceptance had to be run under `timeout` and
+#: then reasoned about from the absence of a file.
+#:
+#: So the crash log is installed **before the first import that can fail**, and it writes
+#: to a path it can work out without any of the code below it having run.
+def _crash_log_path() -> Path:
+    explicit = os.environ.get("AI_WORKBENCH_DATA_DIR", "").strip()
+    if explicit:
+        return Path(explicit) / "logs" / "native-crash.log"
+    base = os.environ.get("LOCALAPPDATA", "").strip()
+    root = Path(base) if base else Path.home() / "AppData" / "Local"
+    return root / "AI Workbench Data" / ".runtime" / "logs" / "native-crash.log"
 
-from awbnative.bridge import ServiceBridge
-from PySide6.QtCore import QUrl
-from PySide6.QtGui import QGuiApplication
-from PySide6.QtQml import QQmlApplicationEngine
 
-# Imported for its side effect as much as for the name. PySide6 only hands back the
-# `QQuickWindow` wrapper for `engine.rootObjects()[0]` if that type has been registered
-# with the binding system; without this import the same object arrives as a plain
-# `QWindow`, which has no `grabWindow`. The symptom is an AttributeError inside a timer
-# callback — a screenshot that silently does not appear, not a crash that points here.
-from PySide6.QtQuick import QQuickWindow  # noqa: F401
+def _record_fatal(stage: str) -> Path | None:
+    """Write the traceback somewhere a person can find it. Best effort, never raises."""
+    text = traceback.format_exc()
+    for candidate in (
+        _crash_log_path(),
+        Path(sys.executable).resolve().parent / "native-crash.log",
+        Path.cwd() / "native-crash.log",
+    ):
+        try:
+            candidate.parent.mkdir(parents=True, exist_ok=True)
+            with candidate.open("a", encoding="utf-8") as handle:
+                handle.write(f"\n===== {stage} =====\n{text}\n")
+            return candidate
+        except OSError:
+            continue
+    return None
+
+
+try:
+    # `resources` imports nothing from the backend, so this is safe at module level. It is
+    # also the only thing here that may run before the backend is on `sys.path`.
+    from awbnative import resources
+
+    #: Resolved once. From a checkout this points at `desktop-native/`; frozen, at the bundle.
+    PATHS = resources.configure()
+
+    from awbnative.bridge import ServiceBridge
+    from PySide6.QtCore import QUrl
+    from PySide6.QtGui import QGuiApplication
+    from PySide6.QtQml import QQmlApplicationEngine
+
+    # Imported for its side effect as much as for the name. PySide6 only hands back the
+    # `QQuickWindow` wrapper for `engine.rootObjects()[0]` if that type has been registered
+    # with the binding system; without this import the same object arrives as a plain
+    # `QWindow`, which has no `grabWindow`. The symptom is an AttributeError inside a timer
+    # callback — a screenshot that silently does not appear, not a crash that points here.
+    from PySide6.QtQuick import QQuickWindow  # noqa: F401
+except BaseException:  # noqa: BLE001 - this is the last line of defence
+    # A failure here is fatal and there is no window to show it in. Exit code 70 is
+    # deliberately not 1 or 2: a caller that launched the application can tell "it refused
+    # to start" from "it started and the user closed it", and the traceback is in
+    # `native-crash.log` under the data directory.
+    _record_fatal("import")
+    raise SystemExit(70) from None
 
 
 def build_engine(bridge: ServiceBridge) -> QQmlApplicationEngine:
@@ -101,6 +149,27 @@ def _is_benign(message: str) -> bool:
     return any(marker in message for marker in _BENIGN_QML_MESSAGES)
 
 
+def _say(line: str) -> None:
+    """Print, if there is anywhere to print to.
+
+    A packaged Windows build is a GUI-subsystem executable and has **no console**:
+    `sys.stdout` and `sys.stderr` are `None`, and `print` to them raises
+    `RuntimeError: lost sys.stdout`. That matters because the Qt message handler below
+    prints every message — and Qt emits one on every start (the missing font directory),
+    from inside a callback the engine invokes. An exception raised there is reported as a
+    QML problem rather than as what it is.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        if stream is None:
+            continue
+        try:
+            stream.write(line + "\n")
+            stream.flush()
+        except (OSError, ValueError):
+            pass
+        return
+
+
 def _watch_qml_messages() -> None:
     """Route Qt's messages into `QML_MESSAGES` as well as to wherever they were going."""
     from PySide6.QtCore import QtMsgType, qInstallMessageHandler
@@ -115,7 +184,7 @@ def _watch_qml_messages() -> None:
                 where = f"{ctx.file}:{ctx.line}"
             if not _is_benign(text):
                 QML_MESSAGES.append(f"{text}  <-- {where}" if where else text)
-        print(f"[QML] {text}", flush=True)
+        _say(f"[QML] {text}")
 
     qInstallMessageHandler(handler)
 
@@ -191,8 +260,8 @@ def _write_report(path: str, payload: dict) -> None:
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(text, encoding="utf-8")
     except OSError as exc:
-        print(f"无法写入报告 {path}：{exc}")
-    print(text)
+        _say(f"无法写入报告 {path}：{exc}")
+    _say(text)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -211,20 +280,36 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--report", default="", help="write the self-check result as JSON here"
     )
+    parser.add_argument(
+        "--stop-services",
+        action="store_true",
+        help="stop the local services this copy started, then exit",
+    )
     args = parser.parse_args(argv)
 
     if args.self_check or args.screenshot:
         # A display is not needed to prove the QML loads and the bindings resolve.
         os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-    # First-run initialisation, before the window exists. Doing it after would show an
-    # interface whose every panel reports an error, which reads as a broken application
-    # rather than as a missing service.
     import asyncio
 
-    from awbnative import bootstrap
+    from awbnative import bootstrap, runtime
 
-    readiness = asyncio.run(bootstrap.ensure_ready())
+    if args.stop_services:
+        # Only the scoped sweep: pids recorded under this data directory whose executable
+        # really lives under this product. It is not a service manager and it is not a
+        # `taskkill /IM`.
+        result = runtime.stop()
+        _say(f"停止本地服务：{result['state']} — {result['detail']}")
+        return 0 if result["state"] == "ok" else 1
+
+    # A headless run waits **before** the window, because its whole purpose is to report a
+    # complete environment and a report written while the stack is still starting would be
+    # a report about nothing. A real launch waits **after**, so the user is not staring at
+    # an empty desktop while a database initialises.
+    headless = bool(args.self_check or args.screenshot)
+    runtime_state = runtime.ensure() if headless else None
+    readiness = asyncio.run(bootstrap.ensure_ready()) if headless else None
 
     app = QGuiApplication(sys.argv[:1] + ["ai-workbench-native"])
     app.setApplicationName("AI Workbench")
@@ -238,25 +323,37 @@ def main(argv: list[str] | None = None) -> int:
     window = engine.rootObjects()[0]
 
     if args.self_check:
-        return _run_self_check(window, bridge, readiness, font, args.report)
+        assert runtime_state is not None and readiness is not None
+        return _run_self_check(window, bridge, runtime_state, readiness, font, args.report)
 
-    for line in bootstrap.summarise(readiness):
-        print(line)
-    if readiness["failed"]:
-        # Present but broken. Starting anyway would put the failure somewhere the user
-        # cannot act on it.
-        print("启动中止：环境检查未通过。", file=sys.stderr)
-        bridge.shutdown()
-        return 2
+    if args.screenshot:
+        return _screenshot(app, window, Path(args.screenshot))
 
-    # A real session: quit when the window closes, and stop the worker thread so the
-    # process does not outlive its window.
+    for line in runtime.summarise(runtime_state) if runtime_state else []:
+        _say(line)
+    for line in bootstrap.summarise(readiness) if readiness else []:
+        _say(line)
+
+    # The window is up. Bring the stack up behind it and report into the shell's banner.
+    bridge.startEnvironment()
     app.aboutToQuit.connect(bridge.shutdown)
-    return app.exec()
+    try:
+        return app.exec()
+    finally:
+        # In a `finally` as well as on `aboutToQuit`, because a GUI application can be
+        # closed in more than one way and only one of them is the close button. A stack
+        # that outlives the window holds port 5432 and the next launch fails against a
+        # cluster whose owner is a program the user already closed.
+        bridge.stopEnvironment()
 
 
 def _run_self_check(
-    window: object, bridge: ServiceBridge, readiness: dict, font: str, report: str
+    window: object,
+    bridge: ServiceBridge,
+    runtime_state: object,
+    readiness: dict,
+    font: str,
+    report: str,
 ) -> int:
     checks = _self_check(window, bridge)
     checks.append(("界面字体已显式选择", bool(font), font))
@@ -271,6 +368,24 @@ def _run_self_check(
             "；".join(QML_MESSAGES[:3]) if QML_MESSAGES else "无",
         )
     )
+    runtime_dict = runtime_state.as_dict() if runtime_state is not None else {}
+    # Give the shell the same thing a real launch would have shown it. The banner is part
+    # of the interface, and a check that reads it must read what the user would see.
+    bridge.record_startup(runtime_dict, readiness or {})
+    checks.append(
+        (
+            "本地服务可用",
+            runtime_dict.get("state") == "ok",
+            str(runtime_dict.get("detail") or ""),
+        )
+    )
+    checks.append(
+        (
+            "启动状态可在界面上读到",
+            bridge.startupState in {"ready", "degraded", "failed"},
+            f"startupState={bridge.startupState}",
+        )
+    )
     bridge.shutdown()
     # The environment checks are reported with the same three states the bootstrap uses.
     # `blocked` is not a failure of this build, and calling it one would make the
@@ -278,7 +393,7 @@ def _run_self_check(
     # rather than on whether the package works.
     environment = []
     for name in ("database", "redis", "qdrant"):
-        entry = readiness.get(name) or {}
+        entry = (readiness or {}).get(name) or {}
         # Every field the check produced, not just the three this knows about. A diagnostic
         # that runs and is then dropped on the way into the report is a diagnostic nobody
         # will ever read.
@@ -289,27 +404,29 @@ def _run_self_check(
         "frozen": resources.is_frozen(),
         "executable": sys.executable,
         "bundle_root": str(resources.bundle_root()),
+        "app_root": str(resources.app_root()),
         "data_dir": str(resources.data_dir()),
-        "runtime": readiness.get("runtime", {}),
+        "runtime": (readiness or {}).get("runtime", {}),
+        "services": runtime_dict,
         "font": font,
         "checks": [
             {"label": label, "ok": ok, "detail": detail} for label, ok, detail in checks
         ],
         "environment": environment,
-        "blocked": readiness.get("blocked", []),
-        "failed": readiness.get("failed", []),
-        "passed": all(ok for _l, ok, _d in checks) and not readiness.get("failed"),
+        "blocked": (readiness or {}).get("blocked", []),
+        "failed": (readiness or {}).get("failed", []),
+        "passed": all(ok for _l, ok, _d in checks) and not (readiness or {}).get("failed"),
     }
 
     for label, ok, detail in checks:
-        print(
+        _say(
             f"  [{'PASS' if ok else 'FAIL'}] {label}"
             + (f" — {detail}" if detail else "")
         )
-    for name in readiness.get("blocked", []):
-        print(f"  [BLOCKED] {name} 在本机不可用")
-    for name in readiness.get("failed", []):
-        print(f"  [FAIL] {name} 存在但不可用")
+    for name in (readiness or {}).get("blocked", []):
+        _say(f"  [BLOCKED] {name} 在本机不可用")
+    for name in (readiness or {}).get("failed", []):
+        _say(f"  [FAIL] {name} 存在但不可用")
 
     if report:
         _write_report(report, payload)
@@ -346,6 +463,13 @@ def _self_check(window: object, bridge: ServiceBridge) -> list[tuple[str, bool, 
         "saveTextFile",
         "openPath",
         "loadRuntimeInfo",
+        "startEnvironment",
+        "stopEnvironment",
+        "environmentReport",
+        "loadRuns",
+        "loadRunDetail",
+        "reconcileRun",
+        "streamChat",
     )
     missing = [name for name in required if not hasattr(bridge, name)]
     checks.append(
@@ -373,12 +497,12 @@ def _screenshot(app: QGuiApplication, window: object, target: Path) -> int:
         try:
             image = window.grabWindow()  # type: ignore[attr-defined]
         except AttributeError as exc:
-            print(f"screenshot failed: {exc}")
+            _say(f"screenshot failed: {exc}")
             app.quit()
             return
         target.parent.mkdir(parents=True, exist_ok=True)
         saved = image.save(str(target))
-        print(
+        _say(
             f"screenshot -> {target} "
             f"({'ok' if saved else 'FAILED'}, {image.width()}x{image.height()})"
         )
@@ -390,4 +514,10 @@ def _screenshot(app: QGuiApplication, window: object, target: Path) -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    try:
+        raise SystemExit(main())
+    except SystemExit:
+        raise
+    except BaseException:  # noqa: BLE001 - a windowed build has nowhere else to report
+        _record_fatal("main")
+        raise SystemExit(71) from None

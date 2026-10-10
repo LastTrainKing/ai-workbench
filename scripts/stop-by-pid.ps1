@@ -22,7 +22,7 @@
 # `<data>\.runtime\pids\<name>.pid` by `lib.ps1`, and PostgreSQL writes its own
 # `postmaster.pid`. Kill those PIDs and nothing else dies.
 #
-# Usage (called by the uninstaller, and usable by hand):
+# Usage (called by the uninstaller and by the desktop application, and usable by hand):
 #
 #     powershell -NoProfile -ExecutionPolicy Bypass -File scripts\stop-by-pid.ps1 `
 #         -RuntimeRoot "<path to the .runtime directory>"
@@ -31,7 +31,11 @@
 
 param(
     [Parameter(Mandatory = $true)]
-    [string]$RuntimeRoot
+    [string]$RuntimeRoot,
+
+    # Where the product is installed. Defaults to this script's own parent directory, which
+    # is right in both layouts and is the only derivation that survives the installed one.
+    [string]$ProductRoot = ''
 )
 
 $ErrorActionPreference = 'Continue'
@@ -82,11 +86,30 @@ foreach ($target in $targets) {
     # The pid file is written by this product, but pids get reused. Only kill a process
     # whose executable really lives under the directory this product installed into -
     # otherwise a stale pid file would take out whatever inherited the number.
+    #
+    # **This check used to be wrong for every installed copy.** It derived the product root
+    # from the runtime directory's parent (`<data>\.runtime` -> `<data>`), which is correct
+    # for a development checkout, where the runtime is `<repo>\.runtime` and the engines are
+    # `<repo>\vendor\runtime`. An installed copy keeps its data *outside* the program
+    # directory - that is the whole point of `data-dir.txt` - so `<data>\vendor` does not
+    # exist, the engines' real path under `%LOCALAPPDATA%\AI Workbench\vendor` matched
+    # nothing, and **every** process was skipped. Uninstalling left PostgreSQL, Redis and
+    # Qdrant running, holding their ports.
+    #
+    # `$PSScriptRoot` is the fix: this script ships in `<product>\scripts\`, so its parent
+    # is the product root in both layouts and does not depend on where the data lives.
+    if (-not $ProductRoot) { $ProductRoot = Split-Path -Parent $PSScriptRoot }
     $exePath = $null
     try { $exePath = $process.Path } catch { $exePath = $null }
-    $vendorRoot = Join-Path (Split-Path -Parent $RuntimeRoot) 'vendor'
+    $roots = @()
+    if ($ProductRoot) {
+        $roots += (Join-Path $ProductRoot 'vendor')
+        $roots += $ProductRoot
+    }
+    $roots += (Join-Path (Split-Path -Parent $RuntimeRoot) 'vendor')
+    $roots += (Split-Path -Parent $RuntimeRoot)
     $insideProduct = $false
-    foreach ($root in @($vendorRoot, (Split-Path -Parent $RuntimeRoot))) {
+    foreach ($root in $roots) {
         if ($exePath -and $root -and $exePath.StartsWith($root, [StringComparison]::OrdinalIgnoreCase)) {
             $insideProduct = $true
         }

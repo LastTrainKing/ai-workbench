@@ -127,6 +127,9 @@ TARGETS: list[tuple[Path, object, object]] = [
     (ROOT / "frontend" / "package.json", _json_version, _set_json_version),
     (ROOT / "desktop" / "src-tauri" / "Cargo.toml", _cargo_version, _set_cargo_version),
     (ROOT / "installer" / "ai-workbench.nsi", _nsis_app_version, _set_nsis_version),
+    # The native build's installer. A second installer is a second place the version is
+    # written down, and the whole point of this script is that there is one.
+    (ROOT / "installer" / "ai-workbench-native.nsi", _nsis_app_version, _set_nsis_version),
 ]
 
 

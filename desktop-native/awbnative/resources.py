@@ -37,13 +37,38 @@ from pathlib import Path
 #: the uninstaller and this module cannot disagree about which directory is the user's.
 DATA_DIR_NAME = "AI Workbench Data"
 
+#: The subdirectory of `DATA_DIR_NAME` that holds the database, the vector store, uploads
+#: and logs. The installer's `data-dir.txt` points here rather than at the parent, and a
+#: build that resolved the parent instead would come up on an empty database next to the
+#: user's real one — which looks exactly like data loss.
+RUNTIME_SUBDIR = ".runtime"
+
 #: The environment variable `app.core.config` reads first. Set by `configure()`.
 DATA_DIR_ENV = "AI_WORKBENCH_DATA_DIR"
+
+#: The installer writes the chosen data directory here, beside the executable. `app.core.config`
+#: reads the same file, and this module resolves it the same way, so the three cannot drift.
+DATA_DIR_MARKER = "data-dir.txt"
 
 
 def is_frozen() -> bool:
     """True inside a PyInstaller build."""
     return bool(getattr(sys, "frozen", False))
+
+
+def app_root() -> Path:
+    """The directory the application is **installed** in.
+
+    Frozen: the directory holding the `.exe` — which is *not* `bundle_root()`, because a
+    one-folder build keeps its modules in `_internal` and the executable one level up. The
+    distinction matters for every file the installer writes next to the program: `VERSION`,
+    `data-dir.txt`, `vendor/` and `scripts/` are all siblings of the executable.
+
+    From source: the repository root, which is where those same things live in a checkout.
+    """
+    if is_frozen():
+        return Path(sys.executable).resolve().parent
+    return bundle_root().parent
 
 
 def bundle_root() -> Path:
@@ -93,6 +118,44 @@ def qml_dir() -> Path:
     return bundle_root() / "qml"
 
 
+def vendor_root() -> Path:
+    """The bundled PostgreSQL / Redis / Qdrant, if this copy ships them.
+
+    An installed copy carries its own database engine, so it depends on nothing the user
+    happens to have installed. A checkout keeps them in the same place, fetched by
+    `scripts/fetch-runtime.ps1`.
+    """
+    return app_root() / "vendor" / "runtime"
+
+
+def scripts_dir() -> Path:
+    """The operational scripts: the ones that start and stop the bundled services.
+
+    The native build does not reimplement them. They carry the readiness contract
+    (pg_isready, PING, /healthz), the elevated-shell workaround PostgreSQL needs, and the
+    pid-scoped stop logic — all of it earned by failure and none of it worth rewriting.
+    """
+    return app_root() / "scripts"
+
+
+def service_manager() -> Path:
+    """The script that brings the local stack up, or the path it would be at."""
+    return scripts_dir() / "infra-start.ps1"
+
+
+def data_dir_marker() -> Path:
+    """Where the installer records the user's chosen data directory."""
+    return app_root() / DATA_DIR_MARKER
+
+
+def _marker_value() -> str:
+    """The data directory recorded by the installer, or an empty string."""
+    try:
+        return data_dir_marker().read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
+
+
 def version() -> str:
     """The product version, from the one `VERSION` file.
 
@@ -101,13 +164,12 @@ def version() -> str:
     `1.0.0`.
 
     Three candidates, because the file sits in a different place in each layout: inside the
-    bundle in a packaged build, at the repository root in a checkout (where `bundle_root()`
-    is `desktop-native/`), and beside the executable for an unpacked build.
+    bundle in a packaged build, at the application root (beside the executable, or the
+    repository root in a checkout).
     """
     candidates = [
         bundle_root() / "VERSION",
-        bundle_root().parent / "VERSION",
-        Path(sys.executable).resolve().parent / "VERSION",
+        app_root() / "VERSION",
     ]
     for candidate in candidates:
         try:
@@ -122,9 +184,13 @@ def version() -> str:
 def default_data_dir() -> Path:
     """Where this user's data goes when nothing says otherwise.
 
-    `%LOCALAPPDATA%` on Windows, `~/.local/share` elsewhere. Both are per-user and outside
-    the program directory, which is what makes an uninstall two independent decisions
-    instead of a choice between the program and the data.
+    `%LOCALAPPDATA%\\AI Workbench Data\\.runtime` on Windows, `~/.local/share/...`
+    elsewhere — the same path the installer writes into `data-dir.txt`.
+
+    The nested `.runtime` is not decoration. It is where this product has always kept its
+    database, and an installed copy of an earlier version has the user's data there. A
+    build that resolved the parent directory instead would start on a brand-new, empty
+    database sitting beside the real one, and the user would be told their work was gone.
     """
     if sys.platform == "win32":
         base = os.environ.get("LOCALAPPDATA", "").strip()
@@ -132,7 +198,7 @@ def default_data_dir() -> Path:
     else:
         base = os.environ.get("XDG_DATA_HOME", "").strip()
         root = Path(base) if base else Path.home() / ".local" / "share"
-    return root / DATA_DIR_NAME
+    return root / DATA_DIR_NAME / RUNTIME_SUBDIR
 
 
 def checkout_runtime_root() -> Path:
@@ -148,10 +214,18 @@ def checkout_runtime_root() -> Path:
 
 
 def data_dir() -> Path:
-    """The data directory in force, resolved the same way the backend resolves it."""
+    """The data directory in force, resolved the same way the backend resolves it.
+
+    The same three steps, in the same order, as `app.core.config._resolve_runtime_root`
+    and `scripts/lib.ps1`. Two of those are written in other languages and cannot be
+    changed from here, so this has to match them rather than the other way round.
+    """
     explicit = os.environ.get(DATA_DIR_ENV, "").strip()
     if explicit:
         return Path(explicit).expanduser()
+    recorded = _marker_value()
+    if recorded:
+        return Path(recorded).expanduser()
     if is_frozen():
         # Inside a bundle the backend's own fallback would be `<bundle>/.runtime`, which is
         # in the program directory — see the module docstring.
@@ -180,10 +254,20 @@ def configure(*, create: bool = True) -> dict[str, object]:
             sys.path.insert(0, candidate)
 
     explicit = os.environ.get(DATA_DIR_ENV, "").strip()
-    # Only a packaged build forces the location. A checkout keeps the backend's own
-    # resolution, so this entry point cannot disagree with the rest of the repository
-    # about where a developer's data is.
-    forced = is_frozen() and not explicit
+    recorded = _marker_value()
+
+    # Only a packaged build with nothing else to go on forces the location. Two cases must
+    # **not** be overridden, and both were:
+    #
+    #   * `AI_WORKBENCH_DATA_DIR` is set — an explicit choice outranks a default.
+    #   * `data-dir.txt` exists — the installer wrote it, and the user's existing data is
+    #     there. Setting the variable here shadows the marker, because `app.core.config`
+    #     reads the variable first: the installed application came up on an empty database
+    #     beside the real one. That is the whole failure this ordering prevents.
+    #
+    # A checkout keeps the backend's own resolution, so this entry point cannot disagree
+    # with the rest of the repository about where a developer's data is.
+    forced = is_frozen() and not explicit and not recorded
     if forced:
         os.environ[DATA_DIR_ENV] = str(default_data_dir())
 
@@ -197,17 +281,30 @@ def configure(*, create: bool = True) -> dict[str, object]:
         except OSError as exc:
             error = f"{type(exc).__name__}: {exc}"
 
+    if explicit:
+        source = "environment"
+    elif recorded:
+        source = "installer marker"
+    elif forced:
+        source = "default"
+    else:
+        source = "checkout"
+
     return {
         "frozen": is_frozen(),
         "bundle_root": str(root),
+        "app_root": str(app_root()),
         "backend_dir": str(backend),
         "backend_importable": backend_importable(),
         "qml_dir": str(qml_dir()),
         "qml_present": qml_dir().is_dir(),
+        "vendor_root": str(vendor_root()),
+        "vendor_present": vendor_root().is_dir(),
+        "service_manager": str(service_manager()),
+        "service_manager_present": service_manager().is_file(),
         "data_dir": str(target),
-        "data_dir_source": "environment"
-        if explicit
-        else ("default" if forced else "checkout"),
+        "data_dir_source": source,
+        "data_dir_marker": str(data_dir_marker()),
         "data_dir_created": created,
         "data_dir_error": error,
         "version": version(),
@@ -217,15 +314,22 @@ def configure(*, create: bool = True) -> dict[str, object]:
 
 __all__ = [
     "DATA_DIR_ENV",
+    "DATA_DIR_MARKER",
     "DATA_DIR_NAME",
+    "RUNTIME_SUBDIR",
+    "app_root",
     "backend_dir",
     "backend_importable",
     "bundle_root",
     "checkout_runtime_root",
     "configure",
     "data_dir",
+    "data_dir_marker",
     "default_data_dir",
     "is_frozen",
     "qml_dir",
+    "scripts_dir",
+    "service_manager",
+    "vendor_root",
     "version",
 ]
