@@ -151,17 +151,30 @@ def test_installer_runner_reports_a_missing_installer(tmp_path: Path) -> None:
 
 
 def test_installer_runner_does_not_pass_shell_true(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """It hands a raw command line to CreateProcess, but must not hand it to a shell."""
+    """It hands a raw command line to CreateProcess, but must not hand it to a shell.
+
+    `Popen`, not `run`: the installer is launched with its output redirected to **files**
+    rather than pipes, and the timeout enforced with `Popen.wait`. Through a pipe, a
+    surviving grandchild — the engines the installer's own PowerShell checks start — keeps
+    the write end open, and `subprocess.run`'s timeout expires into a wait that cannot end.
+    Measured: a 900-second budget that never fired.
+    """
     setup = tmp_path / "setup.exe"
     setup.write_bytes(b"stub")
     captured: dict[str, object] = {}
 
-    def fake_run(args, **kwargs):
+    class FakeProcess:
+        pid = 4321
+
+        def wait(self, timeout: float | None = None) -> int:
+            return 0
+
+    def fake_popen(args, **kwargs):
         captured["args"] = args
         captured.update(kwargs)
-        return None
+        return FakeProcess()
 
-    monkeypatch.setattr(guard.subprocess, "run", fake_run)
+    monkeypatch.setattr(guard.subprocess, "Popen", fake_popen)
     guard.run_nsis_installer(setup, tmp_path / "target")
 
     assert captured.get("shell") in (None, False)

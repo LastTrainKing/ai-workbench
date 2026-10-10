@@ -21,15 +21,16 @@ Rectangle {
     border.width: 0
 
     readonly property var entries: [
-        { key: "dashboard", label: "总览",   hint: Theme.shortcutFor("dashboard") },
-        { key: "knowledge", label: "知识库", hint: Theme.shortcutFor("knowledge") },
-        { key: "documents", label: "文档",   hint: Theme.shortcutFor("documents") },
-        { key: "ask",       label: "问答",   hint: Theme.shortcutFor("ask") },
-        { key: "tasks",     label: "任务",   hint: Theme.shortcutFor("tasks") },
-        { key: "projects",  label: "项目",   hint: Theme.shortcutFor("projects") },
-        { key: "notes",     label: "笔记",   hint: Theme.shortcutFor("notes") },
-        { key: "runs",      label: "Agent",  hint: Theme.shortcutFor("runs") },
-        { key: "settings",  label: "设置",   hint: Theme.shortcutFor("settings") }
+        { key: "dashboard",    label: "总览",   hint: Theme.shortcutFor("dashboard") },
+        { key: "knowledge",    label: "知识库", hint: Theme.shortcutFor("knowledge") },
+        { key: "documents",    label: "文档",   hint: Theme.shortcutFor("documents") },
+        { key: "ask",          label: "问答",   hint: Theme.shortcutFor("ask") },
+        { key: "conversation", label: "对话",   hint: Theme.shortcutFor("conversation") },
+        { key: "tasks",        label: "任务",   hint: Theme.shortcutFor("tasks") },
+        { key: "projects",     label: "项目",   hint: Theme.shortcutFor("projects") },
+        { key: "notes",        label: "笔记",   hint: Theme.shortcutFor("notes") },
+        { key: "runs",         label: "Agent",  hint: Theme.shortcutFor("runs") },
+        { key: "settings",     label: "设置",   hint: Theme.shortcutFor("settings") }
     ]
 
     // ------------------------------------------------------------- keyboard --

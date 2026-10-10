@@ -121,28 +121,131 @@ ApplicationWindow {
         }
 
         Rectangle {
+            id: contentArea
             Layout.fillWidth: true
             Layout.fillHeight: true
             color: Theme.bg
+
+            // ------------------------------------------------------- startup --
+            //
+            // The local stack comes up **behind** the window: PostgreSQL may need to
+            // initialise a cluster, which is tens of seconds. Doing that before the window
+            // exists means the user double-clicks an icon and nothing happens at all — and
+            // if the database is missing, the window never appears and the only evidence is
+            // a log file.
+            //
+            // So the window is up first and this strip says what is happening. It is not
+            // decoration: the state is also a *word*, not only a colour, because a
+            // colour-blind user and a screen reader both need the word.
+            Rectangle {
+                id: startupBanner
+                objectName: "startup-banner"
+
+                readonly property string state: bridge.startupState
+                readonly property string stateWord: {
+                    switch (state) {
+                    case "idle":     return "准备中"
+                    case "starting": return "启动中"
+                    case "degraded": return "降级"
+                    case "failed":   return "失败"
+                    default:         return "已就绪"
+                    }
+                }
+                readonly property string a11yName: stateWord + "：" + bridge.startupDetail
+
+                visible: state !== "ready"
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.top: parent.top
+                anchors.margins: shellRoot.gap
+                height: startupRow.implicitHeight + shellRoot.gap * 1.4
+                radius: 10
+                color: Theme.bgCard
+                border.width: 2
+                border.color: state === "failed" ? Theme.danger
+                            : state === "degraded" ? Theme.warn
+                            : Theme.accent
+
+                Accessible.role: Accessible.StaticText
+                Accessible.name: a11yName
+
+                RowLayout {
+                    id: startupRow
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    anchors.verticalCenter: parent.verticalCenter
+                    anchors.margins: shellRoot.gap
+                    spacing: shellRoot.gap
+
+                    BusyIndicator {
+                        objectName: "startup-busy"
+                        running: startupBanner.state === "starting" || startupBanner.state === "idle"
+                        visible: running
+                        Layout.preferredWidth: 24
+                        Layout.preferredHeight: 24
+                    }
+
+                    ColumnLayout {
+                        Layout.fillWidth: true
+                        spacing: 2
+
+                        Text {
+                            id: startupStateLabel
+                            objectName: "startup-state"
+                            text: startupBanner.stateWord
+                            color: startupBanner.state === "failed" ? Theme.danger
+                                 : startupBanner.state === "degraded" ? Theme.warn
+                                 : Theme.accent
+                            font.pixelSize: Theme.scale(14, shellRoot.uiScale)
+                            font.bold: true
+                        }
+
+                        Text {
+                            id: startupDetailLabel
+                            objectName: "startup-detail"
+                            Layout.fillWidth: true
+                            text: bridge.startupDetail
+                            color: Theme.textMuted
+                            wrapMode: Text.WordWrap
+                            font.pixelSize: Theme.scale(13, shellRoot.uiScale)
+                        }
+                    }
+
+                    Button {
+                        id: startupRetry
+                        objectName: "startup-retry"
+                        visible: startupBanner.state === "failed" || startupBanner.state === "degraded"
+                        text: "重试"
+                        Accessible.name: "重新启动本地服务"
+                        onClicked: bridge.startEnvironment()
+                    }
+                }
+            }
 
             Loader {
                 id: pageLoader
                 objectName: "pageLoader"
                 anchors.fill: parent
                 anchors.margins: shellRoot.gap
+                // The page sits below the banner while it is up, so the banner never covers
+                // a control the user is trying to reach.
+                anchors.topMargin: startupBanner.visible
+                    ? startupBanner.height + shellRoot.gap * 2
+                    : shellRoot.gap
                 // The page is chosen by name; each one is a file, so a new screen is a new
                 // file and not a new branch in a switch.
                 sourceComponent: {
                     switch (shellRoot.activePage) {
-                    case "knowledge": return knowledgePage
-                    case "documents": return documentsPage
-                    case "ask":       return askPage
-                    case "tasks":     return tasksPage
-                    case "projects":  return projectsPage
-                    case "notes":     return notesPage
-                    case "runs":      return runsPage
-                    case "settings":  return settingsPage
-                    default:          return dashboardPage
+                    case "knowledge":    return knowledgePage
+                    case "documents":    return documentsPage
+                    case "ask":          return askPage
+                    case "conversation": return conversationPage
+                    case "tasks":        return tasksPage
+                    case "projects":     return projectsPage
+                    case "notes":        return notesPage
+                    case "runs":         return runsPage
+                    case "settings":     return settingsPage
+                    default:             return dashboardPage
                     }
                 }
                 onLoaded: {
@@ -192,6 +295,7 @@ ApplicationWindow {
         onBack: shellRoot.activePage = "documents"
     } }
     Component { id: tasksPage;     TasksPage     { shell: shellRoot } }
+    Component { id: conversationPage; ConversationPage { shell: shellRoot } }
     Component { id: projectsPage;  ProjectsPage  { shell: shellRoot } }
     Component { id: notesPage;     NotesPage     { shell: shellRoot } }
     Component { id: runsPage;      RunsPage      { shell: shellRoot } }

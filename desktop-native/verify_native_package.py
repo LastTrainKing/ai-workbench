@@ -274,9 +274,29 @@ def _run_self_check(
     exe = app / "AI-Workbench-Native.exe"
     report = Path(tempfile.mkdtemp(prefix="awbnative-report-")) / "report.json"
 
+    # **Always** an explicit data directory, and a throwaway one when the caller did not ask
+    # for a particular place.
+    #
+    # This used to be conditional. When it was not set, the packaged application resolved its
+    # data directory the way an installed copy does — `%LOCALAPPDATA%\AI Workbench Data\.runtime`
+    # — and `runtime.ensure()` wrote `native-startup.log` **into the user's real data
+    # directory**. Nothing was lost, but a verification run had modified the thing it is not
+    # allowed to touch, and it did so silently. Making the default a fresh temporary
+    # directory means no call site can reach the real one by forgetting an argument.
+    scratch = None
+    if data_dir is None:
+        scratch = Path(tempfile.mkdtemp(prefix="awbnative-data-"))
+        data_dir = scratch
+        # Removed when the process exits, rather than at each of this function's return
+        # points. The application is what creates the directory's contents, and it may still
+        # be holding a file when a check returns.
+        import atexit
+        import shutil
+
+        atexit.register(shutil.rmtree, scratch, ignore_errors=True)
+
     env = os.environ.copy()
-    if data_dir is not None:
-        env["AI_WORKBENCH_DATA_DIR"] = str(data_dir)
+    env["AI_WORKBENCH_DATA_DIR"] = str(data_dir)
     if sanitized:
         # Prove the package carries its own interpreter: remove every hint of the host's
         # Python, and reduce PATH to the system directories.

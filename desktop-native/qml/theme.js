@@ -60,13 +60,14 @@ function scale(base, factor) {
 // opens which page. They were two lists before, and a hint that lies is worse than no
 // hint: it teaches the user a key that does something else.
 var pages = [
-    { key: "dashboard", label: "总览" },
-    { key: "knowledge", label: "知识库" },
-    { key: "tasks",     label: "任务" },
-    { key: "projects",  label: "项目" },
-    { key: "notes",     label: "笔记" },
-    { key: "runs",      label: "Agent" },
-    { key: "settings",  label: "设置" }
+    { key: "dashboard",    label: "总览" },
+    { key: "knowledge",    label: "知识库" },
+    { key: "conversation", label: "对话" },
+    { key: "tasks",        label: "任务" },
+    { key: "projects",     label: "项目" },
+    { key: "notes",        label: "笔记" },
+    { key: "runs",         label: "Agent" },
+    { key: "settings",     label: "设置" }
 ]
 
 //: "Ctrl+3" for a numbered page, "" for one that has no shortcut (documents and ask are

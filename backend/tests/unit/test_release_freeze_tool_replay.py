@@ -193,20 +193,23 @@ def test_the_reconcilable_writes_can_be_checked_after_a_crash(name: str) -> None
     )
 
 
-def test_the_tools_with_no_check_report_undecidable() -> None:
+async def test_the_tools_with_no_check_report_undecidable() -> None:
     """The default must stay undecidable, and it must be the default for a reason.
 
     `file_append` is the case worth naming: it has a real, non-repeatable side effect and
     no way to tell from outside whether it happened. A recovery that guessed either way
     would be worse than one that says so.
+
+    **`async def`, not `asyncio.run` inside a sync test.** The first version of this called
+    `asyncio.run`, which closes the loop it created and leaves the event-loop policy with
+    none — so every async test that ran *after* it failed with "There is no current event
+    loop in thread 'MainThread'". Forty-six of them did, and the failure was in a test
+    helper rather than in the code under test.
     """
-    import asyncio
-
     from app.ai.agent.tools import Tool, ToolContext
-
-    registry = _real_registry()
     from app.ai.tools.registry import tool_for
 
+    registry = _real_registry()
     tool = tool_for(registry, "file_append")
     assert tool is not None
     assert type(tool).reconcile is Tool.reconcile
@@ -215,7 +218,7 @@ def test_the_tools_with_no_check_report_undecidable() -> None:
         owner_id=uuid.uuid4(),
         working_directory=tempfile.gettempdir(),
     )
-    outcome = asyncio.run(tool.reconcile(ctx, {"path": "x.txt", "content": "y"}, {}))
+    outcome = await tool.reconcile(ctx, {"path": "x.txt", "content": "y"}, {})
     assert outcome.verdict.value == "UNDECIDABLE"
 
 

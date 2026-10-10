@@ -24,13 +24,14 @@ whoever happens to be first in the table.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import uuid
 from pathlib import Path
 from typing import Any
 
-from PySide6.QtCore import QObject, QUrl, Signal, Slot
+from PySide6.QtCore import Property, QObject, QUrl, Signal, Slot
 from PySide6.QtGui import QDesktopServices
 
 from awbnative.async_runner import AsyncRunner
@@ -39,6 +40,61 @@ from awbnative.async_runner import AsyncRunner
 def _json(payload: Any) -> str:
     """QML receives JSON text; a QVariantMap would need a converter on every slot."""
     return json.dumps(payload, ensure_ascii=False, default=str)
+
+
+def _run_summary(row: Any) -> dict[str, Any]:
+    """One run, in the shape the history list and the detail header both render.
+
+    One function rather than two, so the list and the detail cannot disagree about what a
+    run's status is. They did in the WebView build: the list read `status` and the detail
+    read the scratchpad, and an interrupted run showed as `FAILED` in one and `EXECUTING`
+    in the other.
+    """
+    return {
+        "run_id": row.run_id,
+        "status": row.status,
+        "run_type": row.run_type,
+        "provider": row.provider or "",
+        "model": row.model or "",
+        "prompt_name": row.prompt_name or "",
+        "tools_used": list(row.tools_used or []),
+        "tool_call_count": int(row.tool_call_count or 0),
+        "prompt_tokens": int(row.prompt_tokens or 0),
+        "completion_tokens": int(row.completion_tokens or 0),
+        "total_tokens": int(row.total_tokens or 0),
+        "latency_ms": int(row.latency_ms or 0),
+        "cost_estimate": float(row.cost_estimate or 0.0),
+        "error_code": row.error_code or "",
+        "error_message": row.error_message or "",
+        "created_at": row.created_at.isoformat() if row.created_at else "",
+        "finished_at": row.finished_at.isoformat() if row.finished_at else "",
+        "response_preview": (row.response_text or "")[:400],
+    }
+
+
+def _tool_call_row(call: Any) -> dict[str, Any]:
+    """One invocation, including the columns that only matter after a crash.
+
+    `finished_at` being empty while `started_at` is set is the visible signature of "the
+    process died mid-call". `reconciled_at` being set instead says somebody looked
+    afterwards and settled it. The interface shows both, because collapsing them would put
+    "we observed this finish" and "we worked out afterwards that it had" in the same cell.
+    """
+    return {
+        "invocation_id": call.invocation_id or "",
+        "tool_name": call.tool_name,
+        "step_index": int(call.step_index or 0),
+        "status": call.status,
+        "arguments": call.arguments or {},
+        "result": call.result or {},
+        "error_message": call.error_message or "",
+        "latency_ms": int(call.latency_ms or 0),
+        "mutates_state": bool(call.mutates_state),
+        "working_directory": call.working_directory or "",
+        "started_at": call.started_at.isoformat() if call.started_at else "",
+        "finished_at": call.finished_at.isoformat() if call.finished_at else "",
+        "reconciled_at": call.reconciled_at.isoformat() if call.reconciled_at else "",
+    }
 
 
 class ServiceBridge(QObject):
@@ -52,6 +108,13 @@ class ServiceBridge(QObject):
     notify = Signal(str, str)
     #: (request_id, message) — progress for a long task, emitted while it runs
     progress = Signal(str, str)
+    #: The startup banner's text changed.
+    startupChanged = Signal()
+
+    #: The request id the startup sequence reports under. Reserved, so a page cannot
+    #: collide with it and the shell can tell the difference between "the stack is coming
+    #: up" and "the user pressed something".
+    STARTUP_REQUEST = "startup"
 
     def __init__(self, owner_id: uuid.UUID | str | None = None, parent: QObject | None = None) -> None:
         super().__init__(parent)
@@ -60,12 +123,22 @@ class ServiceBridge(QObject):
         self._runner.failed.connect(self._on_failed)
         self._owner_id = str(owner_id) if owner_id else ""
         self._cancel_requested = False
+        self._startup_state = "idle"
+        self._startup_detail = ""
+        self._environment: dict[str, Any] = {}
+        self._started_services = False
 
     # ------------------------------------------------------------------- wiring --
     def _on_completed(self, request_id: str, value: Any) -> None:
+        if request_id == self.STARTUP_REQUEST and isinstance(value, dict):
+            self._apply_startup(value)
+            return
         self.completed.emit(request_id, value if isinstance(value, str) else _json(value))
 
     def _on_failed(self, request_id: str, message: str, code: str) -> None:
+        if request_id == self.STARTUP_REQUEST:
+            self._set_startup("failed", message)
+            return
         self.failed.emit(request_id, message, code)
 
     def _submit(self, request_id: str, factory, *, timeout: float = 120.0) -> None:
@@ -776,6 +849,323 @@ class ServiceBridge(QObject):
                 }
 
         self._submit(request_id, work)
+
+    # -------------------------------------------------------------------- runs --
+    #
+    # The history and the detail come from the stored records, not from the in-process
+    # registry. The registry only knows about runs this process is driving; every run the
+    # user can see in their history is over, and after a restart it is the only source
+    # there is.
+    #
+    # The detail view also shows the **invocations whose effect could not be confirmed** —
+    # `UNKNOWN` rows left by an interruption — and offers to check them. That is the part
+    # that makes the invocation record useful to a person rather than only to recovery: a
+    # run that died mid-tool leaves a question, and this is where the answer appears.
+
+    @Slot(str, int)
+    def loadRuns(self, request_id: str, limit: int = 50) -> None:
+        async def work() -> dict[str, Any]:
+            from app.domain.enums import RunType
+            from app.infrastructure.database import session_scope
+            from app.models.ai import AIRun
+            from sqlalchemy import select
+
+            owner = await self._owner()
+            capped = max(1, min(int(limit or 50), 200))
+            async with session_scope() as session:
+                rows = list(
+                    (
+                        await session.execute(
+                            select(AIRun)
+                            .where(
+                                AIRun.owner_id == owner,
+                                AIRun.run_type == RunType.AGENT.value,
+                            )
+                            .order_by(AIRun.created_at.desc())
+                            .limit(capped)
+                        )
+                    ).scalars()
+                )
+            return {"items": [_run_summary(row) for row in rows], "total": len(rows)}
+
+        self._submit(request_id, work)
+
+    @Slot(str, str)
+    def loadRunDetail(self, request_id: str, run_id: str) -> None:
+        async def work() -> dict[str, Any]:
+            from app.domain.enums import ToolCallStatus
+            from app.infrastructure.database import session_scope
+            from app.models.ai import AgentRun, AIRun, ToolCall
+            from sqlalchemy import select
+
+            owner = await self._owner()
+            async with session_scope() as session:
+                run = (
+                    await session.execute(
+                        select(AIRun).where(
+                            AIRun.run_id == run_id, AIRun.owner_id == owner
+                        )
+                    )
+                ).scalar_one_or_none()
+                if run is None:
+                    raise ValueError("找不到该运行记录")
+                agent = (
+                    await session.execute(
+                        select(AgentRun).where(AgentRun.ai_run_id == run.id)
+                    )
+                ).scalar_one_or_none()
+                calls = list(
+                    (
+                        await session.execute(
+                            select(ToolCall)
+                            .where(ToolCall.ai_run_id == run.id)
+                            .order_by(ToolCall.step_index, ToolCall.created_at)
+                        )
+                    ).scalars()
+                )
+
+            return {
+                "run": _run_summary(run),
+                "goal": agent.goal if agent else "",
+                "final_answer": agent.final_answer if agent else "",
+                "plan": agent.plan if agent else [],
+                "scratchpad": agent.scratchpad if agent else {},
+                "steps_used": agent.steps_used if agent else 0,
+                "tool_calls": [_tool_call_row(call) for call in calls],
+                "unresolved": [
+                    _tool_call_row(call)
+                    for call in calls
+                    if call.status == ToolCallStatus.UNKNOWN.value and call.mutates_state
+                ],
+                # Stated rather than left for the interface to infer. There is no replay
+                # path in this product, and a UI that has to guess will eventually guess
+                # wrong.
+                "replay_allowed": False,
+            }
+
+        self._submit(request_id, work)
+
+    @Slot(str, str)
+    def reconcileRun(self, request_id: str, run_id: str) -> None:
+        """Check the world and settle what each interrupted call did. Re-runs nothing."""
+        async def work() -> dict[str, Any]:
+            from app.ai.tools.permissions import AgentPolicy
+            from app.ai.tools.reconcile import reconcile_unknown_calls
+            from app.ai.tools.registry import build_computer_registry
+            from app.infrastructure.database import session_scope
+            from app.models.ai import AIRun
+            from sqlalchemy import select
+
+            owner = await self._owner()
+            async with session_scope() as session:
+                run = (
+                    await session.execute(
+                        select(AIRun).where(
+                            AIRun.run_id == run_id, AIRun.owner_id == owner
+                        )
+                    )
+                ).scalar_one_or_none()
+                if run is None:
+                    raise ValueError("找不到该运行记录")
+                registry = build_computer_registry(
+                    AgentPolicy.from_settings(mode="autonomous", level=3)
+                )
+                reports = await reconcile_unknown_calls(
+                    session, registry=registry, ai_run_id=run.id
+                )
+                await session.commit()
+
+            return {
+                "checked": len(reports),
+                "items": [report.to_payload() for report in reports],
+                "decided": sum(
+                    1 for report in reports if report.status_before != report.status_after
+                ),
+                "replay_allowed": False,
+            }
+
+        self._submit(request_id, work)
+
+    # ------------------------------------------------------------- conversation --
+    #
+    # A chat turn with no retrieval, streamed. `streamAnswer` is the same plumbing with a
+    # knowledge base attached; this one is the plain conversation the user has with the
+    # configured provider.
+    #
+    # The provider is asked whether it can stream rather than assumed to. A provider that
+    # cannot stream returns one chunk and reports `supports_streaming` False, and a UI that
+    # animated that would be animating nothing — which is exactly what the acceptance round
+    # found when a reasoning model consumed its whole token budget in `reasoning_content`
+    # and left `content` empty.
+
+    @Slot(str, str, str)
+    def streamChat(self, request_id: str, history_json: str, prompt: str) -> None:
+        async def work() -> dict[str, Any]:
+            from app.ai.providers.factory import build_llm_provider
+            from app.ai.types import ChatMessage
+
+            await self._owner()
+            text = (prompt or "").strip()
+            if not text:
+                raise ValueError("消息不能为空")
+
+            history: list[dict[str, Any]] = []
+            if history_json:
+                try:
+                    parsed = json.loads(history_json)
+                except json.JSONDecodeError:
+                    parsed = []
+                if isinstance(parsed, list):
+                    history = [item for item in parsed if isinstance(item, dict)]
+
+            messages = [
+                ChatMessage(role=str(item.get("role") or "user"), content=str(item.get("content") or ""))
+                for item in history[-20:]
+                if str(item.get("content") or "").strip()
+            ]
+            messages.append(ChatMessage(role="user", content=text))
+
+            llm, info = build_llm_provider()
+            if not llm.supports_streaming:
+                return {
+                    "streamed": False,
+                    "provider": info.kind,
+                    "model": info.model,
+                    "reason": f"provider '{info.kind}' 不支持流式输出",
+                    "answer": "",
+                }
+
+            parts: list[str] = []
+            reasoning_parts: list[str] = []
+            self.progress.emit(request_id, "")
+            async for chunk in llm.stream_chat(messages, temperature=0.6, max_tokens=900):
+                # Reasoning tokens are counted separately. A reasoning model can spend its
+                # whole budget in `reasoning_content` and emit no `content` at all; a UI
+                # that showed an empty answer with no explanation would look broken, and
+                # the explanation is right here.
+                if getattr(chunk, "reasoning_delta", ""):
+                    reasoning_parts.append(chunk.reasoning_delta)
+                    self.progress.emit(
+                        request_id, json.dumps({"reasoning": chunk.reasoning_delta})
+                    )
+                if chunk.delta:
+                    parts.append(chunk.delta)
+                    self.progress.emit(request_id, chunk.delta)
+
+            answer = "".join(parts)
+            return {
+                "streamed": True,
+                "provider": info.kind,
+                "model": info.model,
+                "answer": answer,
+                "reasoning_chars": sum(len(part) for part in reasoning_parts),
+                "empty_because_reasoning": not answer and bool(reasoning_parts),
+            }
+
+        self._submit(request_id, work, timeout=300.0)
+
+    # ------------------------------------------------------------------ startup --
+    # The stack comes up **behind** the window, not in front of it.
+    #
+    # `main.py` used to run the first-run initialisation before creating the window, which
+    # on a first launch means `initdb` — tens of seconds during which the user has
+    # double-clicked an icon and nothing at all has happened. On a machine where the
+    # database is missing it is worse: the window never appears and the only evidence is a
+    # log file. So the window is created first and these two steps report into it.
+    #
+    # Neither step runs on the GUI thread. `runtime.ensure()` spawns PowerShell and waits
+    # for a database; `bootstrap.ensure_ready()` opens connections. Either one on the UI
+    # thread is a frozen window.
+
+    @Property(str, notify=startupChanged)
+    def startupState(self) -> str:
+        """`idle` | `starting` | `ready` | `degraded` | `failed`."""
+        return self._startup_state
+
+    @Property(str, notify=startupChanged)
+    def startupDetail(self) -> str:
+        return self._startup_detail
+
+    @Property(bool, notify=startupChanged)
+    def startupBusy(self) -> bool:
+        return self._startup_state in {"idle", "starting"}
+
+    def _set_startup(self, state: str, detail: str) -> None:
+        if state == self._startup_state and detail == self._startup_detail:
+            return
+        self._startup_state = state
+        self._startup_detail = detail
+        self.startupChanged.emit()
+
+    def _apply_startup(self, report: dict[str, Any]) -> None:
+        self._environment = report
+        readiness = report.get("readiness") or {}
+        runtime_state = report.get("runtime") or {}
+        self._started_services = bool(runtime_state.get("started_here"))
+        failed = list(readiness.get("failed") or [])
+        blocked = list(readiness.get("blocked") or [])
+        if failed:
+            self._set_startup("failed", "；".join(str(item) for item in failed))
+        elif blocked:
+            self._set_startup("degraded", "；".join(str(item) for item in blocked))
+        else:
+            self._set_startup("ready", str(runtime_state.get("detail") or "本地服务已就绪"))
+
+    def record_startup(self, runtime_state: dict[str, Any], readiness: dict[str, Any]) -> None:
+        """Adopt a startup result computed elsewhere.
+
+        The headless self-check runs the same two steps synchronously, before the window,
+        so that its report describes a complete environment. Without this the banner would
+        still say `idle` in that run, and a check that reads the banner would be checking
+        the wrong thing — which is how "the state is visible in the interface" passes while
+        the interface shows nothing.
+        """
+        self._apply_startup({"runtime": runtime_state, "readiness": readiness})
+
+    @Slot()
+    def startEnvironment(self) -> None:
+        """Bring up the local stack, then verify the schema. Returns immediately."""
+        if self._startup_state == "starting":
+            return
+        self._set_startup("starting", "正在启动本地服务…")
+        self._runner.submit(self.STARTUP_REQUEST, self._bring_up, timeout=900.0)
+
+    async def _bring_up(self) -> dict[str, Any]:
+        from awbnative import bootstrap, runtime
+
+        # A thread, not the runner's loop: `runtime.ensure()` is a subprocess that waits for
+        # a database to accept connections. Blocking the loop would stall every other call
+        # the interface makes while the banner is up.
+        runtime_state = await asyncio.to_thread(runtime.ensure)
+        self._set_startup("starting", str(runtime_state.detail or "正在检查数据库…"))
+        readiness = await bootstrap.ensure_ready()
+        return {"runtime": runtime_state.as_dict(), "readiness": readiness}
+
+    @Slot()
+    def stopEnvironment(self) -> None:
+        """Stop the local services — **only** if this window started them.
+
+        Called on exit. A stack this process did not start belongs to someone else: a
+        developer's checkout, or a second window. Stopping it would take out their database
+        and, worse, look like data loss.
+        """
+        if not self._started_services:
+            return
+        from awbnative import runtime
+
+        try:
+            result = runtime.stop()
+        except Exception as exc:  # noqa: BLE001 - exit must not raise
+            self.notify.emit("error", f"停止本地服务时出错：{type(exc).__name__}: {exc}")
+            return
+        self._started_services = False
+        if result.get("state") != "ok":
+            self.notify.emit("error", str(result.get("detail") or "停止本地服务失败"))
+
+    @Slot(result=str)
+    def environmentReport(self) -> str:
+        """The last startup report, as JSON. For the settings page and the verifiers."""
+        return _json(self._environment)
 
     # ---------------------------------------------------------------- lifecycle --
     @Slot()
