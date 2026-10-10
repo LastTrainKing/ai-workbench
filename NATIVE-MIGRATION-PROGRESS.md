@@ -13,7 +13,7 @@
 | 项 | 值 |
 |---|---|
 | 起始提交 | `0ffe287` |
-| 本轮提交 | `59c6a96` Agent 工具对账 · `dd5d027` 原生安装交付 · `3412848` 原生 UI 与回归修复 |
+| 本轮提交 | `59c6a96` Agent 工具对账 · `dd5d027` 原生安装交付 · `3412848` 原生 UI 与回归修复 · `fe37ab8` 报告 · `d8e67b6` 验收脚本自身的挂起修复 |
 | 分支 | `fix/release-freeze-20261009` |
 | 工作区 | 干净（提交后） |
 | 2.2.0 归档 | `build/installer/AI-Workbench-Setup.exe` 与 `archive/releases/AI-Workbench-2.2.0-final.exe`，均 `97,311,474` 字节，SHA-256 `698db63662cc24e42873884077ada51b7b97c5ccd45ab3616acd15ad2df0d3d7`，**逐字节未变** |
