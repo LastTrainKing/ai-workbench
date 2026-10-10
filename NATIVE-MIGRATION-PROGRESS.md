@@ -13,11 +13,11 @@
 | 项 | 值 |
 |---|---|
 | 起始提交 | `0ffe287` |
-| 本轮提交 | `59c6a96`（Agent 对账）· `…`（原生安装交付）· `…`（原生 UI） |
+| 本轮提交 | `59c6a96` Agent 工具对账 · `dd5d027` 原生安装交付 · `3412848` 原生 UI 与回归修复 |
 | 分支 | `fix/release-freeze-20261009` |
 | 工作区 | 干净（提交后） |
 | 2.2.0 归档 | `build/installer/AI-Workbench-Setup.exe` 与 `archive/releases/AI-Workbench-2.2.0-final.exe`，均 `97,311,474` 字节，SHA-256 `698db63662cc24e42873884077ada51b7b97c5ccd45ab3616acd15ad2df0d3d7`，**逐字节未变** |
-| 用户数据 | `%LOCALAPPDATA%\AI Workbench Data` 保持原样：**1,530 个文件 / 51,775,575 字节**，本轮开始与结束的指纹一致 |
+| 用户数据 | `%LOCALAPPDATA%\AI Workbench Data` 保持原样：**1,530 个文件 / 51,775,575 字节**，本轮开始与结束一致（中途被验证脚本写入过一个日志文件，已发现、备份并还原，见 F.2） |
 
 本轮新增一次数据库迁移 `3f1c9d7a52be`（`tool_calls` 加两列）。开发库与测试库在**先备份**之后升级：
 `.runtime/backups/aiworkbench-before-tool-reconcile-20261010-083549.dump`。升级前后
@@ -382,6 +382,12 @@ round 5 把 `file_write`、`directory_create`、`git_add` 标为可重放。本�
 | 2.2.0 归档（未改动） | `C:\Users\user\Desktop\ai-workbench\archive\releases\AI-Workbench-2.2.0-final.exe` |
 | 安装验收脚本 | `C:\Users\user\Desktop\ai-workbench\scripts\verify_native_installer.py` |
 | 安装验收报告 | `C:\Users\user\Desktop\ai-workbench\build\native-installer-acceptance.json` |
+| 安装验收完整日志 | `C:\Users\user\Desktop\ai-workbench\build\native-acceptance.log` |
+| 后端全量回归日志 | `C:\Users\user\Desktop\ai-workbench\build\backend-suite.log` |
+| 变异校验日志 | `C:\Users\user\Desktop\ai-workbench\build\mutations.log` |
+| 打包验收日志 | `C:\Users\user\Desktop\ai-workbench\build\package-verify.log` |
+| 键盘与无障碍日志 | `C:\Users\user\Desktop\ai-workbench\build\shell-verify.log` |
+| 被误写入用户数据目录的文件（备份） | `C:\Users\user\Desktop\ai-workbench\build\restored-user-data\native-startup.log` |
 | 安装包构建报告 | `C:\Users\user\Desktop\ai-workbench\build\native-installer-report.json` |
 | Qdrant key 校验 | `C:\Users\user\Desktop\ai-workbench\scripts\verify_qdrant_key.py` → `build\qdrant-key-report.json` |
 | 键盘与无障碍校验 | `C:\Users\user\Desktop\ai-workbench\desktop-native\verify_native_shell.py` |
