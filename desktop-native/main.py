@@ -470,6 +470,13 @@ def _self_check(window: object, bridge: ServiceBridge) -> list[tuple[str, bool, 
         "loadRunDetail",
         "reconcileRun",
         "streamChat",
+        "loadPermissions",
+        "savePermissions",
+        "resetPermissions",
+        "loadCapabilities",
+        "saveCapabilities",
+        "loadTools",
+        "checkPermission",
     )
     missing = [name for name in required if not hasattr(bridge, name)]
     checks.append(

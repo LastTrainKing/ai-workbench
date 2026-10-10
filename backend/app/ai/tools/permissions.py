@@ -512,6 +512,13 @@ class PermissionManager:
                     "Credentials, system directories and application secrets are never readable.",
                     operation="Access a protected path",
                     target=str(target),
+                    # The remedy for a protection is knowing it has none. "Denied" on its own
+                    # sends people to the settings page to look for the switch that turns it
+                    # off; there is no such switch, and saying so saves them the trip.
+                    impact=(
+                        "This is a built-in protection and no setting lifts it. "
+                        "Work with a copy inside the workspace instead."
+                    ),
                 )
 
         # 2. Allowed roots.

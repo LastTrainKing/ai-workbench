@@ -986,6 +986,229 @@ class ServiceBridge(QObject):
 
         self._submit(request_id, work)
 
+    # -------------------------------------------------------- permissions --
+    #
+    # These call `policy_store` and `PermissionManager` directly rather than going through
+    # the HTTP layer. The routes in `api/v1/agent.py` are thin wrappers over the same
+    # functions, and the bridge already runs in the backend's process — so an extra hop
+    # would add a serialisation step and no safety. What matters is that there is exactly
+    # **one** implementation of the rules, and both callers use it.
+
+    @Slot(str)
+    def loadPermissions(self, request_id: str) -> None:
+        """The policy as it currently stands, with where each value came from."""
+        async def work() -> dict[str, Any]:
+            from app.ai.tools import policy_store
+            from app.ai.tools.permissions import AgentMode, PermissionLevel
+
+            owner = await self._owner()
+            view = policy_store.describe(owner)
+            view["modes"] = [
+                {
+                    "value": AgentMode.ASSIST.value,
+                    "label": "Assist",
+                    "description": "分析并给出建议，不执行任何操作",
+                },
+                {
+                    "value": AgentMode.SUPERVISED.value,
+                    "label": "Supervised",
+                    "description": "可以执行；高风险操作需要确认",
+                },
+                {
+                    "value": AgentMode.AUTONOMOUS.value,
+                    "label": "Autonomous",
+                    "description": "在授权范围内自主完成，关键操作仍会确认",
+                },
+            ]
+            view["levels"] = [
+                {"value": int(level), "label": PermissionLevel.label(int(level))}
+                for level in PermissionLevel
+            ]
+            return view
+
+        self._submit(request_id, work)
+
+    @Slot(str, str)
+    def savePermissions(self, request_id: str, patch_json: str) -> None:
+        """Apply a partial policy change. Unknown keys are ignored by the store itself."""
+        async def work() -> dict[str, Any]:
+            from app.ai.tools import policy_store
+            from app.ai.tools.permissions import AgentMode, PermissionLevel
+
+            owner = await self._owner()
+            try:
+                patch = json.loads(patch_json) if patch_json else {}
+            except json.JSONDecodeError as exc:
+                raise ValueError(f"改动不是合法的 JSON：{exc}") from exc
+            if not isinstance(patch, dict):
+                raise TypeError("改动必须是一个对象")
+
+            if patch.get("mode") is not None:
+                mode = str(patch["mode"]).lower()
+                if mode not in {m.value for m in AgentMode}:
+                    raise ValueError(f"未知的运行模式：{patch['mode']}")
+                patch["mode"] = mode
+            if patch.get("level") is not None:
+                level = int(patch["level"])
+                if level not in {int(x) for x in PermissionLevel}:
+                    raise ValueError(f"未知的权限级别：{level}")
+                patch["level"] = level
+
+            policy_store.save_overrides(patch, owner)
+            return policy_store.describe(owner)
+
+        self._submit(request_id, work)
+
+    @Slot(str)
+    def resetPermissions(self, request_id: str) -> None:
+        async def work() -> dict[str, Any]:
+            from app.ai.tools import policy_store
+
+            owner = await self._owner()
+            policy_store.reset_overrides(owner)
+            return policy_store.describe(owner)
+
+        self._submit(request_id, work)
+
+    @Slot(str)
+    def loadCapabilities(self, request_id: str) -> None:
+        """Capability areas, whether each is on, and how many tools that leaves."""
+        async def work() -> dict[str, Any]:
+            from app.ai.tools import policy_store
+            from app.ai.tools.permissions import PermissionLevel
+            from app.ai.tools.registry import build_computer_registry
+
+            owner = await self._owner()
+            policy = policy_store.build_policy(owner)
+            flags = policy_store.capability_flags(owner)
+            registry = build_computer_registry(policy, enabled=flags)
+            areas = [{**area, "user_enabled": flags.get(area["key"], True)} for area in registry.capabilities()]
+            return {
+                "capabilities": areas,
+                "level": int(policy.level),
+                "level_label": PermissionLevel.label(int(policy.level)),
+                "tool_count": len(registry.names()),
+            }
+
+        self._submit(request_id, work)
+
+    @Slot(str, str)
+    def saveCapabilities(self, request_id: str, flags_json: str) -> None:
+        async def work() -> dict[str, Any]:
+            from app.ai.tools import policy_store
+            from app.ai.tools.registry import CAPABILITIES, build_computer_registry
+
+            owner = await self._owner()
+            try:
+                flags = json.loads(flags_json) if flags_json else {}
+            except json.JSONDecodeError as exc:
+                raise ValueError(f"能力开关不是合法的 JSON：{exc}") from exc
+            if not isinstance(flags, dict):
+                raise TypeError("能力开关必须是一个对象")
+
+            known = {group.key for group in CAPABILITIES}
+            unknown = sorted(set(flags) - known)
+            if unknown:
+                raise ValueError(f"未知的能力分组：{', '.join(unknown)}")
+
+            policy_store.save_capability_flags({k: bool(v) for k, v in flags.items()}, owner)
+            policy = policy_store.build_policy(owner)
+            registry = build_computer_registry(policy, enabled=policy_store.capability_flags(owner))
+            return {"tool_count": len(registry.names())}
+
+        self._submit(request_id, work)
+
+    @Slot(str)
+    def loadTools(self, request_id: str) -> None:
+        """The tool catalogue, with what the policy currently does about each one.
+
+        A tool the policy would refuse is reported as **excluded with the reason**, not
+        omitted. Someone opening this screen is asking "what can the agent do", and a list
+        that silently drops things answers a different question.
+        """
+        async def work() -> dict[str, Any]:
+            from app.ai.agent.tools import get_tool_registry
+            from app.ai.tools import policy_store
+            from app.ai.tools.permissions import AgentMode, AgentPolicy, PermissionLevel
+            from app.ai.tools.registry import build_computer_registry
+
+            owner = await self._owner()
+            policy = policy_store.build_policy(owner)
+            registry = build_computer_registry(policy, enabled=policy_store.capability_flags(owner))
+            available = set(registry.names())
+
+            rows: list[dict[str, Any]] = []
+            for spec in get_tool_registry().specs():
+                rows.append(
+                    {
+                        "name": spec.name,
+                        "description": spec.description,
+                        "category": spec.category,
+                        "source": "business",
+                        "permission_label": PermissionLevel.label(spec.permission_level),
+                        "risk_level": spec.risk_level,
+                        "mutates_state": bool(spec.mutates_state),
+                        "requires_confirmation": bool(spec.requires_confirmation),
+                        "available": True,
+                        "reason": "",
+                    }
+                )
+            for row in registry.catalog():
+                rows.append({**row, "source": "computer", "available": row["name"] in available, "reason": ""})
+
+            permissive = AgentPolicy.from_settings(
+                mode=AgentMode.SUPERVISED, level=PermissionLevel.FULL_CONTROL
+            )
+            everything = build_computer_registry(permissive)
+            excluded = [
+                {
+                    "name": row["name"],
+                    "category": row["category"],
+                    "permission_label": row["permission_label"],
+                    "reason": f"需要 {row['permission_label']} 级别，或该能力已被关闭",
+                }
+                for row in everything.catalog()
+                if row["name"] not in available
+            ]
+
+            return {
+                "tools": rows,
+                "count": len(rows),
+                "available": sum(1 for r in rows if r["available"]),
+                "excluded": excluded,
+                "level_label": PermissionLevel.label(int(policy.level)),
+            }
+
+        self._submit(request_id, work)
+
+    @Slot(str, str, bool)
+    def checkPermission(self, request_id: str, target: str, write: bool) -> None:
+        """Ask the real permission service about one path, and show its answer.
+
+        This is the part that makes the screen honest: it is the same `PermissionManager`
+        call the tool makes before it touches the file, so the answer cannot be a promise
+        the tool will not keep.
+        """
+        async def work() -> dict[str, Any]:
+            from app.ai.tools import policy_store
+            from app.ai.tools.permissions import PermissionLevel, PermissionManager
+
+            owner = await self._owner()
+            path = (target or "").strip()
+            if not path:
+                raise ValueError("先写一个路径")
+            policy = policy_store.build_policy(owner)
+            verdict = PermissionManager(policy).check_path(path, write=bool(write))
+            return {
+                "target": path,
+                "write": bool(write),
+                "verdict": verdict.as_dict(),
+                "level_label": PermissionLevel.label(int(policy.level)),
+                "workspace": str(policy.workspace),
+            }
+
+        self._submit(request_id, work)
+
     # ------------------------------------------------------------- conversation --
     #
     # A chat turn with no retrieval, streamed. `streamAnswer` is the same plumbing with a

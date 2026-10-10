@@ -63,6 +63,7 @@ var pages = [
     { key: "dashboard",    label: "总览" },
     { key: "knowledge",    label: "知识库" },
     { key: "conversation", label: "对话" },
+    { key: "permissions",  label: "权限" },
     { key: "tasks",        label: "任务" },
     { key: "projects",     label: "项目" },
     { key: "notes",        label: "笔记" },

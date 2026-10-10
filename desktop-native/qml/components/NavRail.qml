@@ -26,6 +26,7 @@ Rectangle {
         { key: "documents",    label: "文档",   hint: Theme.shortcutFor("documents") },
         { key: "ask",          label: "问答",   hint: Theme.shortcutFor("ask") },
         { key: "conversation", label: "对话",   hint: Theme.shortcutFor("conversation") },
+        { key: "permissions",  label: "权限",   hint: Theme.shortcutFor("permissions") },
         { key: "tasks",        label: "任务",   hint: Theme.shortcutFor("tasks") },
         { key: "projects",     label: "项目",   hint: Theme.shortcutFor("projects") },
         { key: "notes",        label: "笔记",   hint: Theme.shortcutFor("notes") },
