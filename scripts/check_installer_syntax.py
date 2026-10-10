@@ -73,7 +73,7 @@ def check(script: pathlib.Path) -> int:
     source = script.read_text(encoding="utf-8-sig")
     # The payload is the only slow part. Everything else — every section, macro and
     # callback — is compiled exactly as it ships.
-    stripped = re.sub(r'^\s*File /r "\$\{PAYLOAD\}.*$', "; payload omitted for the syntax check", source, flags=re.M)
+    stripped = re.sub(r'^\s*File /r "\$\{PAYLOAD\}.*$', "; payload omitted for the syntax check", source, flags=re.MULTILINE)
     if stripped == source:
         print("  !! could not find the payload line — has it been renamed?")
         return 2
@@ -81,8 +81,24 @@ def check(script: pathlib.Path) -> int:
     # `OutFile` points at a scratch directory. Writing it anywhere near
     # `build/installer/*.exe` overwrites the real installer with an 89 KB stub — which
     # happened once, during an earlier round, and is why this comment exists.
-    stripped = re.sub(r'^\s*OutFile .*$', f'OutFile "{tempfile.gettempdir()}\\aiw-syntax-check.exe"'.replace("\\", "/"), stripped, flags=re.M)
-    stripped = re.sub(r'^\s*InstallDir .*$', 'InstallDir "$TEMP\\aiw-syntax-check-install"', stripped, flags=re.M)
+    stripped = re.sub(r'^\s*OutFile .*$', f'OutFile "{tempfile.gettempdir()}\\aiw-syntax-check.exe"'.replace("\\", "/"), stripped, flags=re.MULTILINE)
+    stripped = re.sub(r'^\s*InstallDir .*$', 'InstallDir "$TEMP\\aiw-syntax-check-install"', stripped, flags=re.MULTILINE)
+
+    # File paths the script references are relative to *its* directory, and the probe is
+    # written to a temporary one — so `..\assets\ai-workbench.ico` resolved to nothing and
+    # makensis aborted inside `MUI_INTERFACE`, which reads as a macro error rather than as
+    # a missing file. Made absolute here, like `OutFile` above.
+    for define in ("MUI_ICON", "MUI_UNICON"):
+        pattern = rf'^\s*!define {define}\s+"([^"]+)"\s*$'
+
+        # The default argument binds the loop variable. Without it every replacement would
+        # use the last value `define` took, and the second icon would be written under the
+        # first one's name.
+        def _absolute(match: re.Match[str], _define: str = define) -> str:
+            target = (script.parent / match.group(1)).resolve().as_posix()
+            return f'!define {_define} "{target}"'
+
+        stripped = re.sub(pattern, _absolute, stripped, flags=re.MULTILINE)
 
     with tempfile.TemporaryDirectory(prefix="aiw-nsi-") as workdir:
         probe = pathlib.Path(workdir) / "probe.nsi"

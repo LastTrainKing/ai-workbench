@@ -86,6 +86,15 @@ VIAddVersionKey "FileDescription" "${APP_NAME} installer"
 VIAddVersionKey "FileVersion"     "${APP_VERSION}"
 
 ; ------------------------------------------------------------------- pages ---
+; The installer's and uninstaller's own icons, and the icon shown in the app list.
+; Paths are relative to this file, like `PAYLOAD` above.
+;
+; The shortcuts are *not* set here: they point at the installed executable with index 0,
+; so they show whatever that executable embeds. Setting the icon in the PyInstaller spec
+; is what fixes the desktop shortcut; this line fixes the setup program and the uninstaller.
+!define MUI_ICON   "..\assets\ai-workbench.ico"
+!define MUI_UNICON "..\assets\ai-workbench.ico"
+
 !define MUI_WELCOMEPAGE_TITLE "安装 ${APP_NAME}"
 !define MUI_WELCOMEPAGE_TEXT "这是一个运行在你电脑上的私人 AI 工作台。$\r$\n$\r$\n原生界面，自带数据库引擎，所有数据都留在本机。$\r$\n$\r$\n安装不需要管理员权限。"
 !insertmacro MUI_PAGE_WELCOME

@@ -230,6 +230,11 @@ exe = EXE(  # noqa: F821
     bootloader_ignore_signals=False,
     strip=False,
     upx=False,
+    # The application's own icon, and **the only place it is set**. Both shortcuts and the
+    # registry's `DisplayIcon` point at this executable with index 0, so they show whatever
+    # is embedded here. Without this line PyInstaller embeds its own default, which is what
+    # shipped: an icon that says "this is a PyInstaller program" on the desktop.
+    icon=str(REPO / "assets" / "ai-workbench.ico"),
     # A GUI subsystem executable: no console window flashes up behind the app. The cost is
     # that stdout goes nowhere, which is why `--self-check` can write its report to a file.
     console=False,
