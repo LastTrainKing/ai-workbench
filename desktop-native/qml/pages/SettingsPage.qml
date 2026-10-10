@@ -26,6 +26,7 @@ Flickable {
     property string baseUrl: ""
     property string apiKey: ""
     property string statusText: ""
+    property var embedding: null
 
     function loadConfig() {
         var id = "cfg-" + Date.now()
@@ -37,6 +38,12 @@ Flickable {
             page.apiKey = ""
         })
         bridge.loadAiConfig(id)
+    }
+
+    function loadEmbedding() {
+        var id = "emb-" + Date.now()
+        shell.request("读取 Embedding 状态", id, function (payload) { page.embedding = payload })
+        bridge.loadEmbeddingStatus(id)
     }
 
     function loadRuntime() {
@@ -98,7 +105,7 @@ Flickable {
     function _firstLoad() {
         if (_loaded || !shell) return
         _loaded = true
-        { loadConfig(); loadRuntime() }
+        { loadConfig(); loadRuntime(); loadEmbedding() }
     }
 
     onShellChanged: _firstLoad()
@@ -225,6 +232,59 @@ Flickable {
                     color: Theme.text; font.pixelSize: 11
                     elide: Text.ElideMiddle
                 }
+            }
+        }
+
+        Card {
+            Layout.fillWidth: true
+            title: "Embedding"
+            subtitle: page.embedding === null
+                      ? "读取中…"
+                      : (page.embedding.semantic_search
+                         ? "语义检索可用"
+                         : "语义检索不可用（不影响关键词检索）")
+
+            Text {
+                Layout.fillWidth: true
+                visible: page.embedding !== null
+                wrapMode: Text.WrapAnywhere
+                color: page.embedding && page.embedding.semantic_search ? Theme.success : Theme.warn
+                font.pixelSize: 13
+                text: page.embedding ? page.embedding.note : ""
+            }
+
+            Text {
+                Layout.fillWidth: true
+                visible: page.embedding !== null
+                wrapMode: Text.WrapAnywhere
+                color: Theme.textMuted
+                font.pixelSize: 12
+                font.family: "Consolas"
+                text: page.embedding
+                      ? ("provider " + page.embedding.provider
+                         + "　model " + page.embedding.model
+                         + (page.embedding.base_url ? ("　" + page.embedding.base_url) : "")
+                         + "　配置值 " + page.embedding.configured_provider
+                         + "/" + page.embedding.configured_model)
+                      : ""
+            }
+
+            Text {
+                Layout.fillWidth: true
+                visible: page.embedding !== null && page.embedding.reason !== ""
+                wrapMode: Text.WrapWord
+                color: Theme.textFaint
+                font.pixelSize: 11
+                text: page.embedding ? page.embedding.reason : ""
+            }
+
+            Text {
+                Layout.fillWidth: true
+                wrapMode: Text.WordWrap
+                color: Theme.textFaint
+                font.pixelSize: 11
+                text: "向量维度变化或换用不同 embedding 模型时，写入会被拒绝并说明原因——"
+                      + "不同模型的向量不会混进同一个集合。"
             }
         }
 

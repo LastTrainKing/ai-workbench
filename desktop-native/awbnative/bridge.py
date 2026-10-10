@@ -986,6 +986,60 @@ class ServiceBridge(QObject):
 
         self._submit(request_id, work)
 
+    @Slot(str)
+    def loadEmbeddingStatus(self, request_id: str) -> None:
+        """Whether embedding is real, and which model it would use.
+
+        Reported from `build_embedding_provider()` — the function that decides — rather than
+        from the settings, because the two can disagree and the settings are the more
+        flattering of the two. On this machine the answer is the offline hash/n-gram
+        fallback, and the point of showing it is that "semantic search" must not be claimed
+        when what runs is n-gram matching.
+
+        No probe request is made. An embeddings endpoint that is known to be unconfigured
+        does not need asking again, and a verification budget is not spent on questions whose
+        answers are already in the configuration.
+        """
+        async def work() -> dict[str, Any]:
+            from app.ai.providers.factory import build_embedding_provider
+            from app.core.config import settings
+
+            await self._owner()
+            try:
+                _provider, info = build_embedding_provider()
+            except Exception as exc:  # noqa: BLE001 - the message is the report
+                return {
+                    "usable": False,
+                    "provider": settings.embedding_provider,
+                    "model": settings.embedding_model,
+                    "reason": f"{type(exc).__name__}: {exc}",
+                    "semantic_search": False,
+                }
+
+            semantic = info.kind in ("openai_compatible", "ollama") and not getattr(
+                info, "degraded", False
+            )
+            return {
+                "usable": True,
+                "semantic_search": semantic,
+                "provider": info.kind,
+                "model": info.model,
+                "base_url": info.base_url or "",
+                "degraded": bool(getattr(info, "degraded", False)),
+                "reason": getattr(info, "reason", ""),
+                "configured_provider": settings.embedding_provider,
+                "configured_model": settings.embedding_model,
+                "vector_size": int(getattr(settings, "qdrant_vector_size", 0) or 0),
+                "note": (
+                    "语义检索已可用。"
+                    if semantic
+                    else "语义检索不可用：当前用离线哈希 n-gram 向量化，"
+                    "它按字符重叠度匹配，不是语义。关键词检索不受影响。"
+                ),
+            }
+
+        self._submit(request_id, work)
+
     # ---------------------------------------------------------------- search --
     @Slot(str, str, str)
     def search(self, request_id: str, query: str, mode: str) -> None:

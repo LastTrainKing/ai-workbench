@@ -370,6 +370,17 @@ CASES: list[tuple[str, str, str, str, str]] = [
         "tests/integration/test_permissions_effective.py"
         "::test_an_approval_cannot_unlock_a_denied_location",
     ),
+    (
+        # The guard that never fired: it counted chunks *after* `ingest` had deleted and reset
+        # them, so `embedded_already` was always zero and two models could write into one
+        # knowledge base. Removing it entirely is the same defect in its purest form.
+        "RF-29 a second embedding model may write into the same base",
+        "backend/app/services/document_service.py",
+        "            if embedded_already and existing_kb.embedding_model != embedder.model:",
+        "            if False:",
+        "tests/integration/test_embedding_isolation.py"
+        "::test_a_second_model_cannot_write_into_the_same_base",
+    ),
 ]
 
 

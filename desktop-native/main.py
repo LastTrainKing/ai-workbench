@@ -482,6 +482,7 @@ def _self_check(window: object, bridge: ServiceBridge) -> list[tuple[str, bool, 
         "loadTaskTree",
         "updateTask",
         "deleteTask",
+        "loadEmbeddingStatus",
     )
     missing = [name for name in required if not hasattr(bridge, name)]
     checks.append(

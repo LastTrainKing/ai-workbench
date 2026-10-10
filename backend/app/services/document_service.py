@@ -207,6 +207,49 @@ class DocumentService:
             )
             raise DocumentParseError("Chunking produced no content")
 
+        # ---------------------------------------------------- model conflict
+        #
+        # A collection holds one semantic space. Two models can produce vectors of the same
+        # size and mean completely different things by them — so the dimension check in
+        # `ensure_collection` is necessary and **not sufficient**. Without this, switching
+        # the embedding provider silently mixed the new model's vectors into a collection
+        # built by the old one: retrieval then compared distances across two incompatible
+        # spaces, while every row still claimed a single `embedding_model` and nothing
+        # anywhere reported a problem.
+        #
+        # **This runs before the chunks are replaced.** It used to run after, and counted
+        # this document's chunks — which the lines above had just deleted and recreated as
+        # PENDING. The count was therefore always zero and the guard could never fire: the
+        # protection existed, was tested nowhere, and did nothing. Counting across the whole
+        # knowledge base is also the right question — the model on record is the knowledge
+        # base's, and the vectors that must not be mixed with are the other documents'.
+        #
+        # A knowledge base with no embedded chunks is not a conflict — there is nothing to
+        # be incompatible with — and reindexing is the documented way out of one.
+        embedder = EmbeddingService()
+        existing_kb = await self.bases.get(document.knowledge_base_id)
+        if existing_kb is not None and existing_kb.embedding_model and embedder.model:
+            embedded_already = int(
+                (
+                    await self.session.execute(
+                        select(func.count(DocumentChunk.id)).where(
+                            DocumentChunk.knowledge_base_id == document.knowledge_base_id,
+                            DocumentChunk.embedding_status == EmbeddingStatus.EMBEDDED.value,
+                        )
+                    )
+                ).scalar_one()
+            )
+            if embedded_already and existing_kb.embedding_model != embedder.model:
+                raise ValidationError(
+                    "这个知识库是用另一个 embedding 模型建立的，直接写入会混入不兼容的向量。",
+                    details={
+                        "knowledge_base_model": existing_kb.embedding_model,
+                        "current_model": embedder.model,
+                        "embedded_chunks": embedded_already,
+                        "hint": "请重建索引后再导入，或把 embedding 模型切回原值。",
+                    },
+                )
+
         # Re-ingesting the same document must not duplicate chunks or vectors.
         await self.session.execute(
             DocumentChunk.__table__.delete().where(DocumentChunk.document_id == document.id)
@@ -239,44 +282,10 @@ class DocumentService:
         document.embedded_chunk_count = 0
         await report(45, "EMBEDDING")
 
-        embedder = EmbeddingService()
         store = get_vector_store()
         embedded = 0
         failed = 0
         batch_size = max(1, settings.embedding_batch_size)
-
-        # A collection holds one semantic space. Two models can produce vectors of the same
-        # size and mean completely different things by them — so the dimension check in
-        # `ensure_collection` is necessary and **not sufficient**. Without this, switching
-        # the embedding provider silently mixed the new model's vectors into a collection
-        # built by the old one: retrieval then compared distances across two incompatible
-        # spaces, while every row still claimed a single `embedding_model` and nothing
-        # anywhere reported a problem.
-        #
-        # A knowledge base with no embedded chunks is not a conflict — there is nothing to
-        # be incompatible with — and reindexing is the documented way out of one.
-        existing_kb = await self.bases.get(document.knowledge_base_id)
-        if existing_kb is not None and existing_kb.embedding_model and embedder.model:
-            embedded_already = int(
-                (
-                    await self.session.execute(
-                        select(func.count(DocumentChunk.id)).where(
-                            DocumentChunk.knowledge_base_id == document.knowledge_base_id,
-                            DocumentChunk.embedding_status == EmbeddingStatus.EMBEDDED.value,
-                        )
-                    )
-                ).scalar_one()
-            )
-            if embedded_already and existing_kb.embedding_model != embedder.model:
-                raise ValidationError(
-                    "这个知识库是用另一个 embedding 模型建立的，直接写入会混入不兼容的向量。",
-                    details={
-                        "knowledge_base_model": existing_kb.embedding_model,
-                        "current_model": embedder.model,
-                        "embedded_chunks": embedded_already,
-                        "hint": "请重建索引后再导入，或把 embedding 模型切回原值。",
-                    },
-                )
 
         for start in range(0, len(rows), batch_size):
             batch = rows[start : start + batch_size]
