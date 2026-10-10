@@ -986,6 +986,127 @@ class ServiceBridge(QObject):
 
         self._submit(request_id, work)
 
+    # ---------------------------------------------------------------- search --
+    @Slot(str, str, str)
+    def search(self, request_id: str, query: str, mode: str) -> None:
+        """Keyword / semantic / hybrid search over the knowledge base.
+
+        The mode is passed through rather than decided here. `semantic` **raises** when there
+        is no vector store rather than quietly returning keyword results, and `hybrid`
+        degrades to keyword-only and reports `dense_hits = 0`. Both of those are the honest
+        answer and the page shows them; deciding the mode in the interface would hide the
+        difference between "this matched by meaning" and "this matched by spelling".
+        """
+        async def work() -> dict[str, Any]:
+            from app.infrastructure.database import session_scope
+            from app.services.ai_services import SearchService
+
+            owner = await self._owner()
+            text = (query or "").strip()
+            if not text:
+                raise ValueError("先写一个搜索词")
+            if mode not in ("keyword", "semantic", "hybrid"):
+                raise ValueError(f"未知的检索方式：{mode}")
+
+            async with session_scope() as session:
+                return await SearchService(session).search(
+                    owner_id=owner, query=text, mode=mode, limit=20
+                )
+
+        self._submit(request_id, work)
+
+    # ----------------------------------------------------------------- graph --
+    @Slot(str, str)
+    def loadGraph(self, request_id: str, project_id: str) -> None:
+        """The relationship graph, projected from real foreign keys.
+
+        The whole graph is fetched once and laid out in the interface. That is the right
+        split here: the projection is a database query, the layout is arithmetic, and doing
+        the layout in Python would mean a second thread whose only job is to keep the window
+        responsive while it computes positions for a few hundred nodes.
+        """
+        async def work() -> dict[str, Any]:
+            from app.infrastructure.database import session_scope
+            from app.services.stats_service import GraphService
+
+            owner = await self._owner()
+            async with session_scope() as session:
+                return await GraphService(session).build(
+                    owner_id=owner,
+                    project_id=uuid.UUID(project_id) if project_id else None,
+                    limit=250,
+                )
+
+        self._submit(request_id, work)
+
+    # ------------------------------------------------------------------ tasks --
+    @Slot(str)
+    def loadTaskTree(self, request_id: str) -> None:
+        """The full goal → phase → task → subtask tree, plus the flat list.
+
+        Both, because they answer different questions: the tree is how the work is
+        organised, and the flat list is how it is tracked. A page that only showed the tree
+        could not answer "what is in progress right now" without walking it.
+        """
+        async def work() -> dict[str, Any]:
+            from app.infrastructure.database import session_scope
+            from app.services.task_service import TaskService
+
+            owner = await self._owner()
+            async with session_scope() as session:
+                tree = await TaskService(session).tree(owner_id=owner)
+
+            # Counted from the tree rather than queried again: it is the same rows, and a
+            # second query would be a second answer that can disagree with the first.
+            by_status: dict[str, int] = {}
+            flat: list[dict[str, Any]] = []
+
+            def walk(nodes: list[dict[str, Any]], depth: int) -> None:
+                for node in nodes:
+                    by_status[node["status"]] = by_status.get(node["status"], 0) + 1
+                    flat.append({**node, "depth": depth, "children": []})
+                    walk(node.get("children") or [], depth + 1)
+
+            walk(tree, 0)
+            return {"tree": tree, "flat": flat, "by_status": by_status, "count": len(flat)}
+
+        self._submit(request_id, work)
+
+    @Slot(str, str, str)
+    def updateTask(self, request_id: str, task_id: str, changes_json: str) -> None:
+        async def work() -> dict[str, Any]:
+            from app.infrastructure.database import session_scope
+            from app.services.task_service import TaskService
+
+            owner = await self._owner()
+            try:
+                changes = json.loads(changes_json) if changes_json else {}
+            except json.JSONDecodeError as exc:
+                raise ValueError(f"改动不是合法的 JSON：{exc}") from exc
+            if not isinstance(changes, dict) or not changes:
+                raise ValueError("没有要改的内容")
+
+            async with session_scope() as session:
+                task = await TaskService(session).update_task(
+                    owner_id=owner, task_id=uuid.UUID(task_id), **changes
+                )
+                return {"id": str(task.id), "status": task.status, "title": task.title}
+
+        self._submit(request_id, work)
+
+    @Slot(str, str)
+    def deleteTask(self, request_id: str, task_id: str) -> None:
+        async def work() -> dict[str, Any]:
+            from app.infrastructure.database import session_scope
+            from app.services.task_service import TaskService
+
+            owner = await self._owner()
+            async with session_scope() as session:
+                await TaskService(session).delete_task(owner_id=owner, task_id=uuid.UUID(task_id))
+            return {"deleted": True, "task_id": task_id}
+
+        self._submit(request_id, work)
+
     # -------------------------------------------------------- permissions --
     #
     # These call `policy_store` and `PermissionManager` directly rather than going through

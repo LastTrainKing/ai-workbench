@@ -241,6 +241,9 @@ ApplicationWindow {
                     case "ask":          return askPage
                     case "conversation": return conversationPage
                     case "permissions":  return permissionsPage
+                    case "search":       return searchPage
+                    case "graph":        return graphPage
+                    case "planner":      return plannerPage
                     case "tasks":        return tasksPage
                     case "projects":     return projectsPage
                     case "notes":        return notesPage
@@ -298,6 +301,9 @@ ApplicationWindow {
     Component { id: tasksPage;     TasksPage     { shell: shellRoot } }
     Component { id: conversationPage; ConversationPage { shell: shellRoot } }
     Component { id: permissionsPage; PermissionsPage { shell: shellRoot } }
+    Component { id: searchPage; SearchPage { shell: shellRoot } }
+    Component { id: graphPage; GraphPage { shell: shellRoot } }
+    Component { id: plannerPage; PlannerPage { shell: shellRoot } }
     Component { id: projectsPage;  ProjectsPage  { shell: shellRoot } }
     Component { id: notesPage;     NotesPage     { shell: shellRoot } }
     Component { id: runsPage;      RunsPage      { shell: shellRoot } }

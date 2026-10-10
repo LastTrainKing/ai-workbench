@@ -477,6 +477,11 @@ def _self_check(window: object, bridge: ServiceBridge) -> list[tuple[str, bool, 
         "saveCapabilities",
         "loadTools",
         "checkPermission",
+        "search",
+        "loadGraph",
+        "loadTaskTree",
+        "updateTask",
+        "deleteTask",
     )
     missing = [name for name in required if not hasattr(bridge, name)]
     checks.append(
