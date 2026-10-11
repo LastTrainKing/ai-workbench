@@ -4,6 +4,16 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.3.0] — 2026-10-11
+
+窗口与图标。
+
+- 系统标题栏改用 DWM 着色，与应用的深蓝黑一致，不再是一条白带。仍是原生边框：拖动、
+  贴靠、双击最大化、系统菜单、逐显示器 DPI 和缩放边框都照旧。
+- 窗口图标此前从未设置（`QGuiApplication::setWindowIcon` 没有被调用过），标题栏和任务栏
+  显示的是 Windows 的占位图；EXE、安装包和快捷方式的图标一直是正确的。图标文件现在随包发布。
+- `--self-check --windowed` 用真实窗口跑那些必须有窗口才能验证的检查。
+
 ## [2.2.0] — 2026-10-09
 
 Release-freeze round. Every entry below is a defect that was confirmed against the source
