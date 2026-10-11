@@ -47,8 +47,22 @@ function Get-PgPidFromDataDir {
     if (-not $first) { return $null }
     $candidate = 0
     if (-not [int]::TryParse("$first".Trim(), [ref]$candidate)) { return $null }
-    if (Get-Process -Id $candidate -ErrorAction SilentlyContinue) { return $candidate }
-    return $null
+    $process = Get-Process -Id $candidate -ErrorAction SilentlyContinue
+    if (-not $process) { return $null }
+
+    # **Windows recycles pid numbers, so "a process with this id exists" is not the same as
+    # "our postmaster is running".** After a hard kill the file stays behind, the number is
+    # handed to whatever asks for one next, and this function reported a live postmaster
+    # that was not there. The launcher then waited out its full thirty seconds for a port
+    # that was never going to open — on every launch, until somebody deleted the file by
+    # hand. It happened on this machine: `postmaster.pid` said 28624 and 28624 was a
+    # browser, and the application could not start its own database any more.
+    #
+    # The name is the cheap half of the check. `stop-by-pid.ps1` does the thorough half —
+    # the executable's path — because it kills what it finds, and this one only waits.
+    if ($process.ProcessName -ne 'postgres') { return $null }
+
+    return $candidate
 }
 
 function Start-Postgres {
