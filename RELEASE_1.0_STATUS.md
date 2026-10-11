@@ -6,12 +6,12 @@
 |---|---|
 | 版本 | **2.2.0** |
 | 分支 | `fix/release-freeze-20261009` |
-| 提交 | `d491d8b` 关闭流程 · `45744b6` 三个页面 · `0ef8e65` 快捷键 · `58079c2` 首页 session · `b054105` 图标 · `4d9d487` API Key 校验 · `d70f179` 首页等待环境 · `d5845bf` 无头运行收尾 · `23d17b1` 界面重构 · `42ffaa9` 去卡片化与布局 · `93c614d` 按钮状态 · `e2091e1` 启动器 pid 回收 · `c3f3a66` AI 状态阶梯与设置页表单 |
+| 提交 | `d491d8b` 关闭流程 · `45744b6` 三个页面 · `0ef8e65` 快捷键 · `58079c2` 首页 session · `b054105` 图标 · `4d9d487` API Key 校验 · `d70f179` 首页等待环境 · `d5845bf` 无头运行收尾 · `23d17b1` 界面重构 · `42ffaa9` 去卡片化与布局 · `93c614d` 按钮状态 · `e2091e1` 启动器 pid 回收 · `c3f3a66` AI 状态阶梯与设置页表单 · `b118aeb` 设置页「重新读取」 |
 | 安装包 | `C:\Users\user\Desktop\AI-Workbench-Release\安装包\AI-Workbench-Native-Setup.exe` |
-| 安装包大小 | 124,519,024 字节（118.8 MB） |
-| 安装包 SHA-256 | `e5df0c9547cae2beca1aee197d825e69ebd019db694a94f59b4305e3dbf57d93` |
+| 安装包大小 | 124,510,157 字节（118.7 MB） |
+| 安装包 SHA-256 | `4e7f231d08482e3525c809f041c035c7503cdaf0e48df59bedb57bd61c29b832` |
 | 已安装 EXE | `C:\Users\user\AppData\Local\AI Workbench\AI-Workbench-Native.exe` |
-| 已安装 EXE SHA-256 | `d03b93fe7ab9af9604b83b81131521f03811bef7155a76cd8cbd22f931025ff8` |
+| 已安装 EXE SHA-256 | `d03b93fe7ab9af9604b83b81131521f03811bef7155a76cd8cbd22f931025ff8`（本次未变：QML 作为数据文件随包发布，只改界面的版本动的是 `_internal/qml/` 下的文件，不是 EXE；核验界面请比对 `_internal/qml/pages/SettingsPage.qml` 的哈希） |
 | 数据目录 | `C:\Users\user\AppData\Local\AI Workbench Data` |
 | 桌面快捷方式 | `C:\Users\user\Desktop\AI Workbench.lnk` |
 
