@@ -187,11 +187,20 @@ Flickable {
                 model: page.visibleRows()
 
                 delegate: Rectangle {
+                    id: taskCard
                     required property var modelData
+                    //: Depth, capped. The cap is about how much room the guides need, not
+                    //: about hiding the tree — beyond three levels the marker stops moving
+                    //: right, which is the same thing the old 60px cap did.
+                    readonly property int level: Math.min(modelData.depth, 3)
 
                     Layout.fillWidth: true
-                    Layout.leftMargin: Math.min(60, modelData.depth * 18)
-                    implicitHeight: taskColumn.implicitHeight + 20
+                    // **No left margin.** The card used to be pushed right by
+                    // `depth * 18`, which moved the title, the description and the five
+                    // buttons together: six cards, four different x positions, and the
+                    // action rows staggered down the page. Depth is drawn in the gutter
+                    // below instead, so the card itself never moves.
+                    implicitHeight: body.implicitHeight + 20
                     radius: 8
                     color: Theme.surface
                     border.width: 1
@@ -203,19 +212,56 @@ Flickable {
                     Accessible.name: modelData.title + "，" + page.statusWord(modelData.status)
                                      + (modelData.is_blocked ? "，被依赖阻塞" : "")
 
-                    ColumnLayout {
-                        id: taskColumn
+                    RowLayout {
+                        id: body
                         anchors.fill: parent
                         anchors.margins: 10
-                        spacing: 6
+                        spacing: 0
+
+                        // The gutter. One width for every card, empty at the top level —
+                        // a constant left inset is what makes the rows line up, and it is
+                        // the only thing here that depends on depth.
+                        Item {
+                            id: gutter
+                            Layout.preferredWidth: 30
+                            Layout.fillHeight: true
+
+                            // A hairline per enclosing level, so a child sits under a line
+                            // that comes down from its parent.
+                            Repeater {
+                                model: Math.max(0, taskCard.level - 1)
+                                delegate: Rectangle {
+                                    x: 6 + index * 9
+                                    width: 1
+                                    height: parent.height
+                                    color: Theme.divider
+                                    Accessible.ignored: true
+                                }
+                            }
+                            Text {
+                                visible: taskCard.level > 0
+                                text: "└"
+                                color: Theme.textFaint
+                                font.pixelSize: 12
+                                x: 6 + (taskCard.level - 1) * 9 - 4
+                                y: titleRow.y + (titleRow.height - height) / 2
+                                Accessible.ignored: true
+                            }
+                        }
+
+                        ColumnLayout {
+                            id: taskColumn
+                            Layout.fillWidth: true
+                            spacing: 6
 
                         RowLayout {
+                            id: titleRow
                             Layout.fillWidth: true
                             spacing: 10
 
                             Text {
                                 Layout.fillWidth: true
-                                text: (modelData.depth > 0 ? "└ " : "") + modelData.title
+                                text: modelData.title
                                 color: Theme.text
                                 font.pixelSize: 13
                                 elide: Text.ElideRight
@@ -255,7 +301,7 @@ Flickable {
                             Button {
                                 objectName: "task-start-" + modelData.id
                                 text: "开始"
-                    variant: "primary"
+                                variant: "primary"
                                 visible: modelData.status === "TODO" || modelData.status === "BLOCKED"
                                 enabled: !page.busy
                                 onClicked: page.setStatus(modelData.id, "IN_PROGRESS")
@@ -288,7 +334,7 @@ Flickable {
                             Button {
                                 objectName: "task-delete-" + modelData.id
                                 text: "删除"
-                    variant: "danger"
+                                variant: "danger"
                                 enabled: !page.busy
                                 onClicked: page.removeTask(modelData.id, modelData.title)
                                 Accessible.name: "删除任务 " + modelData.title
@@ -311,6 +357,7 @@ Flickable {
                                 text: modelData.due_date || ""
                             }
                         }
+                    }
                     }
                 }
             }
