@@ -71,6 +71,21 @@ Flickable {
     readonly property color stateTone:
         (status && ladder[status.state]) ? ladder[status.state].tone : Theme.textFaint
 
+    //: Re-read everything this page shows, without leaving it.
+    //:
+    //: **Not a fix for anything.** The state that read 未配置 was not stale — it was computed
+    //: from the process environment every single time, so reloading it returned the same
+    //: wrong answer. This is here for the case a reload actually covers: the configuration
+    //: was changed somewhere else (the file edited by hand, another window), and the page
+    //: should be able to pick that up. It is also the one thing every other page has and
+    //: this one did not.
+    function reload() {
+        page.statusText = ""
+        loadConfig()
+        loadRuntime()
+        loadEmbedding()
+    }
+
     function loadConfig() {
         var id = "cfg-" + Date.now()
         shell.request("读取 AI 配置", id, function (payload) {
@@ -387,6 +402,15 @@ Flickable {
                     onClicked: page.save()
                 }
                 Button { text: "恢复默认"; variant: "ghost"; onClicked: page.clear() }
+                Button {
+                    objectName: "ai-reload"
+                    // Text, not a box: the one primary action here is 保存, and a reload is
+                    // a way of looking again rather than a way of changing anything.
+                    text: "重新读取"
+                    variant: "ghost"
+                    onClicked: page.reload()
+                    Accessible.name: "重新读取磁盘上的 AI 配置与运行信息"
+                }
             }
             Text {
                 Layout.fillWidth: true
