@@ -34,7 +34,7 @@ Rectangle {
         { key: "tasks",        label: "任务",   hint: Theme.shortcutFor("tasks") },
         { key: "projects",     label: "项目",   hint: Theme.shortcutFor("projects") },
         { key: "notes",        label: "笔记",   hint: Theme.shortcutFor("notes") },
-        { key: "runs",         label: "Agent",  hint: Theme.shortcutFor("runs") },
+        { key: "runs",         label: "运行记录", hint: Theme.shortcutFor("runs") },
         { key: "settings",     label: "设置",   hint: Theme.shortcutFor("settings") }
     ]
 

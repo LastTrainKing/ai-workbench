@@ -104,6 +104,18 @@ class OpenAICompatibleProvider(LLMProvider):
             raise AIAuthError(
                 "AI_API_KEY is not configured for the openai_compatible provider."
             )
+        # A key written before the save path checked for this, or edited into the config
+        # file by hand, still reaches here. `httpx` encodes header values as ASCII, so
+        # without this the failure is `UnicodeEncodeError` from inside the HTTP client —
+        # raised while the client is being *constructed*, which is why it looked like the
+        # Agent page was broken rather than the key.
+        if not api_key.isascii():
+            bad = next(index for index, char in enumerate(api_key) if not char.isascii())
+            raise AIAuthError(
+                f"API Key 含非 ASCII 字符（第 {bad + 1} 个是「{api_key[bad]}」），"
+                f"请在设置里重新填写",
+                details={"position": bad + 1},
+            )
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
         self._client: httpx.AsyncClient | None = None

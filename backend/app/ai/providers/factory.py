@@ -133,13 +133,19 @@ def _build_llm_provider() -> tuple[LLMProvider, ProviderInfo]:
                 configured="openai_compatible",
             )
         if cache_key not in _llm_cache:
-            _llm_cache[cache_key] = OpenAICompatibleProvider(
-                base_url=cfg.base_url,
-                api_key=cfg.api_key,
-                model=cfg.model,
-                timeout=cfg.timeout_seconds,
-                max_retries=max(1, min(5, _retries())),
-            )
+            try:
+                _llm_cache[cache_key] = OpenAICompatibleProvider(
+                    base_url=cfg.base_url,
+                    api_key=cfg.api_key,
+                    model=cfg.model,
+                    timeout=cfg.timeout_seconds,
+                    max_retries=max(1, min(5, _retries())),
+                )
+            except AIAuthError as exc:
+                # The deepseek branch above has always done this; this one raised, so the
+                # same unusable key behaved differently depending on which of the two
+                # names the account had selected.
+                return _offline_llm(reason=str(exc), configured="openai_compatible")
         return _llm_cache[cache_key], ProviderInfo(
             kind="openai_compatible",
             model=cfg.model,

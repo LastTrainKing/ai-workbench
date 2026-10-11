@@ -71,7 +71,7 @@ var pages = [
     { key: "tasks",        label: "任务" },
     { key: "projects",     label: "项目" },
     { key: "notes",        label: "笔记" },
-    { key: "runs",         label: "Agent" },
+    { key: "runs",         label: "运行记录" },
     { key: "settings",     label: "设置" }
 ]
 

@@ -171,6 +171,7 @@ def save(owner_id: Any, patch: dict[str, Any]) -> dict[str, Any]:
         )
 
     _validate_endpoint_fields(patch)
+    _normalise_secret_fields(patch)
 
     path = _path_for(owner_id)
     if path == CONFIG_PATH:
@@ -281,6 +282,56 @@ def _validate_endpoint_fields(patch: dict[str, Any]) -> None:
         value = patch.get(key)
         if isinstance(value, str) and value.strip():
             validate_endpoint(value, field_name=key)
+
+
+#: The two write-only fields the UI calls "API Key".
+SECRET_FIELDS = ("api_key", "embedding_api_key")
+
+
+def validate_secret(value: str, *, field_name: str = "api_key") -> str:
+    """Check a pasted API key. Returns it with the surrounding blanks removed.
+
+    Two things go wrong when a key is pasted rather than typed, and both used to be found
+    by the HTTP client instead of here:
+
+    * **A trailing newline or space.** Copying from a browser or a chat window picks one
+      up; it travels inside the ``Authorization`` header and the provider answers 401.
+    * **A non-ASCII character.** Keys are ASCII, and ``httpx`` encodes header values as
+      ASCII. A key holding one — a stray Chinese character from the sentence around it,
+      which is exactly how one arrives if the user pastes the whole line rather than the
+      key — failed inside the client with ``UnicodeEncodeError: 'ascii' codec can't encode
+      character ...``. That message reached the user as the Agent page's only explanation
+      and says nothing about a key being wrong.
+
+    Trailing blanks are trimmed because that is unambiguous. A character in the middle is
+    refused rather than guessed at: stripping a prefix like ``key为`` would be inventing a
+    key the user did not type, and the message can just say which character and where.
+    """
+    raw = (value or "").strip()
+    for index, char in enumerate(raw):
+        if char.isascii() and not char.isspace():
+            continue
+        if not char.isascii():
+            raise ValidationError(
+                f"{field_name} 只能包含 ASCII 字符，第 {index + 1} 个字符是「{char}」。"
+                f"请只粘贴 Key 本身",
+                code="ai_config_secret_not_ascii",
+                details={"field": field_name, "position": index + 1, "character": char},
+            )
+        raise ValidationError(
+            f"{field_name} 不能包含空格或换行，第 {index + 1} 个字符是空白",
+            code="ai_config_secret_whitespace",
+            details={"field": field_name, "position": index + 1},
+        )
+    return raw
+
+
+def _normalise_secret_fields(patch: dict[str, Any]) -> None:
+    """Rewrite the secrets in ``patch`` in place, so the trimmed value is what gets stored."""
+    for key in SECRET_FIELDS:
+        value = patch.get(key)
+        if isinstance(value, str) and value:
+            patch[key] = validate_secret(value, field_name=key)
 
 
 # --------------------------------------------------------------------------- #
