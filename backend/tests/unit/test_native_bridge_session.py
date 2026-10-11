@@ -41,6 +41,10 @@ def bridge() -> ServiceBridge:
 
     QCoreApplication.instance() or QCoreApplication([])
     instance = ServiceBridge(owner_id=None)
+    # Settled, because this test is about what a slot does, not about when it is allowed to
+    # run: an unsettled bridge makes every call wait for an environment that no fixture
+    # here starts.
+    instance.record_startup({}, {"ready": True})
     yield instance
     instance._runner.shutdown()
 
@@ -92,3 +96,92 @@ def test_the_dashboard_slot_hands_stats_service_a_session(
         "made the home screen fail with 'missing 1 required positional argument: session'"
     )
     assert seen.get("owner") == owner, "the service was not asked about this account"
+
+
+def test_a_call_waits_for_the_environment_before_it_runs(bridge: ServiceBridge) -> None:
+    """The window is on screen before the stack is up, and the home page asks immediately.
+
+    `main.py` shows the window and *then* calls `startEnvironment`, so the dashboard's first
+    query reaches PostgreSQL while PostgreSQL is still starting. It failed with
+    `ConnectionRefusedError [WinError 1225]`, the page showed that and stopped asking, and
+    the screen sat on "读取中…" over a database that came up seconds later.
+
+    The engines were ready 3.7 seconds after the window appeared, so the wait here is
+    asserted with a state change rather than a duration: the call must not run while the
+    environment is starting, and must run once it is ready.
+    """
+    ran: list[float] = []
+    answered: dict[str, str] = {}
+
+    async def factory() -> str:
+        ran.append(time.monotonic())
+        return "payload"
+
+    bridge._set_startup("starting", "正在准备本地环境…")
+    bridge.completed.connect(lambda rid, text: answered.__setitem__(rid, text))
+    bridge._submit("waits-for-environment", factory)
+
+    time.sleep(0.6)
+    assert ran == [], "the call ran before the environment was ready"
+
+    bridge._set_startup("ready", "已就绪，可以开始使用")
+    assert _wait_until_idle(bridge), "the call never ran once the environment was ready"
+    assert len(ran) == 1, "the call ran more than once"
+
+    # `completed` is emitted on the runner's thread and delivered to this one through Qt's
+    # queue, so it needs the event loop to turn before it arrives.
+    from PySide6.QtCore import QCoreApplication
+
+    deadline = time.monotonic() + 5.0
+    while "waits-for-environment" not in answered and time.monotonic() < deadline:
+        QCoreApplication.processEvents()
+        time.sleep(0.02)
+    assert answered.get("waits-for-environment") == "payload", "the result never came back"
+
+
+def test_a_failed_environment_does_not_leave_a_call_waiting_forever(
+    bridge: ServiceBridge,
+) -> None:
+    """An environment that never comes up must produce an error, not a hung request."""
+    bridge._set_startup("failed", "本地环境没能启动：数据库")
+    bridge._submit("after-failure", lambda: _immediately())
+    assert _wait_until_idle(bridge, timeout=10.0), (
+        "a settled-but-failed environment must let calls through, so the user sees the "
+        "error the failure describes instead of a request that never answers"
+    )
+
+
+async def _immediately() -> str:
+    return "ran"
+
+
+def test_submit_hands_the_runner_a_callable(
+    bridge: ServiceBridge, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`AsyncRunner.submit` calls what it is given.
+
+    The wait was first written as `self._runner.submit(id, self._after_environment(factory))`
+    — a coroutine *object*, built on the UI thread's loop. Every slot then failed with
+    `TypeError: 'coroutine' object is not callable`, which is the mistake `submit`'s own
+    docstring warns about.
+    """
+    captured: dict[str, object] = {}
+
+    def fake_submit(request_id: str, factory: object, *, timeout: float = 120.0) -> None:
+        captured["request_id"] = request_id
+        captured["factory"] = factory
+        captured["timeout"] = timeout
+
+    monkeypatch.setattr(bridge._runner, "submit", fake_submit)
+
+    async def work() -> str:
+        return "done"
+
+    bridge._submit("callable-check", work)
+
+    assert callable(captured["factory"]), (
+        "the runner calls the factory it is handed; a coroutine object fails at call time"
+    )
+    assert float(captured["timeout"]) > 120.0, (
+        "the timeout must cover the wait for the environment as well as the call itself"
+    )

@@ -28,6 +28,7 @@ import asyncio
 import json
 import logging
 import os
+import time
 import uuid
 from pathlib import Path
 from typing import Any
@@ -36,6 +37,11 @@ from PySide6.QtCore import Property, QObject, QUrl, Signal, Slot
 from PySide6.QtGui import QDesktopServices
 
 from awbnative.async_runner import AsyncRunner
+
+#: How long a call that arrives before the environment is ready waits for it. Long enough
+#: for a cold start of a frozen build on a slow disk, short enough that a startup which has
+#: genuinely hung still ends in an error somebody can read.
+READY_WAIT_SECONDS = 240.0
 
 logger = logging.getLogger(__name__)
 
@@ -160,7 +166,49 @@ class ServiceBridge(QObject):
         self.failed.emit(request_id, message, code)
 
     def _submit(self, request_id: str, factory, *, timeout: float = 120.0) -> None:
-        self._runner.submit(request_id, factory, timeout=timeout)
+        """Queue a call behind the local environment.
+
+        `_bring_up` is submitted to the runner directly, so the startup sequence is the
+        one thing that does not come through here. Everything else — all of the slots,
+        and any slot added later — waits for the stack first.
+        """
+        # A lambda, not `self._after_environment(factory)`: the runner calls what it is
+        # given, and a coroutine built here would be bound to the UI thread's loop rather
+        # than the runner's — which is the whole reason `submit` takes a factory.
+        self._runner.submit(
+            request_id,
+            lambda: self._after_environment(factory),
+            timeout=timeout + READY_WAIT_SECONDS,
+        )
+
+    async def _after_environment(self, factory):
+        """Wait for the local stack, then run the call.
+
+        **The window is on screen before the stack is up.** `main.py` shows it and *then*
+        calls `startEnvironment`, so the first thing the home page does — load its data —
+        reaches PostgreSQL while PostgreSQL is still starting. It fails with
+        `ConnectionRefusedError [WinError 1225]`, the page shows that and stops asking, and
+        the screen sits on "读取中…" with a red toast over a database that came up three
+        seconds later. On the machine this was found on, the engines were ready 3.7
+        seconds after the window appeared; the page had already given up.
+
+        A page cannot forget to wait, because pages do not do the waiting.
+        """
+        deadline = time.monotonic() + READY_WAIT_SECONDS
+        started = time.monotonic()
+        while self._startup_state in ("idle", "starting") and time.monotonic() < deadline:
+            await asyncio.sleep(0.1)
+        waited = time.monotonic() - started
+        if waited > 0.5:
+            # Worth a line: "the interface took ten seconds to fill in" is this, and without
+            # it the wait is invisible — the call simply appears to have been slow.
+            logger.info(
+                "call_waited_for_environment",
+                extra={"seconds": round(waited, 1), "state": self._startup_state},
+            )
+        # If it is still not settled the call runs anyway: an environment that never came
+        # up should produce the error that says so, not a request that never answers.
+        return await factory()
 
     async def _owner(self) -> uuid.UUID:
         """This install's account, and **bind the call to it**.

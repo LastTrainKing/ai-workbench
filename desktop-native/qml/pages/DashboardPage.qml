@@ -29,6 +29,14 @@ Flickable {
     property var projects: []
     property string errorText: ""
 
+    //: What a panel says while its data is on the way. While the local stack is still
+    //: coming up, "读取中…" is not true — the request has not been sent, it is waiting for
+    //: a database to finish starting. Saying so is the difference between a screen that
+    //: looks stuck and one that is visibly getting ready.
+    readonly property string waitingText:
+        (bridge.startupState === "starting" || bridge.startupState === "idle")
+        ? "等待本地环境…" : "读取中…"
+
     function load() {
         var id = "workbench-" + Date.now()
         shell.request("工作台", id, function (payload) {
@@ -89,7 +97,7 @@ Flickable {
                 Layout.fillWidth: true
             }
             Text {
-                text: page.summary ? "已更新" : "读取中…"
+                text: page.summary ? "已更新" : page.waitingText
                 color: Theme.textFaint
                 font.pixelSize: 12
             }
@@ -182,7 +190,7 @@ Flickable {
                 subtitle: page.summary
                           ? ((page.tasks.due_today ?? []).length + " 件今天到期，"
                              + (page.tasks.high_priority ?? []).length + " 件高优先级")
-                          : "读取中…"
+                          : page.waitingText
 
                 Text {
                     Layout.fillWidth: true
@@ -268,7 +276,7 @@ Flickable {
                 title: "最近项目"
                 subtitle: page.summary
                           ? ((page.summary.workspace ?? {}).projects ?? 0) + " 个进行中的项目"
-                          : "读取中…"
+                          : page.waitingText
 
                 Text {
                     Layout.fillWidth: true
@@ -344,7 +352,7 @@ Flickable {
                 subtitle: page.summary
                           ? ((page.knowledge.knowledge_bases ?? 0) + " 个知识库，"
                              + (page.knowledge.documents ?? 0) + " 份资料")
-                          : "读取中…"
+                          : page.waitingText
 
                 GridLayout {
                     Layout.fillWidth: true
@@ -396,7 +404,7 @@ Flickable {
                 Layout.preferredWidth: 1
                 Layout.alignment: Qt.AlignTop
                 title: "AI 服务"
-                subtitle: page.summary ? (page.llm.model || "未配置") : "读取中…"
+                subtitle: page.summary ? (page.llm.model || "未配置") : page.waitingText
 
                 RowLayout {
                     Layout.fillWidth: true
@@ -415,7 +423,7 @@ Flickable {
                                  ? "已配置 API Key，可以调用云端模型。"
                                  : "还没有填 API Key，当前用内置的离线引擎。功能可用，"
                                    + "但回答质量不如云端模型。")
-                              : "读取中…"
+                              : page.waitingText
                     }
                 }
 

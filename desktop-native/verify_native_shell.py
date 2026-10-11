@@ -554,6 +554,10 @@ def main() -> int:
 
     owner = _BOOT_OWNER
     bridge = ServiceBridge(owner_id=owner)
+    # This run drives pages, not startup, and it requires the stack to already be up. Saying
+    # so is what stops every page's first call from waiting out `READY_WAIT_SECONDS` for an
+    # environment that nothing here is going to start.
+    bridge.record_startup({}, {"ready": True})
 
     engine = QQmlApplicationEngine()
     engine.rootContext().setContextProperty("bridge", bridge)

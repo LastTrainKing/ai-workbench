@@ -30,6 +30,7 @@ import argparse
 import json
 import os
 import sys
+import time
 import traceback
 from pathlib import Path
 
@@ -291,7 +292,6 @@ def main(argv: list[str] | None = None) -> int:
         # A display is not needed to prove the QML loads and the bindings resolve.
         os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-    import asyncio
 
     from awbnative import bootstrap, runtime
 
@@ -309,7 +309,6 @@ def main(argv: list[str] | None = None) -> int:
     # an empty desktop while a database initialises.
     headless = bool(args.self_check or args.screenshot)
     runtime_state = runtime.ensure() if headless else None
-    readiness = asyncio.run(bootstrap.ensure_ready()) if headless else None
 
     app = QGuiApplication(sys.argv[:1] + ["ai-workbench-native"])
     app.setApplicationName("AI Workbench")
@@ -319,6 +318,18 @@ def main(argv: list[str] | None = None) -> int:
     font = configure_font(app)
 
     bridge = ServiceBridge(owner_id=args.owner or None)
+
+    readiness = None
+    if headless:
+        # **On the runner's loop, not through `asyncio.run`.** The readiness probe queries
+        # the database, which opens pooled connections; `asyncio.run` closes its loop on the
+        # way out, and those connections then belong to a loop that no longer exists. Every
+        # page call afterwards fails with
+        # `AttributeError: 'NoneType' object has no attribute 'send'` — a screenshot of a
+        # failure that has nothing to do with what was being photographed. A real launch
+        # never had this because it probes inside `_bring_up`, on this same loop.
+        readiness = bridge._runner.call_blocking(bootstrap.ensure_ready)
+
     engine = build_engine(bridge)
     window = engine.rootObjects()[0]
 
@@ -327,7 +338,12 @@ def main(argv: list[str] | None = None) -> int:
         return _run_self_check(window, bridge, runtime_state, readiness, font, args.report)
 
     if args.screenshot:
-        return _screenshot(app, window, Path(args.screenshot))
+        assert runtime_state is not None and readiness is not None
+        # The stack was brought up *before* the window here, so the shell has to be told —
+        # otherwise every page's first call waits for a startup that already happened and
+        # the screenshot is of empty panels.
+        bridge.record_startup(runtime_state.as_dict(), readiness)
+        return _screenshot(app, window, Path(args.screenshot), bridge)
 
     for line in runtime.summarise(runtime_state) if runtime_state else []:
         _say(line)
@@ -500,8 +516,18 @@ def _self_check(window: object, bridge: ServiceBridge) -> list[tuple[str, bool, 
     return checks
 
 
-def _screenshot(app: QGuiApplication, window: object, target: Path) -> int:
+def _screenshot(app: QGuiApplication, window: object, target: Path, bridge: ServiceBridge) -> int:
+    """Grab the window once the page has finished asking for its data.
+
+    A fixed delay was the first version and it photographed whatever happened to be there:
+    the panels fill in when the queries come back, which is after the window is up and not
+    at a time that can be guessed. The bridge knows how many calls are still in flight, so
+    this waits for that count to reach zero — which is what "the page has loaded" means
+    here, and it is the same number a stuck page would leave above zero.
+    """
     from PySide6.QtCore import QTimer
+
+    deadline = time.monotonic() + 30.0
 
     def grab() -> None:
         # `grabWindow` is on QQuickWindow, which is what an ApplicationWindow's root
@@ -522,7 +548,13 @@ def _screenshot(app: QGuiApplication, window: object, target: Path) -> int:
         )
         app.quit()
 
-    QTimer.singleShot(1500, grab)
+    def wait_then_grab() -> None:
+        if bridge._runner.inflight and time.monotonic() < deadline:
+            QTimer.singleShot(200, wait_then_grab)
+            return
+        grab()
+
+    QTimer.singleShot(1500, wait_then_grab)
     app.exec()
     return 0
 
