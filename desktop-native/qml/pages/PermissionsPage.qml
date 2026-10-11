@@ -228,11 +228,16 @@ Flickable {
                     required property var modelData
                     Layout.fillWidth: true
                     implicitHeight: modeRow.implicitHeight + 18
-                    radius: 8
-                    color: Theme.bgElevated
-                    border.width: page.policy && page.policy.mode === modelData.value ? 2 : 1
-                    border.color: page.policy && page.policy.mode === modelData.value
-                                  ? Theme.borderFocus : Theme.border
+                    radius: Theme.radiusSm
+                    // Selected is a filled row with an accent hairline, the same as the
+                    // rail's current entry. It was a 2px cyan outline around the whole
+                    // row, which is a lot of the brightest colour on the screen for what
+                    // is only "this one is chosen".
+                    readonly property bool chosen: page.policy
+                                                   && page.policy.mode === modelData.value
+                    color: chosen ? Theme.accentSoft : Theme.bgElevated
+                    border.width: 1
+                    border.color: chosen ? Theme.accent : Theme.divider
 
                     Accessible.role: Accessible.RadioButton
                     Accessible.name: modelData.label + "：" + modelData.description
@@ -279,11 +284,16 @@ Flickable {
                     required property var modelData
                     Layout.fillWidth: true
                     implicitHeight: levelRow.implicitHeight + 14
-                    radius: 8
-                    color: Theme.bgElevated
-                    border.width: page.policy && page.policy.level === modelData.value ? 2 : 1
-                    border.color: page.policy && page.policy.level === modelData.value
-                                  ? Theme.borderFocus : Theme.border
+                    radius: Theme.radiusSm
+                    // Selected is a filled row with an accent hairline, the same as the
+                    // rail's current entry. It was a 2px cyan outline around the whole
+                    // row, which is a lot of the brightest colour on the screen for what
+                    // is only "this one is chosen".
+                    readonly property bool chosen: page.policy
+                                                   && page.policy.level === modelData.value
+                    color: chosen ? Theme.accentSoft : Theme.bgElevated
+                    border.width: 1
+                    border.color: chosen ? Theme.accent : Theme.divider
 
                     Accessible.role: Accessible.RadioButton
                     Accessible.name: "权限级别 " + modelData.label

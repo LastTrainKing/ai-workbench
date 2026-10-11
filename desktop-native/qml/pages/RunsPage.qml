@@ -24,12 +24,7 @@ Flickable {
     contentHeight: column.implicitHeight
     clip: true
 
-    property string goal: "把当前项目里未完成的任务列出来"
-    property bool running: false
-    property string progressText: ""
-    property var result: null
     property string errorText: ""
-    property bool _loaded: false
 
     property var runs: []
     property var detail: null
@@ -72,27 +67,6 @@ Flickable {
         bridge.reconcileRun(id, detail.run.run_id)
     }
 
-    function start() {
-        if (goal.trim() === "") {
-            shell.toast("warn", "先写一个目标")
-            return
-        }
-        running = true
-        result = null
-        errorText = ""
-        progressText = "已提交…"
-        var id = "agent-" + Date.now()
-        shell.request("Agent 运行", id, function (payload) {
-            page.result = payload
-            page.running = false
-            page.progressText = ""
-            var level = payload.status === "SUCCEEDED" ? "info" : "warn"
-            shell.toast(level, "结束：" + payload.status + "（" + payload.stopped_reason + "）")
-            page.load()
-        })
-        bridge.startAgentRun(id, goal)
-    }
-
     function statusWord(status) {
         switch (status) {
         case "SUCCEEDED":   return "成功"
@@ -112,9 +86,6 @@ Flickable {
 
     Connections {
         target: bridge
-        function onProgress(id, message) {
-            if (page.running) page.progressText = message
-        }
     }
 
     ColumnLayout {
@@ -122,126 +93,27 @@ Flickable {
         width: page.width
         spacing: 16
 
-        Text {
-            text: "Agent"
-            color: Theme.text
-            font.pixelSize: 24
-            font.bold: true
-        }
-
-        Card {
+        RowLayout {
             Layout.fillWidth: true
-            title: "运行一个目标"
-            subtitle: "没有配置 API Key 时走离线引擎；结果会如实标为 INCOMPLETE，而不是假装成功"
-
-            TextField {
-                id: goalField
-                objectName: "agent-goal"
-                Layout.fillWidth: true
-                text: page.goal
-                onTextChanged: page.goal = text
-                color: Theme.text
-                font.pixelSize: 14
-                placeholderText: "想让 Agent 做什么"
-                Accessible.role: Accessible.EditableText
-                Accessible.name: "Agent 目标"
-                background: Rectangle {
-                    radius: 8
-                    color: Theme.bgElevated
-                    border.width: goalField.activeFocus ? 2 : 1
-                    border.color: goalField.activeFocus ? Theme.borderFocus : Theme.border
-                }
-            }
-
-            RowLayout {
-                Layout.fillWidth: true
-                spacing: 10
-
-                Button {
-                    objectName: "agent-start"
-                    text: page.running ? "运行中…" : "开始"
-                    enabled: !page.running
-                    onClicked: page.start()
-                    Accessible.name: "开始运行"
-                }
-                Button {
-                    objectName: "agent-cancel"
-                    text: "取消"
-                    enabled: page.running
-                    onClicked: bridge.cancelAgentRun()
-                    Accessible.name: "取消运行"
-                }
-
-                Text {
-                    Layout.fillWidth: true
-                    text: page.progressText
-                    color: Theme.accent
-                    font.pixelSize: 12
-                    elide: Text.ElideRight
-                }
-            }
-
-            // Indeterminate on purpose: the executor does not report a percentage, and a
-            // progress bar that invents one is worse than no progress bar.
-            Rectangle {
-                Layout.fillWidth: true
-                Layout.preferredHeight: 4
-                radius: 2
-                color: Theme.bgElevated
-                visible: page.running
-
-                Rectangle {
-                    id: slider
-                    width: parent.width * 0.3
-                    height: parent.height
-                    radius: 2
-                    color: Theme.accent
-
-                    NumberAnimation on x {
-                        running: page.running
-                        from: 0
-                        to: slider.parent.width - slider.width
-                        duration: 1200
-                        loops: Animation.Infinite
-                    }
-                }
-            }
-        }
-
-        Card {
-            Layout.fillWidth: true
-            visible: page.result !== null
-            title: "本次结果"
-
-            RowLayout {
-                Layout.fillWidth: true
-                spacing: 10
-                StatusPill { status: page.result ? page.result.status : "" }
-                Text {
-                    Layout.fillWidth: true
-                    color: Theme.textMuted
-                    font.pixelSize: 12
-                    text: page.result
-                          ? ("停止原因：" + page.result.stopped_reason + "  ·  步骤 " + page.result.steps)
-                          : ""
-                }
-            }
+            spacing: Theme.space3
 
             Text {
-                Layout.fillWidth: true
-                wrapMode: Text.WordWrap
+                text: "运行记录"
                 color: Theme.text
-                font.pixelSize: 13
-                text: page.result ? (page.result.final_answer ?? "") : ""
-            }
-
-            Text {
+                font.pixelSize: Theme.fontDisplay
+                font.bold: true
                 Layout.fillWidth: true
-                wrapMode: Text.WrapAnywhere
+            }
+            Text {
+                text: page.runs.length + " 次运行"
                 color: Theme.textFaint
-                font.pixelSize: 11
-                font.family: "Consolas"
-                text: page.result ? ("run_id " + page.result.run_id) : ""
+                font.pixelSize: Theme.fontSmall
+            }
+            Button {
+                text: "去 Agent 执行"
+                variant: "primary"
+                onClicked: shell.navigate("agent")
+                Accessible.name: "去 Agent 工作台执行新的目标"
             }
         }
 

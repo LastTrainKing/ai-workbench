@@ -44,6 +44,15 @@ Flickable {
     property var history: []
     property bool _loaded: true
 
+    //: A question handed over by another page — the home screen's "直接提问". Filling the
+    //: box and leaving the user to press send would be asking them to say it twice.
+    property string prompt: ""
+    onPromptChanged: {
+        if (prompt === "" || busy) return
+        draft = prompt
+        send()
+    }
+
     signal back()
 
     function send() {

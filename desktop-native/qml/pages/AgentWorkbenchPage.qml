@@ -50,8 +50,24 @@ Flickable {
         return out
     }
 
-    // A goal handed over by another page (a project saying "continue this").
-    onGoalChanged: if (goal !== goalArea.text) goalArea.text = goal
+    // A goal handed over by another page (a project saying "continue this", or the home
+    // screen's input). `autoStart` is what makes the home screen's button an action rather
+    // than a navigation: the user already said what they want, so arriving on this page
+    // with the box filled and the button still to press would be asking twice.
+    property bool autoStart: false
+    property bool _autoStarted: false
+
+    function _maybeAutoStart() {
+        if (_autoStarted || !autoStart || goal === "" || running) return
+        _autoStarted = true
+        start()
+    }
+
+    onGoalChanged: {
+        if (goal !== goalArea.text) goalArea.text = goal
+        _maybeAutoStart()
+    }
+    onAutoStartChanged: _maybeAutoStart()
 
     function start() {
         var text = goal.trim()
@@ -168,10 +184,10 @@ Flickable {
                     color: Theme.text
                     font.pixelSize: 14
                     background: Rectangle {
-                        color: Theme.bg
-                        radius: 8
+                        color: Theme.bgInput
+                        radius: Theme.radiusMd
                         border.width: 1
-                        border.color: goalArea.activeFocus ? Theme.borderFocus : Theme.border
+                        border.color: goalArea.activeFocus ? Theme.borderFocus : Theme.divider
                     }
                     onTextChanged: page.goal = text
                 }
@@ -475,7 +491,7 @@ Flickable {
                     Button {
                         Layout.fillWidth: true
                         text: "查看全部运行记录"
-                        onClicked: page.shell.activePage = "runs"
+                        onClicked: page.shell.navigate("runs")
                     }
                 }
             }

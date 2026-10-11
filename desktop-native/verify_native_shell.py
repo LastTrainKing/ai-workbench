@@ -627,6 +627,14 @@ def main() -> int:
             bridge._runner.call_blocking(lambda: _teardown(owner))
         except Exception as exc:  # noqa: BLE001 - teardown must not mask the verdict
             print(f"     清理时出错（不影响上面的判定）：{type(exc).__name__}: {exc}")
+        # The interface first. `bridge` is a context property that the shell's banner and
+        # every page hold bindings to, and letting Python collect it while the QML engine is
+        # still alive logs three "Cannot read property 'startupState' of null" lines *after*
+        # the verdict — in the same log that is supposed to show real errors, which is how
+        # the stale-callback bug above hid for a whole round.
+        engine.deleteLater()
+        for _ in range(5):
+            app.processEvents()
         bridge.shutdown()
 
     passed = sum(1 for _l, ok, _d in RESULTS if ok)

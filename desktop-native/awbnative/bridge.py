@@ -1040,7 +1040,7 @@ class ServiceBridge(QObject):
         async def work() -> dict[str, Any]:
             from app.domain.enums import RunType
             from app.infrastructure.database import session_scope
-            from app.models.ai import AIRun
+            from app.models.ai import AgentRun, AIRun
             from sqlalchemy import select
 
             owner = await self._owner()
@@ -1059,7 +1059,25 @@ class ServiceBridge(QObject):
                         )
                     ).scalars()
                 )
-            return {"items": [_run_summary(row) for row in rows], "total": len(rows)}
+                # The goal, so the list can offer "继续" and mean it. `_run_summary` reads
+                # an `AIRun`, and the goal lives on `AgentRun` — one query for the page of
+                # runs rather than one per row.
+                goals = dict(
+                    (
+                        await session.execute(
+                            select(AgentRun.ai_run_id, AgentRun.goal).where(
+                                AgentRun.owner_id == owner,
+                                AgentRun.ai_run_id.in_([row.id for row in rows]),
+                            )
+                        )
+                    ).all()
+                )
+            items = []
+            for row in rows:
+                item = _run_summary(row)
+                item["goal"] = goals.get(row.id, "")
+                items.append(item)
+            return {"items": items, "total": len(items)}
 
         self._submit(request_id, work)
 

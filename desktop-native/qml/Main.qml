@@ -20,7 +20,7 @@ ApplicationWindow {
     // the extra breathing room a Big Picture layout wants on a high-DPI panel.
     readonly property real uiScale: Math.min(1.6, Math.max(0.85, Screen.devicePixelRatio))
     readonly property real gap: Theme.scale(16, uiScale)
-    readonly property real railWidth: Theme.scale(220, uiScale)
+    readonly property real railWidth: Theme.scale(236, uiScale)
 
     property string activePage: "dashboard"
     //: The numbered pages, in shortcut order, exposed so a keyboard test can ask the
@@ -70,8 +70,13 @@ ApplicationWindow {
     // `pending` map is what makes that explicit rather than hoped for.
     property var pending: ({})
 
-    function request(kind, id, callback) {
-        shellRoot.pending[id] = { kind: kind, callback: callback }
+    //: `onError` is optional, and it exists because a page has to be able to say *which*
+    //: of its panels failed. The toast names the request, which is right for a one-off
+    //: action and useless for a screen that loads four things at once — the panel that
+    //: failed stayed on "读取中…" while the toast faded.
+    function request(kind, id, callback, onError) {
+        shellRoot.pending[id] = { kind: kind, callback: callback, onError: onError,
+                                  epoch: shellRoot.pageEpoch }
         shellRoot.inflight += 1
     }
 
@@ -79,6 +84,9 @@ ApplicationWindow {
         var entry = shellRoot.pending[id]
         delete shellRoot.pending[id]
         shellRoot.inflight = Math.max(0, shellRoot.inflight - 1)
+        // The answer is for a page that has been replaced. The counter still counts it —
+        // the call really is running — but nothing on screen wants the result.
+        if (entry && entry.epoch !== shellRoot.pageEpoch) return
         if (entry && entry.callback) {
             entry.callback(payload)
         }
@@ -88,11 +96,37 @@ ApplicationWindow {
         var entry = shellRoot.pending[id]
         delete shellRoot.pending[id]
         shellRoot.inflight = Math.max(0, shellRoot.inflight - 1)
+        if (entry && entry.epoch !== shellRoot.pageEpoch) return
         var label = (entry ? entry.kind : "请求")
         shellRoot.toast(code === "timeout" ? "warn" : "error", label + " 失败：" + message)
         if (entry && entry.onError) {
             entry.onError(message, code)
         }
+    }
+
+    //: Bumped on every navigation, and stamped onto every request.
+    //:
+    //: **A request belongs to the page that made it.** When the user navigates away the
+    //: Loader destroys that page, but its callback stayed in `pending` — so when the answer
+    //: arrived it ran against a destroyed object and threw
+    //: `TypeError: Value is null and could not be converted to an object` at the assignment
+    //: inside it. Nothing looked wrong on screen, which is why it survived a screenshot
+    //: check: the log filled up and the panel the user had left stayed empty forever.
+    //:
+    //: Counting navigations is what makes "this answer is for a page that is gone"
+    //: decidable, and it only works because there is **one door** for navigation —
+    //: `navigate()`. Fifteen places used to assign `activePage` directly, and a counter
+    //: that most callers forget to bump is worse than no counter.
+    property int pageEpoch: 0
+
+    //: The one way to change page.
+    function navigate(name, params) {
+        // Params are cleared when there are none: the shell holds one params object for
+        // every page, so a stale one would re-fill the next page's form — and with
+        // `autoStart` on it, re-run the Agent.
+        shellRoot.pageParams = params || ({})
+        shellRoot.pageEpoch += 1
+        shellRoot.activePage = name
     }
 
     Connections {
@@ -120,7 +154,7 @@ ApplicationWindow {
             Layout.preferredWidth: shellRoot.railWidth
             activePage: shellRoot.activePage
             inflight: shellRoot.inflight
-            onNavigate: function (page) { shellRoot.activePage = page }
+            onNavigate: function (page) { shellRoot.navigate(page) }
         }
 
         Rectangle {
@@ -296,21 +330,19 @@ ApplicationWindow {
     Component { id: knowledgePage; KnowledgePage {
         shell: shellRoot
         onOpenDocuments: function (kbId, kbName) {
-            shellRoot.pageParams = { kbId: kbId, kbName: kbName }
-            shellRoot.activePage = "documents"
+            shellRoot.navigate("documents", { kbId: kbId, kbName: kbName })
         }
     } }
     Component { id: documentsPage; DocumentsPage {
         shell: shellRoot
-        onBack: shellRoot.activePage = "knowledge"
+        onBack: shellRoot.navigate("knowledge")
         onAsk: function (kbId, kbName) {
-            shellRoot.pageParams = { kbId: kbId, kbName: kbName }
-            shellRoot.activePage = "ask"
+            shellRoot.navigate("ask", { kbId: kbId, kbName: kbName })
         }
     } }
     Component { id: askPage; AskPage {
         shell: shellRoot
-        onBack: shellRoot.activePage = "documents"
+        onBack: shellRoot.navigate("documents")
     } }
     Component { id: tasksPage;     TasksPage     { shell: shellRoot } }
     Component { id: conversationPage; ConversationPage { shell: shellRoot } }
@@ -321,8 +353,7 @@ ApplicationWindow {
     Component { id: projectsPage;  ProjectsPage  {
         shell: shellRoot
         onOpenProject: function (projectId, projectName) {
-            shellRoot.pageParams = { projectId: projectId, projectName: projectName }
-            shellRoot.activePage = "project"
+            shellRoot.navigate("project", { projectId: projectId, projectName: projectName })
         }
     } }
     Component { id: notesPage;     NotesPage     { shell: shellRoot } }
@@ -376,7 +407,7 @@ ApplicationWindow {
         delegate: Shortcut {
             required property int index
             sequence: "Ctrl+" + (index + 1)
-            onActivated: shellRoot.activePage = Theme.pages[index].key
+            onActivated: shellRoot.navigate(Theme.pages[index].key)
         }
     }
 }

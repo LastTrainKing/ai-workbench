@@ -70,7 +70,7 @@ Flickable {
             Layout.fillWidth: true
             Button {
                 text: "← 项目"
-                onClicked: page.shell.activePage = "projects"
+                onClicked: page.shell.navigate("projects")
             }
             Text {
                 Layout.fillWidth: true
@@ -114,14 +114,14 @@ Flickable {
                 text: "让 Agent 继续这个项目"
                 onClicked: {
                     shell.pageParams = { goal: "继续推进项目「" + (page.project.name || "") + "」：" }
-                    shell.activePage = "agent"
+                    shell.navigate("agent")
                 }
             }
             Button {
                 text: "新建任务"
                 onClicked: {
                     shell.pageParams = { autoCreate: true, projectId: page.projectId }
-                    shell.activePage = "tasks"
+                    shell.navigate("tasks")
                 }
             }
             Button { text: "刷新"; onClicked: page.load() }
@@ -200,7 +200,7 @@ Flickable {
                     text: "导入资料"
                     onClicked: {
                         shell.pageParams = { autoCreate: true }
-                        shell.activePage = "knowledge"
+                        shell.navigate("knowledge")
                     }
                 }
             }
@@ -254,7 +254,7 @@ Flickable {
                         cursorShape: Qt.PointingHandCursor
                         Accessible.role: Accessible.Button
                         Accessible.name: "查看运行 " + (modelData.run_id || "").slice(0, 8)
-                        onClicked: page.shell.activePage = "runs"
+                        onClicked: page.shell.navigate("runs")
                     }
                 }
             }
@@ -262,7 +262,7 @@ Flickable {
             Button {
                 Layout.fillWidth: true
                 text: "查看全部运行记录"
-                onClicked: page.shell.activePage = "runs"
+                onClicked: page.shell.navigate("runs")
             }
         }
 
