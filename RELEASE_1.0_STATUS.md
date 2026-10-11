@@ -6,12 +6,12 @@
 |---|---|
 | 版本 | **2.2.0** |
 | 分支 | `fix/release-freeze-20261009` |
-| 提交 | `d491d8b` 关闭流程 · `45744b6` 三个页面 · `0ef8e65` 快捷键 · `58079c2` 首页 session · `b054105` 图标 |
+| 提交 | `d491d8b` 关闭流程 · `45744b6` 三个页面 · `0ef8e65` 快捷键 · `58079c2` 首页 session · `b054105` 图标 · `4d9d487` API Key 校验 |
 | 安装包 | `C:\Users\user\Desktop\AI-Workbench-Release\安装包\AI-Workbench-Native-Setup.exe` |
-| 安装包大小 | 124,499,433 字节（118.7 MB） |
-| 安装包 SHA-256 | `e4010b40e5159f7408d63299ee94dc8d5290faa2e09317838db8c057b3e40144` |
+| 安装包大小 | 124,507,911 字节（118.7 MB） |
+| 安装包 SHA-256 | `0c01527be4605b684b44213f8dbcaedaf53a02915f01ea1d589da02a157dcf1a` |
 | 已安装 EXE | `C:\Users\user\AppData\Local\AI Workbench\AI-Workbench-Native.exe` |
-| 已安装 EXE SHA-256 | `dbb7c3a15eb1a3abbe68293c7230baa62008b24c214d2a25100fa07c6e756454` |
+| 已安装 EXE SHA-256 | `4ecf5f5756b876eb5e10bec33033a3c6f4d5a776d8958335221e47a4da896d95` |
 | 数据目录 | `C:\Users\user\AppData\Local\AI Workbench Data` |
 | 桌面快捷方式 | `C:\Users\user\Desktop\AI Workbench.lnk` |
 
@@ -47,7 +47,7 @@
 | **正常关闭不残留进程，数据库优雅停止** | 已验证（连续 10 轮） |
 | 读取迁移之前建立的旧数据库 | 已验证 |
 
-测试：后端 **1344 passed / 10 skipped / 0 failed**；安装验收 **41/41**；原生 shell **31/31**；变异 **33/33**。
+测试：后端 **1350 passed / 10 skipped / 0 failed**；安装验收 **41/41**；原生 shell **31/31**；变异 **33/33**。
 
 ## 5. 未完成
 
