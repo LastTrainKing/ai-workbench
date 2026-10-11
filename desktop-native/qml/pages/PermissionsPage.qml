@@ -235,7 +235,7 @@ Flickable {
                     // is only "this one is chosen".
                     readonly property bool chosen: page.policy
                                                    && page.policy.mode === modelData.value
-                    color: chosen ? Theme.accentSoft : Theme.bgElevated
+                    color: chosen ? Theme.accentSoft : Theme.surface
                     border.width: 1
                     border.color: chosen ? Theme.accent : Theme.divider
 
@@ -291,7 +291,7 @@ Flickable {
                     // is only "this one is chosen".
                     readonly property bool chosen: page.policy
                                                    && page.policy.level === modelData.value
-                    color: chosen ? Theme.accentSoft : Theme.bgElevated
+                    color: chosen ? Theme.accentSoft : Theme.surface
                     border.width: 1
                     border.color: chosen ? Theme.accent : Theme.divider
 
@@ -349,7 +349,7 @@ Flickable {
                     Accessible.name: "要检查的路径"
                     background: Rectangle {
                         radius: 8
-                        color: Theme.bgElevated
+                        color: Theme.surface
                         border.width: probeField.activeFocus ? 2 : 1
                         border.color: probeField.activeFocus ? Theme.borderFocus : Theme.border
                     }
@@ -377,7 +377,7 @@ Flickable {
                 visible: page.probeResult !== null
                 implicitHeight: probeColumn.implicitHeight + 20
                 radius: 8
-                color: Theme.bgElevated
+                color: Theme.surface
                 border.width: 2
                 border.color: page.probeResult
                               ? page.decisionColor(page.probeResult.verdict.decision) : Theme.border
@@ -459,7 +459,7 @@ Flickable {
                     Layout.fillWidth: true
                     implicitHeight: capRow.implicitHeight + 14
                     radius: 8
-                    color: Theme.bgElevated
+                    color: Theme.surface
                     border.width: 1
                     border.color: Theme.border
 
@@ -479,7 +479,12 @@ Flickable {
                             text: modelData.label
                             color: Theme.text
                             font.pixelSize: 14
-                            Layout.preferredWidth: 120
+                            // Sized to the label rather than to a number. A fixed 120px cut
+                            // "Computer observation" (152px) off mid-word with no ellipsis,
+                            // at every window size. The cap and the elide are there for the
+                            // label nobody has written yet.
+                            Layout.preferredWidth: Math.min(implicitWidth, 220)
+                            elide: Text.ElideRight
                         }
                         Text {
                             Layout.fillWidth: true
@@ -527,7 +532,7 @@ Flickable {
                     Layout.fillWidth: true
                     implicitHeight: toolRow.implicitHeight + 12
                     radius: 6
-                    color: Theme.bgElevated
+                    color: Theme.surface
                     border.width: 1
                     border.color: modelData.available ? Theme.border : Theme.warn
 

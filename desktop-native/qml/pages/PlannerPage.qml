@@ -192,7 +192,7 @@ Flickable {
                     Layout.leftMargin: Math.min(60, modelData.depth * 18)
                     implicitHeight: taskColumn.implicitHeight + 20
                     radius: 8
-                    color: Theme.bgElevated
+                    color: Theme.surface
                     border.width: 1
                     border.color: modelData.is_blocked ? Theme.warn
                                 : modelData.status === "DONE" ? Theme.success

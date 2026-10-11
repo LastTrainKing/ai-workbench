@@ -199,6 +199,9 @@ Flickable {
                 Button {
                     objectName: "agent-start"
                     text: page.running ? "执行中…" : "开始执行"
+                    // The one thing this page is for. Everything else on it is a way to
+                    // look at a run that already happened.
+                    variant: "primary"
                     enabled: !page.running
                     onClicked: page.start()
                 }
@@ -491,6 +494,7 @@ Flickable {
                     Button {
                         Layout.fillWidth: true
                         text: "查看全部运行记录"
+                        variant: "ghost"
                         onClicked: page.shell.navigate("runs")
                     }
                 }

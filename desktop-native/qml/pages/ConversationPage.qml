@@ -184,7 +184,7 @@ Flickable {
                     Layout.fillWidth: true
                     implicitHeight: bubbleText.implicitHeight + 20
                     radius: 10
-                    color: modelData.role === "user" ? Theme.bgCardHover : Theme.bgElevated
+                    color: modelData.role === "user" ? Theme.bgCardHover : Theme.surface
                     border.width: 1
                     border.color: Theme.border
 
@@ -212,7 +212,7 @@ Flickable {
                 visible: page.busy || page.streamedText !== ""
                 implicitHeight: streamColumn.implicitHeight + 20
                 radius: 10
-                color: Theme.bgElevated
+                color: Theme.surface
                 border.width: 1
                 border.color: Theme.accent
 
@@ -300,7 +300,7 @@ Flickable {
                 Accessible.name: "消息内容"
                 background: Rectangle {
                     radius: 8
-                    color: Theme.bgElevated
+                    color: Theme.surface
                     border.width: draftField.activeFocus ? 2 : 1
                     border.color: draftField.activeFocus ? Theme.borderFocus : Theme.border
                 }

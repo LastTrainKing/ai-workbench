@@ -35,15 +35,21 @@ Flickable {
     property var summary: null
     property string dashState: "loading"
     property string dashError: ""
+    property string dashErrorHint: ""
+    property string dashErrorDetail: ""
 
     property var projects: []
     property string projectsState: "loading"
     property string projectsError: ""
+    property string projectsErrorHint: ""
+    property string projectsErrorDetail: ""
 
     property var runs: []
     property int runsTotal: 0
     property string runsState: "loading"
     property string runsError: ""
+    property string runsErrorHint: ""
+    property string runsErrorDetail: ""
 
     //: What each panel should draw, given both the call's state and whether the call
     //: returned anything. "Loaded and empty" and "still loading" are different sentences
@@ -64,7 +70,7 @@ Flickable {
     //: coming up, "读取中…" is not true — the request has not been sent, it is waiting for
     //: a database to finish starting.
     readonly property string busyText:
-        (bridge.startupState === "starting" || bridge.startupState === "idle")
+        (bridge && (bridge.startupState === "starting" || bridge.startupState === "idle"))
         ? "等待本地环境…" : "读取中…"
 
     readonly property var tasks: summary ? (summary.tasks ?? {}) : {}
@@ -131,9 +137,14 @@ Flickable {
             }
             page.summary = payload
             page.dashState = "ready"
-        }, function (message) {
+        }, function (message, code, human) {
+            // `message` is already a sentence in the reader's terms — the shell ran it
+            // through `Errors.human`. The hint and the exception come along too, so the
+            // panel can offer the next step and keep the raw text one toggle away.
             page.dashState = "error"
             page.dashError = message
+            page.dashErrorHint = human ? human.hint : ""
+            page.dashErrorDetail = human ? human.raw : ""
         })
         bridge.loadDashboard(id)
     }
@@ -147,9 +158,14 @@ Flickable {
             // and not the object, and the error then reads as a broken binding.
             page.projects = (payload && payload.items ? payload.items : []).slice(0, 5)
             page.projectsState = "ready"
-        }, function (message) {
+        }, function (message, code, human) {
+            // `message` is already a sentence in the reader's terms — the shell ran it
+            // through `Errors.human`. The hint and the exception come along too, so the
+            // panel can offer the next step and keep the raw text one toggle away.
             page.projectsState = "error"
             page.projectsError = message
+            page.projectsErrorHint = human ? human.hint : ""
+            page.projectsErrorDetail = human ? human.raw : ""
         })
         bridge.loadProjects(id)
     }
@@ -159,12 +175,17 @@ Flickable {
         page.runsError = ""
         var id = "wb-runs-" + Date.now()
         shell.request("最近运行", id, function (payload) {
-            page.runs = (payload && payload.items ? payload.items : []).slice(0, 6)
+            page.runs = (payload && payload.items ? payload.items : []).slice(0, 8)
             page.runsTotal = (payload && payload.total) ? payload.total : page.runs.length
             page.runsState = "ready"
-        }, function (message) {
+        }, function (message, code, human) {
+            // `message` is already a sentence in the reader's terms — the shell ran it
+            // through `Errors.human`. The hint and the exception come along too, so the
+            // panel can offer the next step and keep the raw text one toggle away.
             page.runsState = "error"
             page.runsError = message
+            page.runsErrorHint = human ? human.hint : ""
+            page.runsErrorDetail = human ? human.raw : ""
         })
         bridge.loadRuns(id, 20)
     }
@@ -239,7 +260,8 @@ Flickable {
                 Layout.fillWidth: true
             }
             Text {
-                text: page.dashState === "ready" ? "已更新" : page.busyText
+                text: page.dashState === "ready" ? "已更新"
+                     : page.dashState === "error" ? "读取失败" : page.busyText
                 color: Theme.textFaint
                 font.pixelSize: Theme.fontSmall
             }
@@ -391,15 +413,21 @@ Flickable {
                 Layout.preferredWidth: 1
                 Layout.alignment: Qt.AlignTop
                 title: "最近项目"
-                subtitle: page.summary
-                          ? ((page.summary.workspace ?? {}).projects ?? 0) + " 个项目"
-                          : page.busyText
+                // `page.summary` guarded: it is null until the call comes back, and
+                // `page.summary.workspace` on null is "Value is null and could not be
+                // converted to an object" — the error this pass is about, in miniature.
+                subtitle: page.projectsState === "error" ? ""
+                          : (page.projectsState === "loading" ? page.busyText
+                          : ((page.summary ? (page.summary.workspace ?? {}).projects : 0) ?? 0)
+                            + " 个项目")
 
                 StateBlock {
                     Layout.fillWidth: true
                     state: page.projectsViewState
                     busyText: page.busyText
                     errorText: page.projectsError
+                    errorHint: page.projectsErrorHint
+                    errorDetail: page.projectsErrorDetail
                     emptyText: "还没有项目。项目把相关的任务和产物放在一起。"
                     onRetry: page.loadProjects()
                 }
@@ -450,8 +478,12 @@ Flickable {
                     spacing: Theme.space2
                     visible: page.projectsState === "ready"
                     Button {
+                        // Text, not a box. The one primary action on this screen is the
+                        // goal box at the top; everything here is a way to go somewhere
+                        // else, and nine filled buttons in a band is what made the page
+                        // read as a toolbar.
                         text: "新建项目"
-                        Layout.fillWidth: true
+                        variant: "ghost"
                         onClicked: page.createProject()
                     }
                     Button {
@@ -468,16 +500,18 @@ Flickable {
                 Layout.preferredWidth: 1
                 Layout.alignment: Qt.AlignTop
                 title: "待办任务"
-                subtitle: page.summary
-                          ? ((page.tasks.open ?? 0) + " 件进行中，"
-                             + page.todo.length + " 件今天要看")
-                          : page.busyText
+                subtitle: page.dashState === "error" ? ""
+                          : (page.dashState === "loading" ? page.busyText
+                          : ((page.tasks.open ?? 0) + " 件进行中，"
+                             + page.todo.length + " 件今天要看"))
 
                 StateBlock {
                     Layout.fillWidth: true
                     state: page.todoViewState
                     busyText: page.busyText
                     errorText: page.dashError
+                    errorHint: page.dashErrorHint
+                    errorDetail: page.dashErrorDetail
                     emptyText: (page.tasks.total ?? 0) === 0
                                ? "还没有任务。用「新建任务」写下第一件。"
                                : "今天没有到期或高优先级的任务。"
@@ -517,7 +551,7 @@ Flickable {
                     visible: page.dashState === "ready"
                     Button {
                         text: "新建任务"
-                        Layout.fillWidth: true
+                        variant: "ghost"
                         onClicked: page.createTask()
                     }
                     Button {
@@ -541,7 +575,7 @@ Flickable {
                 Layout.alignment: Qt.AlignTop
                 title: "最近运行"
                 subtitle: page.runsState !== "ready"
-                          ? page.busyText
+                          ? (page.runsState === "error" ? "" : page.busyText)
                           : (page.runsTotal > 0
                              ? ("共 " + page.runsTotal + " 条 Agent 运行记录")
                              : "还没有运行记录")
@@ -551,6 +585,8 @@ Flickable {
                     state: page.runsViewState
                     busyText: page.busyText
                     errorText: page.runsError
+                    errorHint: page.runsErrorHint
+                    errorDetail: page.runsErrorDetail
                     emptyText: "还没有让 Agent 做过事。在上面写下目标，交给它执行。"
                     onRetry: page.loadRuns()
                 }
@@ -633,7 +669,7 @@ Flickable {
                     visible: page.runsState === "ready"
                     Button {
                         text: "全部运行记录"
-                        Layout.fillWidth: true
+                        variant: "ghost"
                         onClicked: page.go("runs")
                     }
                     Button {
@@ -650,17 +686,19 @@ Flickable {
                 Layout.preferredWidth: 1
                 Layout.alignment: Qt.AlignTop
                 title: "知识与资料"
-                subtitle: page.summary
-                          ? ((page.knowledge.knowledge_bases ?? 0) + " 个知识库，"
+                subtitle: page.dashState === "error" ? ""
+                          : (page.dashState === "loading" ? page.busyText
+                          : ((page.knowledge.knowledge_bases ?? 0) + " 个知识库，"
                              + (page.knowledge.documents ?? 0) + " 份资料，"
-                             + (page.knowledge.chunks ?? 0) + " 个片段")
-                          : page.busyText
+                             + (page.knowledge.chunks ?? 0) + " 个片段"))
 
                 StateBlock {
                     Layout.fillWidth: true
                     state: page.knowledgeViewState
                     busyText: page.busyText
                     errorText: page.dashError
+                    errorHint: page.dashErrorHint
+                    errorDetail: page.dashErrorDetail
                     emptyText: "还没有资料。导入一份文件，AI 就能引用它回答问题。"
                     onRetry: page.loadSummary()
                 }
@@ -688,12 +726,13 @@ Flickable {
                     Button {
                         objectName: "hero-import"
                         text: "导入资料"
-                        variant: "primary"
+                        variant: "secondary"
                         Layout.fillWidth: true
                         onClicked: page.importDocument()
                     }
                     Button {
                         text: "知识库"
+                        variant: "ghost"
                         onClicked: page.go("knowledge")
                     }
                     Button {
@@ -713,7 +752,7 @@ Flickable {
             Layout.fillWidth: true
             Layout.preferredHeight: statusRow.implicitHeight + Theme.space3 * 2
             radius: Theme.radiusMd
-            color: Theme.bgElevated
+            color: Theme.surface
 
             RowLayout {
                 id: statusRow
@@ -735,7 +774,9 @@ Flickable {
                     color: Theme.textMuted
                     font.pixelSize: Theme.fontSmall
                     elide: Text.ElideRight
-                    text: page.dashState !== "ready"
+                    text: page.dashState === "error"
+                          ? "本地服务不可用，AI 状态暂时读不到。"
+                          : page.dashState !== "ready"
                           ? page.busyText
                           : (page.llm.api_key_set
                              ? "AI 服务：" + (page.llm.model || "已配置") + "，可以调用云端模型。"

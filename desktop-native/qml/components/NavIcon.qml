@@ -153,6 +153,11 @@ Item {
                 ctx.bezierCurveTo(7.4, 19.8, 4, 16.8, 4, 12)
                 ctx.lineTo(4, 6.2); ctx.closePath()
                 ctx.stroke()
+            } else if (n === "chevron") {
+                // A disclosure arrow. Rotated 90° by the caller when the row is open.
+                ctx.beginPath()
+                ctx.moveTo(9.5, 6); ctx.lineTo(15.5, 12); ctx.lineTo(9.5, 18)
+                ctx.stroke()
             } else if (n === "gear") {
                 ctx.beginPath()
                 ctx.arc(12, 12, 3.2, 0, Math.PI * 2)

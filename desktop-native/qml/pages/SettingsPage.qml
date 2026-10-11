@@ -188,8 +188,10 @@ Flickable {
             RowLayout {
                 Layout.fillWidth: true
                 spacing: 10
-                Button { text: "保存"; onClicked: page.save() }
-                Button { text: "恢复默认"; onClicked: page.clear() }
+                // Saving is what the page is for; clearing is the way back. One of them
+                // gets the accent and the other stays a word.
+                Button { text: "保存"; variant: "primary"; onClicked: page.save() }
+                Button { text: "恢复默认"; variant: "ghost"; onClicked: page.clear() }
                 Text {
                     Layout.fillWidth: true
                     text: page.statusText
@@ -297,7 +299,7 @@ Flickable {
                 Layout.fillWidth: true
                 spacing: 10
                 Button { text: "导出配置摘要"; onClicked: page.exportSummary() }
-                Button { text: "另存为…"; onClicked: exportDialog.open() }
+                Button { text: "另存为…"; variant: "ghost"; onClicked: exportDialog.open() }
                 Text {
                     Layout.fillWidth: true
                     text: "保存路径由系统对话框选择，写入由 PermissionManager 判定"

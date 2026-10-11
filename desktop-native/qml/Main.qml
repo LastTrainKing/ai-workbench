@@ -6,6 +6,7 @@ import QtQml
 import "pages"
 import "components"
 import "theme.js" as Theme
+import "errors.js" as Errors
 
 // The shell: one window, a navigation rail, a page area, and a toast.
 //
@@ -98,9 +99,15 @@ ApplicationWindow {
         shellRoot.inflight = Math.max(0, shellRoot.inflight - 1)
         if (entry && entry.epoch !== shellRoot.pageEpoch) return
         var label = (entry ? entry.kind : "请求")
-        shellRoot.toast(code === "timeout" ? "warn" : "error", label + " 失败：" + message)
+        // In the reader's terms, not the exception's. The raw text is handed to the page
+        // as well — panels put it behind a 「技术详情」 toggle — so this translates the
+        // message rather than hiding it.
+        var human = Errors.human(message, code)
+        var line = label + " 失败：" + human.title
+        if (human.hint !== "") line += "　" + human.hint
+        shellRoot.toast(code === "timeout" ? "warn" : "error", line)
         if (entry && entry.onError) {
-            entry.onError(message, code)
+            entry.onError(human.title, code, human)
         }
     }
 
@@ -119,12 +126,35 @@ ApplicationWindow {
     //: that most callers forget to bump is worse than no counter.
     property int pageEpoch: 0
 
+    //: Hand a page the parameters it was navigated to with. Only the ones it declares:
+    //: writing an undeclared property is a QML error, and the shell holds one params
+    //: object for every page.
+    function applyParams(item) {
+        if (!item || !shellRoot.pageParams) return
+        for (var key in shellRoot.pageParams) {
+            if (item[key] !== undefined) {
+                item[key] = shellRoot.pageParams[key]
+            }
+        }
+    }
+
     //: The one way to change page.
     function navigate(name, params) {
         // Params are cleared when there are none: the shell holds one params object for
         // every page, so a stale one would re-fill the next page's form — and with
         // `autoStart` on it, re-run the Agent.
         shellRoot.pageParams = params || ({})
+        if (name === shellRoot.activePage) {
+            // **The same page, so nothing is destroyed and nothing in flight is stale.**
+            // Bumping the epoch here marked the page's own pending requests as belonging to
+            // a page that had gone, and because the Loader does not rebuild a page it is
+            // already showing, nothing ever replaced them — the screen sat on "读取中…" for
+            // ever. That is the one outcome the loading states exist to prevent.
+            //
+            // The parameters still have to land, since `onLoaded` will not fire again.
+            shellRoot.applyParams(pageLoader.item)
+            return
+        }
         shellRoot.pageEpoch += 1
         shellRoot.activePage = name
     }
@@ -178,7 +208,10 @@ ApplicationWindow {
                 id: startupBanner
                 objectName: "startup-banner"
 
-                readonly property string state: bridge.startupState
+                //: Guarded: during teardown the context property can already be gone, and
+                //: an unguarded read logs a TypeError after the report — in the log
+                //: that is supposed to show real errors.
+                readonly property string state: bridge ? bridge.startupState : "idle"
                 readonly property string stateWord: {
                     switch (state) {
                     case "idle":     return "准备中"
@@ -188,7 +221,7 @@ ApplicationWindow {
                     default:         return "已就绪"
                     }
                 }
-                readonly property string a11yName: stateWord + "：" + bridge.startupDetail
+                readonly property string a11yName: stateWord + "：" + (bridge ? bridge.startupDetail : "")
 
                 visible: state !== "ready"
                 anchors.left: parent.left
@@ -241,7 +274,7 @@ ApplicationWindow {
                             id: startupDetailLabel
                             objectName: "startup-detail"
                             Layout.fillWidth: true
-                            text: bridge.startupDetail
+                            text: bridge ? bridge.startupDetail : ""
                             color: Theme.textMuted
                             wrapMode: Text.WordWrap
                             font.pixelSize: Theme.scale(13, shellRoot.uiScale)
@@ -294,18 +327,7 @@ ApplicationWindow {
                 onLoaded: {
                     // Parameters are applied once, when the page instance appears, so a
                     // page cannot be recreated by a change it caused itself.
-                    //
-                    // Only the ones the page declares. Writing an undeclared property is a
-                    // QML error — `Cannot assign to non-existent property "projectId"` —
-                    // and the shell holds one params object for every page, so navigating
-                    // to a page that ignores a parameter logged an error each time.
-                    if (item && shellRoot.pageParams) {
-                        for (var key in shellRoot.pageParams) {
-                            if (item[key] !== undefined) {
-                                item[key] = shellRoot.pageParams[key]
-                            }
-                        }
-                    }
+                    shellRoot.applyParams(item)
                 }
             }
         }

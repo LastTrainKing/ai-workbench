@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import threading
+import time
 from collections.abc import Awaitable, Callable
 from typing import Any
 
@@ -100,7 +101,18 @@ class AsyncRunner(QObject):
             self._loop.call_soon_threadsafe(task.cancel)
 
     def shutdown(self) -> None:
+        """Cancel what is still running, then stop the loop.
+
+        `cancel_all` only *schedules* the cancellations. Stopping the loop in the same
+        breath destroyed the tasks without ever delivering them, and asyncio said so once
+        per abandoned call — `Task was destroyed but it is pending!`, on every exit, printed
+        over the last thing the log had to say. Waiting for the in-flight count to reach
+        zero is the same condition the interface uses to mean "nothing is running".
+        """
         self.cancel_all()
+        deadline = time.monotonic() + 2.0
+        while self._inflight and time.monotonic() < deadline:
+            time.sleep(0.02)
         self._loop.call_soon_threadsafe(self._loop.stop)
         self._thread.join(timeout=5)
 

@@ -120,6 +120,33 @@ class ConsoleFormatter(logging.Formatter):
 _configured = False
 
 
+def _safe_stream(stream: object) -> object:
+    """A stream that cannot fail on a character.
+
+    **This is where `UnicodeEncodeError` came from.** On Windows `sys.stdout` is encoded
+    with the console's ANSI code page, and every log line this application writes is in
+    Chinese — so the first record with a non-ASCII character raised out of the handler.
+    A logging handler that raises is worse than one that prints badly: the message is lost
+    and the traceback names a codec instead of the thing that went wrong.
+
+    A packaged GUI build has no console at all, so the stream is `None` and the record goes
+    nowhere; that is the operating system's decision and not something to crash over.
+    """
+    if stream is None:
+        return None
+    reconfigure = getattr(stream, "reconfigure", None)
+    if reconfigure is not None:
+        try:
+            # `backslashreplace` rather than `replace`: a character the code page cannot
+            # carry is written as an escape, which is readable and reversible, instead of
+            # a row of question marks that hides which character it was.
+            reconfigure(encoding="utf-8", errors="backslashreplace")
+            return stream
+        except (ValueError, OSError):
+            pass
+    return stream
+
+
 def configure_logging(service: str = "api") -> None:
     """Idempotently configure the root logger."""
     global _configured
@@ -127,7 +154,7 @@ def configure_logging(service: str = "api") -> None:
         return
 
     level = getattr(logging, settings.log_level.upper(), logging.INFO)
-    handler = logging.StreamHandler(sys.stdout)
+    handler = logging.StreamHandler(_safe_stream(sys.stdout))
     handler.setFormatter(
         JsonFormatter(service) if settings.log_json else ConsoleFormatter(service)
     )

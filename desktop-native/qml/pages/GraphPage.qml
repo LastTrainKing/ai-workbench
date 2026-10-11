@@ -276,7 +276,7 @@ Flickable {
                 Layout.preferredHeight: 520
                 visible: page.nodes.length > 0
                 radius: 10
-                color: Theme.bgElevated
+                color: Theme.surface
                 border.width: 1
                 border.color: Theme.border
                 clip: true

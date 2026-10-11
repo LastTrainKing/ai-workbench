@@ -109,7 +109,7 @@ Flickable {
                     Accessible.name: "搜索词"
                     background: Rectangle {
                         radius: 8
-                        color: Theme.bgElevated
+                        color: Theme.surface
                         border.width: queryField.activeFocus ? 2 : 1
                         border.color: queryField.activeFocus ? Theme.borderFocus : Theme.border
                     }
@@ -210,7 +210,7 @@ Flickable {
                     Layout.fillWidth: true
                     implicitHeight: hitColumn.implicitHeight + 20
                     radius: 8
-                    color: Theme.bgElevated
+                    color: Theme.surface
                     border.width: 1
                     border.color: Theme.border
 

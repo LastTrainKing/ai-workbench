@@ -15,6 +15,10 @@ import "../theme.js" as Theme
 // out. `loading`, `empty` and `error` are different things and a person can act on the
 // difference.
 //
+// The error state leads with a sentence in the user's terms (`errorText`) and what to do
+// about it (`errorHint`). The exception that caused it is still here, behind
+// 「技术详情」 — hidden from the screen, not from the record.
+//
 // `ready` draws nothing at all: the panel's own content is the state.
 ColumnLayout {
     id: block
@@ -23,12 +27,18 @@ ColumnLayout {
     property string state: "loading"
     //: Shown for `empty`. Says what would put something here.
     property string emptyText: ""
-    //: Shown for `error`. The message the call actually failed with.
+    //: Shown for `error`. A sentence about the problem, not about the exception.
     property string errorText: ""
+    //: Shown for `error`. What the reader can do. Empty when there is nothing useful.
+    property string errorHint: ""
+    //: The raw exception, one toggle away.
+    property string errorDetail: ""
     //: What is being loaded, so "读取中…" can say what it is waiting for.
     property string busyText: "读取中…"
     property string retryText: "重试"
     signal retry()
+
+    property bool _detailOpen: false
 
     spacing: Theme.space2
     visible: block.state !== "ready"
@@ -76,18 +86,66 @@ ColumnLayout {
                 Layout.topMargin: 5
                 Accessible.ignored: true
             }
-            Text {
+            ColumnLayout {
                 Layout.fillWidth: true
-                text: block.errorText !== "" ? block.errorText : "加载失败"
-                color: Theme.danger
-                font.pixelSize: Theme.fontSmall
-                wrapMode: Text.WordWrap
+                spacing: 2
+                Text {
+                    Layout.fillWidth: true
+                    text: block.errorText !== "" ? block.errorText : "加载失败"
+                    color: Theme.danger
+                    font.pixelSize: Theme.fontSmall
+                    font.bold: true
+                    wrapMode: Text.WordWrap
+                }
+                Text {
+                    Layout.fillWidth: true
+                    visible: block.errorHint !== ""
+                    text: block.errorHint
+                    color: Theme.textMuted
+                    font.pixelSize: Theme.fontSmall
+                    wrapMode: Text.WordWrap
+                }
             }
         }
-        UI.Button {
-            // A real retry, wired to the caller's own reload — not a hint to press F5.
-            text: block.retryText
-            onClicked: block.retry()
+
+        RowLayout {
+            Layout.fillWidth: true
+            spacing: Theme.space2
+
+            UI.Button {
+                // A real retry, wired to the caller's own reload — not a hint to press F5.
+                text: block.retryText
+                onClicked: block.retry()
+            }
+            UI.Button {
+                visible: block.errorDetail !== ""
+                variant: "ghost"
+                text: block._detailOpen ? "收起技术详情" : "技术详情"
+                onClicked: block._detailOpen = !block._detailOpen
+                Accessible.name: "显示或隐藏原始错误信息"
+            }
+        }
+
+        // Long, and it is a log line, not a sentence: monospace, wrapped anywhere, and
+        // capped so a stack trace cannot push the rest of the page off the screen.
+        Flickable {
+            Layout.fillWidth: true
+            visible: block._detailOpen && block.errorDetail !== ""
+            implicitHeight: Math.min(detailText.implicitHeight, 160)
+            contentHeight: detailText.implicitHeight
+            clip: true
+            boundsBehavior: Flickable.StopAtBounds
+
+            Text {
+                id: detailText
+                width: parent.width
+                text: block.errorDetail
+                color: Theme.textFaint
+                font.pixelSize: Theme.fontTiny
+                font.family: "Consolas"
+                wrapMode: Text.WrapAnywhere
+                textFormat: Text.PlainText
+            }
         }
     }
 }

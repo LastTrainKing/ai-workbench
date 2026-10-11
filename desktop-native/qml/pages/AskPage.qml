@@ -78,7 +78,7 @@ Flickable {
 
         RowLayout {
             Layout.fillWidth: true
-            Button { text: "← 返回"; onClicked: page.back() }
+            Button { text: "← 返回"; variant: "ghost"; onClicked: page.back() }
             Text {
                 text: "提问 · " + page.kbName
                 color: Theme.text
@@ -106,13 +106,14 @@ Flickable {
                     Keys.onReturnPressed: page.ask(false)
                     background: Rectangle {
                         radius: 8
-                        color: Theme.bgElevated
+                        color: Theme.surface
                         border.width: questionField.activeFocus ? 2 : 1
                         border.color: questionField.activeFocus ? Theme.borderFocus : Theme.border
                     }
                 }
                 Button {
                     text: page.busy && !page.streaming ? "思考中…" : "提问"
+                    variant: "primary"
                     enabled: !page.busy
                     onClicked: page.ask(false)
                 }

@@ -107,7 +107,7 @@ Flickable {
                     Keys.onReturnPressed: page.create()
                     background: Rectangle {
                         radius: 8
-                        color: Theme.bgElevated
+                        color: Theme.surface
                         border.width: nameField.activeFocus ? 2 : 1
                         border.color: nameField.activeFocus ? Theme.borderFocus : Theme.border
                     }

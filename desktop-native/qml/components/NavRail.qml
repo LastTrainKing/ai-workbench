@@ -69,12 +69,18 @@ Rectangle {
     }
 
     Flickable {
-        anchors.fill: parent
+        // **Ends above the status row, not behind it.** Padding the content was the first
+        // attempt and it only moved the problem: at 800px the list is still taller than the
+        // space, so the last entries scrolled under the row that says whether anything is
+        // running — "设置" sat on top of "空闲". The list gets the space that is left and
+        // scrolls inside it.
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.top: parent.top
+        anchors.bottom: railStatus.top
+        anchors.bottomMargin: Theme.space2
         contentWidth: width
-        // The extra 40 is the status row pinned at the bottom. Without it the last entries
-        // scroll *under* it: at the 640px minimum window height the rail is taller than the
-        // space, and "图谱" ended up behind the word "空闲".
-        contentHeight: railColumn.implicitHeight + Theme.space4 * 2 + 40
+        contentHeight: railColumn.implicitHeight + Theme.space4 * 2
         clip: true
         boundsBehavior: Flickable.StopAtBounds
 
@@ -310,6 +316,7 @@ Rectangle {
 
     // Honest state, not a spinner that means nothing: how many calls are outstanding.
     RowLayout {
+        id: railStatus
         anchors.left: parent.left
         anchors.right: parent.right
         anchors.bottom: parent.bottom

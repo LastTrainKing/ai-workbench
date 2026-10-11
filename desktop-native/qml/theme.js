@@ -11,13 +11,26 @@
 // files is twenty themes.
 
 // ---------------------------------------------------------------- surfaces --
-var bg          = "#070a11"   // the window ground
-var bgElevated  = "#0b111d"   // the rail, sunken strips
-var bgCard      = "#111a29"   // a raised panel
-var bgCardHover = "#16202f"
-var bgInput     = "#0a1220"   // fields, which read as recessed
-var border      = "#1d2839"   // hairlines only
-var divider     = "#18222f"   // separators inside a panel
+//
+// **The rule that decides the whole look.** The page is one continuous dark ground.
+// Content sits directly on it. A fill is used only where something is genuinely a
+// separate surface — an input you can type in, a block you can act on, a row under the
+// pointer, a panel that has to be read apart from its neighbours.
+//
+// What this replaced: every section of every page was its own blue-black rectangle with a
+// 1px outline, and those rectangles nested. Twenty boxes on a screen is a management
+// console; the difference between `bg` and `surface` is now small enough that a section
+// does not need a fill to be legible, and large enough that a real surface still reads as
+// one.
+var bg          = "#080b12"   // the window ground — the only background most pages need
+var bgElevated  = "#0a0e17"   // the rail: a shade, not a border
+var surface     = "#101823"   // a raised block (hero, expanded detail)
+var surfaceHover= "#151f2c"
+var bgCard      = "#101823"   // alias kept for the pages that predate `surface`
+var bgCardHover = "#151f2c"
+var bgInput     = "#0c1119"   // fields, recessed *below* the ground
+var border      = "#1b2432"   // hairlines only
+var divider     = "#151d29"   // separators, one step above the ground
 var borderFocus = "#38bdf8"
 
 // ------------------------------------------------------------------ brand --

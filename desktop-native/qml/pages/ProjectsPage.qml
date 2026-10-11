@@ -126,7 +126,7 @@ Flickable {
 
                     background: Rectangle {
                         radius: 8
-                        color: Theme.bgElevated
+                        color: Theme.surface
                         border.width: nameField.activeFocus ? 2 : 1
                         border.color: nameField.activeFocus ? Theme.borderFocus : Theme.border
                     }
@@ -149,7 +149,7 @@ Flickable {
 
                     background: Rectangle {
                         radius: 8
-                        color: Theme.bgElevated
+                        color: Theme.surface
                         border.width: descriptionField.activeFocus ? 2 : 1
                         border.color: descriptionField.activeFocus ? Theme.borderFocus : Theme.border
                     }
