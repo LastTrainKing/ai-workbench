@@ -160,6 +160,7 @@ Flickable {
                     Item { Layout.fillWidth: true }
                     Button {
                         id: createButton
+                        variant: "primary"
                         objectName: "project-create"
                         readonly property string a11yName: "创建项目"
                         readonly property string a11yRole: "Button"

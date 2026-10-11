@@ -146,6 +146,7 @@ Flickable {
             Button {
                 objectName: "chat-clear"
                 text: "清空"
+                variant: "ghost"
                 enabled: page.history.length > 0 && !page.busy
                 onClicked: page.clearAll()
                 Accessible.name: "清空对话"
@@ -321,6 +322,7 @@ Flickable {
                 Button {
                     objectName: "chat-send"
                     text: page.busy ? "等待中…" : "发送"
+                    variant: "primary"
                     enabled: !page.busy && page.draft.trim() !== ""
                     onClicked: page.send()
                     Accessible.name: "发送消息"

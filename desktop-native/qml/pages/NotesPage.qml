@@ -153,6 +153,7 @@ Flickable {
                     Item { Layout.fillWidth: true }
                     Button {
                         id: saveButton
+                        variant: "primary"
                         objectName: "note-save"
                         readonly property string a11yName: "保存笔记"
                         readonly property string a11yRole: "Button"

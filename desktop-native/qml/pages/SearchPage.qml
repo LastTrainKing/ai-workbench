@@ -120,6 +120,7 @@ Flickable {
                 Button {
                     objectName: "search-run"
                     text: page.busy ? "搜索中…" : "搜索"
+                    variant: "primary"
                     enabled: !page.busy
                     onClicked: page.run()
                     Accessible.name: "开始搜索"

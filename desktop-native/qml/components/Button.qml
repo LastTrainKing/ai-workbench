@@ -37,9 +37,16 @@ Basic.Button {
     readonly property bool _isPrimary: variant === "primary"
     readonly property bool _isGhost: variant === "ghost"
     readonly property bool _isDanger: variant === "danger"
+    //: A checkable button that is on. **This was missing**, so the Planner's status filters
+    //: were six identical filled buttons and nothing said which one was filtering the list —
+    //: a control with a state the user cannot see is a control that does not work.
+    readonly property bool _isOn: control.checkable && control.checked
 
     readonly property color _fill: {
         if (!control.enabled) return control._isGhost ? "transparent" : Theme.bgCard
+        if (control._isOn) return control.hovered ? Qt.rgba(Theme.accent.r, Theme.accent.g,
+                                                            Theme.accent.b, 0.24)
+                                                  : Theme.accentSoft
         if (control._isPrimary) {
             return control.down ? Theme.accentDim
                  : control.hovered ? Qt.lighter(Theme.accent, 1.12)
@@ -60,6 +67,7 @@ Basic.Button {
 
     readonly property color _ink: {
         if (!control.enabled) return Theme.textFaint
+        if (control._isOn) return Theme.accent
         if (control._isPrimary) return "#04222a"
         if (control._isDanger) return Theme.danger
         return control._isGhost ? Theme.textMuted : Theme.text
@@ -70,9 +78,10 @@ Basic.Button {
         color: control._fill
         // A border only where it separates: never on the filled primary, and only faintly
         // on a secondary so it reads as a surface rather than as an outline.
-        border.width: control._isPrimary || control._isGhost ? 0 : 1
-        border.color: control._isDanger ? Qt.rgba(Theme.danger.r, Theme.danger.g, Theme.danger.b, 0.45)
-                                        : Theme.border
+        border.width: control._isOn ? 1 : (control._isPrimary || control._isGhost ? 0 : 1)
+        border.color: control._isOn ? Theme.accent
+                    : control._isDanger ? Qt.rgba(Theme.danger.r, Theme.danger.g, Theme.danger.b, 0.45)
+                    : Theme.border
         Behavior on color { ColorAnimation { duration: 90 } }
     }
 

@@ -86,7 +86,7 @@ Flickable {
                 color: Theme.textMuted
                 font.pixelSize: 12
             }
-            Button { text: "刷新"; onClicked: page.load() }
+            Button { text: "刷新"; variant: "ghost"; onClicked: page.load() }
         }
 
         Card {
@@ -114,6 +114,7 @@ Flickable {
                 }
                 Button {
                     text: page.busy ? "处理中…" : "创建"
+                    variant: "primary"
                     enabled: !page.busy
                     onClicked: page.create()
                 }

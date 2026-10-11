@@ -126,6 +126,7 @@ Flickable {
             Button {
                 objectName: "planner-reload"
                 text: "刷新"
+                    variant: "ghost"
                 onClicked: page.load()
                 Accessible.name: "刷新任务"
             }
@@ -254,6 +255,7 @@ Flickable {
                             Button {
                                 objectName: "task-start-" + modelData.id
                                 text: "开始"
+                    variant: "primary"
                                 visible: modelData.status === "TODO" || modelData.status === "BLOCKED"
                                 enabled: !page.busy
                                 onClicked: page.setStatus(modelData.id, "IN_PROGRESS")
@@ -286,6 +288,7 @@ Flickable {
                             Button {
                                 objectName: "task-delete-" + modelData.id
                                 text: "删除"
+                    variant: "danger"
                                 enabled: !page.busy
                                 onClicked: page.removeTask(modelData.id, modelData.title)
                                 Accessible.name: "删除任务 " + modelData.title

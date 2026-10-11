@@ -123,6 +123,7 @@ Flickable {
 
                 Button {
                     text: page.busy ? "处理中…" : "创建"
+                    variant: "primary"
                     enabled: !page.busy
                     onClicked: page.create()
                 }

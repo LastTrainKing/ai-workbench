@@ -88,7 +88,7 @@ Flickable {
 
         RowLayout {
             Layout.fillWidth: true
-            Button { text: "← 返回"; onClicked: page.back() }
+            Button { text: "← 返回"; variant: "ghost"; onClicked: page.back() }
             Text {
                 text: page.kbName === "" ? "资料" : page.kbName
                 color: Theme.text
@@ -99,6 +99,7 @@ Flickable {
             }
             Button {
                 text: "提问"
+                    variant: "primary"
                 enabled: page.items.length > 0
                 onClicked: page.ask(page.kbId, page.kbName)
             }

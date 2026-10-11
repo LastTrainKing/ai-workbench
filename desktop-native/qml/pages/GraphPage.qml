@@ -229,12 +229,14 @@ Flickable {
                 Button {
                     objectName: "graph-reload"
                     text: "重新读取"
+                    variant: "primary"
                     onClicked: page.load()
                     Accessible.name: "重新读取图谱"
                 }
                 Button {
                     objectName: "graph-relayout"
                     text: "重新布局"
+                    variant: "ghost"
                     enabled: page.nodes.length > 0
                     onClicked: {
                         page._done = 0
