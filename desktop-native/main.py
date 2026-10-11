@@ -333,9 +333,17 @@ def main(argv: list[str] | None = None) -> int:
     engine = build_engine(bridge)
     window = engine.rootObjects()[0]
 
+    # Both headless paths stop what they started. The GUI gets this from `aboutToQuit`; a
+    # run that never shows a window has no such moment, and without it `--screenshot` starts
+    # PostgreSQL, Redis and Qdrant and walks away. The next launch then reuses that orphan
+    # stack, correctly declines to stop it — "this process did not start it" — and three
+    # engines are still holding their ports after the window closes.
     if args.self_check:
         assert runtime_state is not None and readiness is not None
-        return _run_self_check(window, bridge, runtime_state, readiness, font, args.report)
+        try:
+            return _run_self_check(window, bridge, runtime_state, readiness, font, args.report)
+        finally:
+            bridge.stopEnvironment()
 
     if args.screenshot:
         assert runtime_state is not None and readiness is not None
@@ -343,7 +351,10 @@ def main(argv: list[str] | None = None) -> int:
         # otherwise every page's first call waits for a startup that already happened and
         # the screenshot is of empty panels.
         bridge.record_startup(runtime_state.as_dict(), readiness)
-        return _screenshot(app, window, Path(args.screenshot), bridge)
+        try:
+            return _screenshot(app, window, Path(args.screenshot), bridge)
+        finally:
+            bridge.stopEnvironment()
 
     for line in runtime.summarise(runtime_state) if runtime_state else []:
         _say(line)
