@@ -76,7 +76,7 @@ def _record_fatal(stage: str) -> Path | None:
 try:
     # `resources` imports nothing from the backend, so this is safe at module level. It is
     # also the only thing here that may run before the backend is on `sys.path`.
-    from awbnative import resources
+    from awbnative import resources, window_frame
 
     #: Resolved once. From a checkout this points at `desktop-native/`; frozen, at the bundle.
     PATHS = resources.configure()
@@ -282,14 +282,24 @@ def main(argv: list[str] | None = None) -> int:
         "--report", default="", help="write the self-check result as JSON here"
     )
     parser.add_argument(
+        "--windowed",
+        action="store_true",
+        help="with --self-check, use a real window so the DWM frame can be verified",
+    )
+    parser.add_argument(
         "--stop-services",
         action="store_true",
         help="stop the local services this copy started, then exit",
     )
     args = parser.parse_args(argv)
 
-    if args.self_check or args.screenshot:
+    if (args.self_check or args.screenshot) and not args.windowed:
         # A display is not needed to prove the QML loads and the bindings resolve.
+        #
+        # `--windowed` opts out, because two of the things worth checking are properties of a
+        # real window: the DWM frame and the taskbar icon. On the offscreen platform there is
+        # no window handle, so those calls have nothing to talk to and the checks would be
+        # reporting on the measuring code instead of on the product.
         os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 
@@ -313,6 +323,20 @@ def main(argv: list[str] | None = None) -> int:
     app = QGuiApplication(sys.argv[:1] + ["ai-workbench-native"])
     app.setApplicationName("AI Workbench")
     app.setApplicationVersion(resources.version())
+
+    # **The window had no icon at all.** The executable's resource has carried
+    # `assets/ai-workbench.ico` for a while and Explorer, the shortcuts and the installer all
+    # show it, but the window showed the Windows placeholder — because Qt sends the window
+    # icon from `QGuiApplication::windowIcon()`, nothing called `setWindowIcon`, and an
+    # empty icon is not the same as no icon: Windows draws its own default instead of
+    # falling back to the executable's.
+    #
+    # Set here, before `build_engine`, because the icon is taken when the window is created.
+    icon = resources.icon_path()
+    if icon is not None:
+        from PySide6.QtGui import QIcon
+
+        app.setWindowIcon(QIcon(str(icon)))
     # Before the engine exists, so nothing is missed.
     _watch_qml_messages()
     font = configure_font(app)
@@ -332,6 +356,13 @@ def main(argv: list[str] | None = None) -> int:
 
     engine = build_engine(bridge)
     window = engine.rootObjects()[0]
+
+    # The system frame, in the application's colours. Not a custom title bar: the native one
+    # keeps dragging, snapping, double-click-to-maximise, the system menu, per-monitor DPI
+    # and the resize borders, and this only changes how it is painted.
+    # The return value is not kept: what matters is what the frame ends up set to, and
+    # `_self_check` reads that back from the window rather than trusting this call.
+    window_frame.apply_dark_frame(window)
 
     # Both headless paths stop what they started. The GUI gets this from `aboutToQuit`; a
     # run that never shows a window has no such moment, and without it `--screenshot` starts
@@ -467,6 +498,39 @@ def _self_check(window: object, bridge: ServiceBridge) -> list[tuple[str, bool, 
     title = str(window.property("title") or "")  # type: ignore[attr-defined]
     checks.append(("窗口有标题", bool(title), title))
 
+    # Read back from the window, not from the call that was supposed to set it. The icon was
+    # missing for the whole life of this product while the code that should have set it was
+    # one line away from being written.
+    window_icon = QGuiApplication.windowIcon()
+    sizes = window_icon.availableSizes()
+    checks.append(
+        (
+            "窗口有应用图标",
+            not window_icon.isNull(),
+            "，" .join(f"{size.width()}x{size.height()}" for size in sizes[:4])
+            if sizes
+            else "图标为空",
+        )
+    )
+
+    # **Only when there is a real window.** On the offscreen platform there is no handle for
+    # DWM to act on, so the item is left out rather than reported as a pass — a check that
+    # cannot fail is a check that says nothing.
+    #
+    # `dark_mode` is read back because DWM will tell us. The caption colour is *write-only*
+    # on this build: `DwmGetWindowAttribute(DWMWA_CAPTION_COLOR)` returns E_INVALIDARG even
+    # after the set succeeds, so the colour is verified by looking at the window, not here.
+    if QGuiApplication.platformName() != "offscreen":
+        frame = window_frame.read_frame(window)
+        dark = frame.get("dark_mode")
+        checks.append(
+            (
+                "系统标题栏是深色",
+                dark == 1,
+                f"dark_mode={dark}（1=深色），标题栏色已设为 {window_frame.CAPTION}",
+            )
+        )
+
     width = int(window.property("width") or 0)  # type: ignore[attr-defined]
     height = int(window.property("height") or 0)  # type: ignore[attr-defined]
     checks.append(("窗口有尺寸", width > 0 and height > 0, f"{width}x{height}"))
@@ -484,6 +548,7 @@ def _self_check(window: object, bridge: ServiceBridge) -> list[tuple[str, bool, 
         "loadProjectDetail",
         "loadAiConfig",
         "saveAiConfig",
+        "testAiConnection",
         "createTask",
         "completeTask",
         "startAgentRun",

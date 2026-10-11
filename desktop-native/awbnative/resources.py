@@ -312,6 +312,29 @@ def configure(*, create: bool = True) -> dict[str, object]:
     }
 
 
+def icon_path() -> Path | None:
+    """The application's icon, wherever this copy keeps it.
+
+    **The window had no icon, and this is why.** The executable's own resource has carried
+    `assets/ai-workbench.ico` for a while — Explorer, the shortcuts and the installer all
+    show it — but the *window* showed the Windows placeholder, because Qt sets the window
+    icon from `QGuiApplication::windowIcon()` and nothing ever called `setWindowIcon`. An
+    empty icon is sent to the window manager as an empty icon, and Windows draws its own
+    default rather than falling back to the executable's.
+
+    Frozen, the icon is beside the bundled files (`_internal/assets`); from a checkout it is
+    at the repository root, one level above `desktop-native`.
+    """
+    candidates = (
+        bundle_root() / "assets" / "ai-workbench.ico",
+        bundle_root().parent / "assets" / "ai-workbench.ico",
+    )
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+    return None
+
+
 __all__ = [
     "DATA_DIR_ENV",
     "DATA_DIR_MARKER",
@@ -326,6 +349,7 @@ __all__ = [
     "data_dir",
     "data_dir_marker",
     "default_data_dir",
+    "icon_path",
     "is_frozen",
     "qml_dir",
     "scripts_dir",

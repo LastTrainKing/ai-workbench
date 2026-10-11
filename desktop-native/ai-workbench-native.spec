@@ -47,6 +47,12 @@ datas: list[tuple[str, str]] = [
     (str(BACKEND / "alembic.ini"), "."),
     (str(BACKEND / "alembic"), "alembic"),
     (str(DESKTOP / "qml"), "qml"),
+    # The application icon, so the *window* can show it. The `icon=` argument below embeds
+    # it in the executable, which is what Explorer, the shortcuts and the installer use —
+    # but the window icon comes from `QGuiApplication::windowIcon()` at runtime, and that
+    # needs the file. Without this line the executable's icon is right and the window's is
+    # the Windows placeholder, which is exactly what shipped.
+    (str(REPO / "assets" / "ai-workbench.ico"), "assets"),
 ]
 
 # --------------------------------------------------------------------------- #
