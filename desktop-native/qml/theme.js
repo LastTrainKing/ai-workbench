@@ -78,6 +78,14 @@ var fontTiny    = 11
 var controlHeight = 34
 var controlHeightLarge = 44
 
+// -------------------------------------------------------------------- form --
+//: The label column, fixed. Content-sized columns make the gap between a label and its
+//: field depend on which label happens to be longest — on one form that was 43px for
+//: 模型 and 67px for Base URL, which is what "looks like a form somebody assembled by
+//: hand" means in pixels.
+var formLabelWidth = 96
+var formGap = 12
+
 // A run's tone. Kept next to the colours so the two cannot drift: a status that is
 // "warn" in the API and green in the UI is the kind of mismatch this file exists to stop.
 function runTone(status) {

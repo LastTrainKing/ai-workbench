@@ -412,21 +412,47 @@ class ServiceBridge(QObject):
             owner = await self._owner()
             cfg = resolve(owner)
             # `safe()` is the masked form: the key itself never crosses into QML.
-            return {"effective": cfg.safe(), "editable_fields": list(_overridable())}
+            #
+            # `status` travels with it so the screen cannot derive a state of its own from
+            # a different layer. It did: the fields came from this account's file and the
+            # 离线模式 row came from `settings.is_offline_ai`, which reads the process
+            # environment when no owner is bound — so the page showed a key's mask and
+            # "未配置 Key" at the same time.
+            from app.ai.runtime_config import ai_status
+
+            return {
+                "effective": cfg.safe(),
+                "status": ai_status(owner),
+                "editable_fields": list(_overridable()),
+            }
 
         self._submit(request_id, work)
 
     @Slot(str)
     def loadRuntimeInfo(self, request_id: str) -> None:
         async def work() -> dict[str, Any]:
+            from app.ai.runtime_config import ai_status, resolve
             from app.core.config import RUNTIME_ROOT, settings
+
+            # **`await self._owner()` first, and it is not a formality.** `resolve()` reads
+            # the owner from a contextvar that the HTTP application sets in its auth
+            # dependency and that this bridge sets here. A slot that skips it resolves
+            # against the *installation* layer, where a key saved for an account does not
+            # exist — so this page reported `离线模式 是（未配置 Key）` and `APP_ENV dev`
+            # while the field above it displayed the account's key.
+            owner = await self._owner()
+            cfg = resolve(owner)
+            status = ai_status(owner)
 
             return {
                 "version": settings.app_version,
                 "app_env": settings.app_env,
                 "runtime_root": str(RUNTIME_ROOT),
-                "ai_provider": settings.ai_provider,
-                "offline": settings.is_offline_ai,
+                # The provider that will actually answer, not the one `.env` names.
+                "ai_provider": cfg.provider,
+                "ai_model": cfg.model,
+                "offline": status["state"] == "offline",
+                "status_state": status["state"],
             }
 
         self._submit(request_id, work)
@@ -794,6 +820,39 @@ class ServiceBridge(QObject):
             return {"effective": resolve(owner).safe()}
 
         self._submit(request_id, work)
+
+    @Slot(str)
+    def testAiConnection(self, request_id: str) -> None:
+        """Send one real request to the configured endpoint and record what came back.
+
+        Only ever called because somebody pressed 测试连接 — a status that tests itself
+        costs money every time a page is opened. `test_connection` reuses the same
+        `build_llm_provider()` the chat and the agent use, so a green light here is
+        evidence about the path those take, not about a separate probe.
+
+        The outcome is written next to the configuration it tested, with the provider,
+        model and endpoint it was made against: change any of the three and the result no
+        longer describes what is configured, and the state goes back to untested.
+        """
+
+        async def work() -> dict[str, Any]:
+            from app.ai.providers.factory import test_connection
+            from app.ai.runtime_config import ai_status, record_check, resolve
+
+            owner = await self._owner()
+            cfg = resolve(owner)
+            status = ai_status(owner)
+            if status["state"] in ("not_configured", "offline"):
+                # Nothing to test, and calling anyway would turn "you have not filled
+                # this in" into a network error from a half-built request.
+                return {"result": None, "status": status}
+
+            result = await test_connection()
+            result["base_url"] = cfg.base_url
+            record_check(owner, result)
+            return {"result": result, "status": ai_status(owner)}
+
+        self._submit(request_id, work, timeout=120.0)
 
     @Slot(str)
     def clearAiConfig(self, request_id: str) -> None:

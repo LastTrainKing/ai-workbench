@@ -385,6 +385,133 @@ class ResolvedAIConfig:
         }
 
 
+
+# --------------------------------------------------------------------------- #
+# What state is this account's AI configuration in?
+# --------------------------------------------------------------------------- #
+# **Five states, and they are not the same thing.** The settings page used to have two —
+# "configured" and not — and it derived them from `settings.is_offline_ai`, which is a
+# property of the *process*: it reads `.env` when the call has no owner bound. A saved key
+# therefore showed up as "离线模式：是（未配置 Key）" on the same screen that displayed
+# the key's mask, because the two halves of the screen read different layers.
+#
+# The states, in the order a person moves through them:
+#
+#   offline               the effective provider *is* the offline engine. Nothing to
+#                         configure, and nothing is broken.
+#   not_configured        a cloud provider is selected and a required field is missing.
+#   configured_untested   every required field is saved, and no check has been run since
+#                         they were last changed.
+#   connected             a real request to the endpoint succeeded.
+#   failed                a real request was made and was refused. The reason is kept.
+#
+# `configured_untested` is the one that was missing, and its absence is why "saved" had to
+# be displayed as either "connected" (a claim the program cannot support) or
+# "未配置" (false).
+CHECK_KEY = "last_check"
+
+#: The fields a check is only valid for. Change any of them and the result is about a
+#: configuration that is no longer in effect, so the state goes back to untested rather
+#: than showing a green light for something nobody verified.
+CHECK_FINGERPRINT = ("provider", "model", "base_url")
+
+
+def _check_path(owner_id: Any) -> Path:
+    return _path_for(owner_id)
+
+
+def load_check(owner_id: Any) -> dict[str, Any]:
+    """The last recorded connection check for this account, or ``{}``."""
+    data = load(owner_id)
+    check = data.get(CHECK_KEY)
+    return check if isinstance(check, dict) else {}
+
+
+def record_check(owner_id: Any, result: dict[str, Any]) -> dict[str, Any]:
+    """Store the outcome of a connection test next to the configuration it tested.
+
+    Written through the same file and the same lock as `save`, because it is part of the
+    same answer: "is this account's AI working, and on what evidence".
+    """
+    if _coerce_owner(owner_id) is None:
+        raise ValidationError(
+            "A connection check must be recorded per account",
+            code="ai_config_scope_required",
+        )
+    path = _path_for(owner_id)
+    entry = {
+        "at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        "ok": bool(result.get("ok")),
+        "provider": result.get("provider", ""),
+        "model": result.get("model", ""),
+        "base_url": result.get("base_url", ""),
+        "latency_ms": int(result.get("latency_ms") or 0),
+        "error_code": result.get("error_code", ""),
+        "error_message": result.get("error_message", ""),
+    }
+    with _lock:
+        current = _read_file(path)
+        current[CHECK_KEY] = entry
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(current, ensure_ascii=False, indent=2), encoding="utf-8")
+        tmp.replace(path)
+        with contextlib.suppress(OSError):
+            path.chmod(0o600)
+    _cache.pop(path, None)
+    logger.info(
+        "ai_connection_checked",
+        extra={"owner": _coerce_owner(owner_id), "ok": entry["ok"],
+               "provider": entry["provider"], "error_code": entry["error_code"]},
+    )
+    return entry
+
+
+def _missing_required(cfg: ResolvedAIConfig) -> bool:
+    """A field the chosen provider cannot work without.
+
+    A model name is required by every provider, including the local one. A key is required
+    by the two that are reached over the network — and only by those, so an Ollama install
+    is not told it is missing something it never needed.
+    """
+    if not cfg.model.strip():
+        return True
+    return cfg.provider in ("deepseek", "openai_compatible") and not cfg.api_key_set
+
+
+def ai_status(owner_id: Any = None) -> dict[str, Any]:
+    """The configuration's state, with the evidence for it.
+
+    Returns the state and the facts behind it; the interface chooses the words. Nothing
+    here performs a network call — a status that fires a request every time a page is
+    opened is a status that costs money to look at.
+    """
+    cfg = resolve(owner_id)
+    check = load_check(owner_id)
+
+    state: str
+    if cfg.provider == "offline":
+        state = "offline"
+    elif _missing_required(cfg):
+        state = "not_configured"
+    elif check and all(check.get(field) == getattr(cfg, field) for field in CHECK_FINGERPRINT):
+        state = "connected" if check.get("ok") else "failed"
+    else:
+        # A check exists but is about a different provider, model or endpoint. Reporting
+        # it would be reporting on something that is no longer configured.
+        state = "configured_untested"
+
+    return {
+        "state": state,
+        "provider": cfg.provider,
+        "model": cfg.model,
+        "base_url": cfg.base_url,
+        "api_key_set": cfg.api_key_set,
+        "api_key_hint": mask_api_key(cfg.api_key),
+        "check": check,
+        "stale_check": bool(check) and state in ("configured_untested",),
+    }
+
 def mask_api_key(value: str | None) -> str:
     """Return ``sk-****(len=35)`` — enough to identify a key, not to use one."""
     if not value or not value.strip():
