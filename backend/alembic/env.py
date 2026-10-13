@@ -10,13 +10,13 @@ from __future__ import annotations
 import asyncio
 from logging.config import fileConfig
 
-from alembic import context
 from sqlalchemy import pool
 from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
+from alembic import context
 from app.core.config import settings
-from app.models import Base  # noqa: F401 - importing registers every mapper
+from app.models import Base
 
 config = context.config
 config.set_main_option("sqlalchemy.url", settings.database_url)
@@ -27,11 +27,14 @@ if config.config_file_name is not None:
 target_metadata = Base.metadata
 
 
-def include_object(object_, name, type_, reflected, compare_to) -> bool:  # noqa: ANN001
-    """Skip objects Alembic should not manage."""
-    if type_ == "table" and name in {"spatial_ref_sys"}:
-        return False
-    return True
+def include_object(object_, name, type_, reflected, compare_to) -> bool:
+    """Skip objects Alembic should not manage.
+
+    ``spatial_ref_sys`` is PostGIS's own table — it exists in the database without being
+    declared in ``app/models``, so autogenerate would otherwise propose dropping it every
+    time someone runs ``alembic revision --autogenerate``.
+    """
+    return not (type_ == "table" and name in {"spatial_ref_sys"})
 
 
 def run_migrations_offline() -> None:
