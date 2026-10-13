@@ -68,6 +68,21 @@ class RunController:
     current_tool: str = ""
     current_step_id: str = ""
 
+    #: True once `_execute_run` has finished with this run entirely.
+    #:
+    #: **`state` is not this signal, and treating it as one produced two false
+    #: records.** The agent sets a terminal state and then keeps working: it snapshots
+    #: the workspace, generates a final report (another model call), and only then does
+    #: the service persist the outcome and release the employee. Anything that watched
+    #: `state` alone therefore concluded "done" while the run was still writing — the
+    #: build run was stamped COMPLETED and its deliverables were collected from a run
+    #: that had not finished.
+    #:
+    #: Measured on a real run: the build run read COMPLETED, `ai_runs.status` was still
+    #: RUNNING with `finished_at` NULL, and the employee stayed 工作中. The process
+    #: exited before the wrap-up ran, so nothing ever corrected it.
+    settled: bool = False
+
     _resume: asyncio.Event = field(default_factory=asyncio.Event)
     _cancelled: asyncio.Event = field(default_factory=asyncio.Event)
     _seq: int = 0

@@ -165,6 +165,58 @@ async def _reconcile_interrupted_runs() -> None:
         )
 
     await _reconcile_interrupted_agent_runs()
+    await _reconcile_stuck_employees()
+
+
+async def _reconcile_stuck_employees() -> None:
+    """Return employees a restart left mid-task to the roster.
+
+    `working` and `waiting_approval` both mean "a run is in flight right now". Both are
+    driven by in-process objects — the agent task and the confirmation broker — so a
+    restart makes them false. Nothing else ever clears them: the roster would show
+    「工作中」 forever for an employee with nothing running, and a 工作中 employee is the
+    one the UI offers as busy.
+
+    Observed on a real run: the process exited in the window between the agent declaring
+    success and the service releasing the employee, and the roster still said 工作中 the
+    next morning.
+
+    Reset to `idle`, not `failed`. The run row already records what happened to the run,
+    including the case where the outcome is unknown; `failed` here would claim an
+    observation nobody made. What is actually known is that nothing is running now, and
+    `idle` is the word for that.
+    """
+    from sqlalchemy import select
+
+    from app.infrastructure.database import session_scope
+    from app.models.employee import Employee
+
+    stale = ("working", "waiting_approval")
+    try:
+        async with session_scope() as session:
+            rows = list(
+                (
+                    await session.execute(
+                        select(Employee).where(Employee.status.in_(stale))
+                    )
+                ).scalars()
+            )
+            for employee in rows:
+                employee.status = "idle"
+            if rows:
+                await session.commit()
+        if rows:
+            logger.warning(
+                "stuck_employees_released",
+                extra={
+                    "count": len(rows),
+                    "employees": [f"{e.name}:{e.id}" for e in rows[:10]],
+                },
+            )
+    except Exception as exc:
+        logger.error(
+            "stuck_employee_reconcile_failed", extra={"error": f"{type(exc).__name__}: {exc}"}
+        )
     await _reconcile_unknown_tool_calls()
 
 

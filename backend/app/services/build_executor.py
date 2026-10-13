@@ -68,6 +68,12 @@ POLL_SECONDS = 3.0
 #: Ceiling on the wait. Beyond this the run is marked LIMIT_REACHED rather than
 #: polling forever — a stuck run should surface, not hang.
 MAX_WAIT_SECONDS = 30 * 60
+#: After the agent reports a terminal state, how long to keep waiting for it to actually
+#: finish. The gap is real work — the final report is another model call, and the wrap-up
+#: that persists the outcome and releases the employee runs after it — so this is generous
+#: on purpose. It is only here so a wrap-up that never completes does not park the run in
+#: EXECUTING for the full `MAX_WAIT_SECONDS`.
+SETTLE_GRACE_SECONDS = 180.0
 
 #: Strong references to the watcher tasks.
 #:
@@ -184,6 +190,9 @@ async def _watch(
     try:
         deadline = asyncio.get_event_loop().time() + MAX_WAIT_SECONDS
         state = "unknown"
+        #: When the run first claimed a terminal state, and whether it ever finished.
+        terminal_since = 0.0
+        unsettled = False
         while asyncio.get_event_loop().time() < deadline:
             await asyncio.sleep(POLL_SECONDS)
             controller = get_controller(controller_id)
@@ -203,7 +212,23 @@ async def _watch(
             # reconstructed from events.
             await _sync_progress(build_run_id, controller)
 
-            if state.upper() in TERMINAL_STATES:
+            if state.upper() not in TERMINAL_STATES:
+                continue
+            if controller.settled:
+                break
+
+            # **Terminal is not finished.** The agent sets its verdict and then keeps
+            # going: it snapshots the workspace, generates the final report (another
+            # model call), and only afterwards does the service persist the outcome and
+            # release the employee. Breaking here on `state` alone is what stamped a
+            # build run COMPLETED while `ai_runs.status` was still RUNNING and the
+            # employee was still 工作中 — the watcher collected deliverables out of a run
+            # that had not stopped writing.
+            now = asyncio.get_event_loop().time()
+            if terminal_since == 0.0:
+                terminal_since = now
+            elif now - terminal_since > SETTLE_GRACE_SECONDS:
+                unsettled = True
                 break
 
         async with session_scope() as session:
@@ -255,7 +280,22 @@ async def _watch(
             }
             final = mapping.get(state.upper(), BuildStatus.FAILED)
 
-            if final is BuildStatus.COMPLETED and collected == 0:
+            if unsettled and final is BuildStatus.COMPLETED:
+                # The agent declared success and then never stopped. Reporting COMPLETED
+                # here would be the same lie in a new place: the verdict would be read
+                # off a state the run had already moved past. The files, if any, are
+                # real — so say that, and say the run did not close out.
+                final = BuildStatus.WAITING_USER
+                await service.set_status(
+                    run,
+                    final,
+                    summary=(
+                        f"运行报告了 {state}，但收尾没有在 "
+                        f"{int(SETTLE_GRACE_SECONDS)} 秒内完成，所以这次运行没有得出"
+                        "可确认的结论。已经产出的文件不受影响，可以正常查看。"
+                    ),
+                )
+            elif final is BuildStatus.COMPLETED and collected == 0:
                 # Finishing without producing a file is not a completed delivery for a
                 # run that asked for one. Saying so is more useful than reporting success
                 # for a task whose whole point was the artifact.

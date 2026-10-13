@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import uuid
+from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -149,15 +150,37 @@ async def _load_employee(
     return employee
 
 
-async def _set_employee_status(session: AsyncSession, employee: Any, status: str) -> None:
-    """Move the employee to a status and commit it.
+async def _release_employee(
+    owner_id: uuid.UUID, employee_id: uuid.UUID | None, status: str
+) -> None:
+    """Move an employee to a status, on its own session, and never raise.
 
-    Committed on its own so the roster reflects it immediately: the run's own session
-    holds a long transaction, and a status change that only becomes visible when the
-    run finishes is not a status change.
+    Its own session rather than the run's: the run's session is held open for the whole
+    run, and by the time this is called it may be mid-transaction or already poisoned by
+    whatever ended the run. A status write that depends on that session succeeding is a
+    status write that silently does not happen.
+
+    Never raises, because this runs on the cleanup path. A failure here must not mask the
+    run's real outcome — the caller has already decided what the run did.
     """
-    employee.status = status
-    await session.commit()
+    if employee_id is None:
+        return
+    try:
+        async with session_scope() as session:
+            employee = await _load_employee(session, owner_id, employee_id)
+            if employee is None:
+                return
+            employee.status = status
+            await session.commit()
+    except Exception as exc:
+        logger.error(
+            "employee_status_release_failed",
+            extra={
+                "employee_id": str(employee_id),
+                "status": status,
+                "error": f"{type(exc).__name__}: {exc}",
+            },
+        )
 
 
 async def _execute_run(
@@ -172,27 +195,24 @@ async def _execute_run(
     employee_id: uuid.UUID | None = None,
 ) -> None:
     """The background half: run the agent and persist the outcome."""
+    #: What the roster should say once this returns. `failed` until the agent's verdict
+    #: says otherwise, because "we do not know yet" must never read as success.
+    roster_status = "failed"
     try:
         async with session_scope() as session:
             employee = await _load_employee(session, owner_id, employee_id)
             if employee is not None:
                 # Visible while it works. A roster that says 空闲 while the employee is
                 # mid-task is the same class of lie as a progress bar that never moves.
-                await _set_employee_status(session, employee, "working")
+                await _release_employee(owner_id, employee_id, "working")
 
             agent = _build_agent(
                 session, owner_id, controller, deliverable_kind, db_run_id, employee
             )
             result = await agent.run(goal, context=context)
 
-            if employee is not None:
-                # `failed` when the run ended badly, so the roster shows the one state a
-                # user can act on. Anything else goes back to idle.
-                await _set_employee_status(
-                    session,
-                    employee,
-                    "idle" if result.state.value == "COMPLETED" else "failed",
-                )
+            if result.state.value == "COMPLETED":
+                roster_status = "idle"
 
             # Persist the plan, the event stream and the outcome onto the AI run,
             # so the run can be replayed after the process restarts.
@@ -233,6 +253,16 @@ async def _execute_run(
         controller.set_state(RunState.FAILED, f"{type(exc).__name__}: {exc}")
         controller.emit("error", message=f"{type(exc).__name__}: {exc}")
     finally:
+        # **The release lives here, not on the happy path.** Every way out of the `try`
+        # above — including the ones that raise — has to put the employee back, or a
+        # failure mid-run leaves it 工作中 forever with nothing left to correct it.
+        await _release_employee(owner_id, employee_id, roster_status)
+
+        # Set last, so nothing can observe "settled" before the roster is truthful.
+        # `build_executor._watch` waits on this rather than on `state`, which is what
+        # stops it from collecting deliverables out of a run that is still writing.
+        controller.settled = True
+
         _tasks.pop(run_id, None)
 
 
@@ -292,6 +322,18 @@ async def _persist_run(session: AsyncSession, db_run_id: uuid.UUID, result: Any)
     )
     run.response_text = result.answer
     run.error_message = result.error
+
+    # **The finish time, which nothing was writing.** `status` said SUCCEEDED and
+    # `finished_at` stayed NULL on every autonomous run — measured on a real one. A run
+    # record that claims to have succeeded but has no end time cannot be shown as a
+    # duration, cannot be ordered against its siblings, and cannot be told apart from a
+    # run that is still going when the process dies. `RunResult` carries the wall clock
+    # it measured; this is where it belongs.
+    now = datetime.now(UTC)
+    run.finished_at = now
+    if run.started_at is not None:
+        run.latency_ms = int((now - run.started_at).total_seconds() * 1000)
+
     if run.agent_run is not None:
         run.agent_run.steps_used = result.steps_used
         run.agent_run.scratchpad = {
