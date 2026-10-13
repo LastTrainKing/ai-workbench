@@ -156,6 +156,16 @@ Flickable {
         return parts.length ? "比你的设置更窄：" + parts.join("、") : "权限与你的设置一致"
     }
 
+    // --------------------------------------------------------------- 岗位合同 --
+    //
+    // 任务书 §八。**这些字段一直都在，只是没人显示。** 岗位模板里有 17 个字段，员工行
+    // 持久化了 11 个，`EmployeeOut` 把它们全都发给了界面 —— 而界面此前只渲染了 6 个。
+    //
+    // 取数规则在 `theme.js`（`contractFor` / `contractField` / `contractLines`），
+    // 因为员工页和合同组件要用同一套；渲染在 `components/EmployeeContract.qml`。
+    // 这里只留"哪一份合同是展开的"这一个状态。
+    property string contractOpen: ""
+
     property bool _loaded: false
     function _firstLoad() {
         if (_loaded || !shell) return
@@ -305,10 +315,11 @@ Flickable {
 
                             Text {
                                 anchors.centerIn: parent
-                                text: (modelData.name ?? "?").substring(0, 1)
-                                color: Theme.accent
+                                // 岗位的记号，不是名字的首字。首字把"小文"和"小武"画成
+                                // 同一个圈，而这个位置要回答的是"这是干什么的"。
+                                text: Theme.roleGlyph(modelData.role_id)
                                 font.pixelSize: 15
-                                font.bold: true
+                                Accessible.name: Theme.roleName(Theme.contractFor(modelData, page.templates), modelData.role_id)
                             }
                         }
 
@@ -335,7 +346,8 @@ Flickable {
                                 }
                             }
                             Text {
-                                text: (modelData.role_id ?? "") + " · 第 " + modelData.version
+                                text: Theme.roleName(Theme.contractFor(modelData, page.templates), modelData.role_id)
+                                      + " · 第 " + modelData.version
                                       + " 版 · " + (modelData.skills ?? []).length + " 个工具"
                                 color: Theme.textFaint
                                 font.pixelSize: 11
@@ -405,6 +417,40 @@ Flickable {
                         font.pixelSize: 11
                         wrapMode: Text.WordWrap
                         Layout.fillWidth: true
+                    }
+
+                    // -------------------------------------------------- 岗位合同 --
+                    //
+                    // 任务书 §八要的那几项（岗位 / 使命 / 能力 / 工作方式 / 限制）全部在
+                    // 合同里，而合同此前一个字都没显示。默认收起：一屏 12 节会把名册
+                    // 撑成文档，而名册的用途是"挑一个员工"，不是"读它的合同"。
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: Theme.space2
+
+                        Text {
+                            Layout.fillWidth: true
+                            text: "岗位合同：使命、职责、工作方式、限制、验收标准"
+                            color: Theme.textFaint
+                            font.pixelSize: Theme.fontTiny
+                            elide: Text.ElideRight
+                        }
+                        Button {
+                            objectName: "employee-contract-" + modelData.id
+                            text: page.contractOpen === modelData.id ? "收起合同" : "查看合同"
+                            variant: "ghost"
+                            Accessible.name: (page.contractOpen === modelData.id ? "收起" : "查看")
+                                             + (modelData.name ?? "") + "的岗位合同"
+                            onClicked: page.contractOpen =
+                                       page.contractOpen === modelData.id ? "" : modelData.id
+                        }
+                    }
+
+                    EmployeeContract {
+                        Layout.fillWidth: true
+                        visible: page.contractOpen === modelData.id
+                        employee: modelData
+                        templates: page.templates
                     }
 
                     // -------------------------------------------------- 编辑 --

@@ -207,7 +207,7 @@ def configure_font(app: QGuiApplication) -> str:
       for headless verification has no font database at all — it reports zero families — so
       a screenshot taken there is a wall of boxes unless the font comes from disk.
     """
-    from PySide6.QtGui import QFont, QFontDatabase
+    from PySide6.QtGui import QFontDatabase
 
     preferred = (
         "Microsoft YaHei UI",
@@ -220,7 +220,7 @@ def configure_font(app: QGuiApplication) -> str:
     families = set(QFontDatabase.families())
     for name in preferred:
         if name in families:
-            app.setFont(QFont(name, 10))
+            _apply_interface_font(app, name)
             return name
 
     bundled = (
@@ -242,10 +242,72 @@ def configure_font(app: QGuiApplication) -> str:
             continue
         loaded = QFontDatabase.applicationFontFamilies(font_id)
         if loaded:
-            app.setFont(QFont(loaded[0], 10))
+            _apply_interface_font(app, loaded[0])
             return f"{loaded[0]} (loaded from {candidate.name})"
 
     return app.font().family()
+
+
+#: Families tried *after* the text face, per character.
+#:
+#: Qt's font engine walks the list when a glyph is missing from the first entry, which is
+#: the only way to express "use this face, and for anything it does not have, use that one".
+#: A single family name cannot say that.
+#:
+#: **This is the same defect `configure_font` exists to prevent, one character class over.**
+#: Microsoft YaHei has no pictograms, so a role mark came out as a tofu box: the layout was
+#: right and nothing was readable. Rather than avoid emoji in the interface, give the font
+#: somewhere to find them — this fixes every pictogram in the product, not the one that was
+#: noticed.
+EMOJI_FALLBACKS: tuple[str, ...] = (
+    "Segoe UI Emoji",  # Windows
+    "Apple Color Emoji",  # macOS
+    "Noto Color Emoji",  # Linux
+    "Noto Emoji",
+    "Segoe UI Symbol",
+)
+
+#: The same faces, by file.
+#:
+#: Loaded from disk for the same reason the CJK faces are: the `offscreen` platform used by
+#: headless verification reports **zero** font families, so a lookup by name finds nothing
+#: and a screenshot shows boxes on a machine that has the font. A packaged build should not
+#: depend on the host's language packs either.
+EMOJI_FONT_FILES: tuple[str, ...] = (
+    "C:/Windows/Fonts/seguiemj.ttf",
+    "/usr/share/fonts/truetype/noto/NotoColorEmoji.ttf",
+    "/System/Library/Fonts/Apple Color Emoji.ttc",
+)
+
+
+def _emoji_families() -> list[str]:
+    """Emoji families this machine can offer, by name or by file."""
+    from PySide6.QtGui import QFontDatabase
+
+    available = set(QFontDatabase.families())
+    found = [name for name in EMOJI_FALLBACKS if name in available]
+    for path in EMOJI_FONT_FILES:
+        candidate = Path(path)
+        if not candidate.is_file():
+            continue
+        font_id = QFontDatabase.addApplicationFont(str(candidate))
+        if font_id < 0:
+            continue
+        for family in QFontDatabase.applicationFontFamilies(font_id):
+            if family not in found:
+                found.append(family)
+    return found
+
+
+def _apply_interface_font(app: QGuiApplication, family: str) -> None:
+    """Set the interface font, with emoji fallbacks behind it."""
+    from PySide6.QtGui import QFont
+
+    font = QFont(family, 10)
+    fallbacks = _emoji_families()
+    if hasattr(font, "setFamilies"):
+        font.setFamilies([family, *fallbacks])
+    app.setFont(font)
 
 
 def _write_report(path: str, payload: dict) -> None:

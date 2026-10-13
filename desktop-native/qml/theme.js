@@ -170,6 +170,93 @@ function agentModeLabel(mode) {
     }
 }
 
+//: A role's mark, by `role_id`.
+//:
+//: The wire value is an identifier (`assistant`, `researcher`), because that is what a
+//: template should carry — a glyph is a display decision and belongs in the theme. Task
+//: book §八 asks for the roster to read at a glance (📚 学术助手 / 💻 软件工程师), and a
+//: glyph does that in one character where a label needs a line.
+function roleGlyph(roleId) {
+    switch (roleId) {
+    case "assistant":         return "🧭"
+    case "researcher":        return "🔍"
+    case "knowledge_manager": return "📚"
+    case "document_expert":   return "📝"
+    case "software_engineer": return "💻"
+    case "blank":             return "⬜"
+    default:                  return "🧩"
+    }
+}
+
+//: The role's display name, falling back to the identifier rather than to nothing.
+//: An unknown role is a real case — a template can be removed in a later version — and
+//: showing the raw id is more useful than showing an empty string.
+function roleName(contract, roleId) {
+    if (contract && contract.name) return contract.name
+    return roleId || "未命名岗位"
+}
+
+// ------------------------------------------------------------- 岗位合同（§八）--
+//
+// 这些取值函数放在 theme.js 而不是页面里，因为员工页和合同组件都要用同一套规则。
+// 两处各写一遍，迟早会在"员工自己的字段优先还是模板优先"这件事上给出两个答案。
+//
+// 两处来源，职责分明，谁也不硬编码：
+//   * 员工行（`employee.*`）—— 这个员工自己的；用户改过就以它为准
+//   * 岗位模板（`templates`）—— 这个岗位的合同，按 `role_id` 查
+//
+// 合同是模板的属性，不是员工的属性：同一岗位的两个员工共享同一份 SOP 与验收标准。
+// 把模板复制进每一行，会让"改一次岗位定义"变成"改 N 个员工"。
+
+//: 这一岗位的合同，找不到返回 null。
+function contractFor(employee, templates) {
+    if (!employee || !templates) return null
+    for (var i = 0; i < templates.length; i++) {
+        if (templates[i].role_id === employee.role_id) return templates[i]
+    }
+    return null
+}
+
+//: 员工自己的字段优先，模板兜底。返回 undefined 表示这一项没有内容 —— 调用方据此
+//: 决定是否画出这一节，而不是画一个空标题。
+function contractField(employee, templates, key) {
+    var own = employee ? employee[key] : undefined
+    var empty = own === undefined || own === null || own === "" ||
+                (Array.isArray(own) && own.length === 0)
+    if (!empty) return own
+    var t = contractFor(employee, templates)
+    return t ? t[key] : undefined
+}
+
+//: 一份清单，渲染成一行一行。**不用顿号连成一句**：SOP 是有顺序的步骤，职责是可数的
+//: 条目，连成一行会让"第 3 步"这类信息消失。
+function contractLines(employee, templates, key) {
+    var v = contractField(employee, templates, key)
+    if (v === undefined || v === null || v === "") return []
+    return Array.isArray(v) ? v : [String(v)]
+}
+
+function hasContract(employee, templates, key) {
+    return contractLines(employee, templates, key).length > 0
+}
+
+//: 合同的分节，顺序就是任务书 §八 的顺序：岗位、使命、能力、工作方式、限制、验收。
+//: `ordered` 的那一节带序号 —— SOP 是步骤，编号是有意义的；其余是并列条目。
+var contractSections = [
+    { title: "岗位",       key: "name",                 single: true },
+    { title: "使命",       key: "mission",              single: true },
+    { title: "职责",       key: "responsibilities" },
+    { title: "工作方式",   key: "sop",                  ordered: true },
+    { title: "需要的输入", key: "inputs" },
+    { title: "不做什么",   key: "out_of_scope" },
+    { title: "先问你的事", key: "needs_approval" },
+    { title: "限制",       key: "prohibitions" },
+    { title: "验收标准",   key: "acceptance" },
+    { title: "完成定义",   key: "definition_of_done",   single: true },
+    { title: "产出格式",   key: "deliverable_kind",     single: true },
+    { title: "产出位置",   key: "deliverable_location", single: true }
+]
+
 //: How an employee's status reads on screen. The wire values are lower-case machine
 //: words; these are what a person is shown. Kept here rather than in the page so the
 //: roster and the detail view cannot disagree.
