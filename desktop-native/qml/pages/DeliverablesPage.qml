@@ -32,6 +32,10 @@ Flickable {
     property var detail: null
     property string rejectReason: ""
 
+    //: build_run_id → 当初那句话。**「重新生成」必须重跑原来那个请求，不能拿标题猜。**
+    //: 拿标题当目标会生成一个"看起来相关但不是你要的"文件，而用户以为自己按的是重做。
+    property var runGoals: ({})
+
     function load() {
         var id = "deliverables-" + Date.now()
         state = "loading"
@@ -98,6 +102,64 @@ Flickable {
         bridge.rejectDeliverable(id, item.id, rejectReason.trim())
     }
 
+    // ------------------------------------------------------------------ 成果之后 --
+    function go(name, params) {
+        // shell 唯一的导航入口：它会清掉过期的页面参数。
+        shell.navigate(name, params)
+    }
+
+    //: 载入每个运行的目标，供「重新生成」用。取不到就不猜 —— 见 `runGoals` 的说明。
+    function loadRunGoals() {
+        var id = "dl-goals-" + Date.now()
+        shell.request("运行记录", id, function (payload) {
+            var map = {}
+            var list = (payload && payload.items) ? payload.items : []
+            for (var i = 0; i < list.length; i++) {
+                if (list[i].id && list[i].goal) map[list[i].id] = list[i].goal
+            }
+            page.runGoals = map
+        }, function () {
+            // 拿不到就不拿。按「重新生成」时会明说找不到原请求，而不是猜一个。
+            page.runGoals = ({})
+        })
+        bridge.loadBuildRuns(id, "50")
+    }
+
+    function reveal(item) {
+        if (!item.path) {
+            shell.toast("warn", "这条成果没有记录文件路径")
+            return
+        }
+        bridge.revealPath("reveal-" + Date.now(), item.path)
+    }
+
+    //: 拿同一句话再跑一遍。新的一版会作为独立交付物出现，旧的那份不动 —— 覆盖它才是
+    //: 危险的做法，用户就没法比较了。
+    function regenerate(item) {
+        var goal = page.runGoals[item.build_run_id]
+        if (!goal) {
+            shell.toast("warn", "找不到当初那次请求，无法原样重跑。可以点「继续修改」手写一句。")
+            return
+        }
+        var id = "dl-regen-" + Date.now()
+        shell.request("重新生成", id, function () {
+            shell.toast("info", "已经交给员工重新做，完成后会出现在这里")
+            page.load()
+        }, function (title) {
+            shell.toast("error", title)
+        })
+        bridge.startBuildRun(id, goal, "")
+    }
+
+    //: 在这份成果上接着做。**不自动开跑** —— 点「继续修改」的人正要补一句话，直接开跑
+    //: 会跳过他正要说的那句。
+    function continueFrom(item) {
+        go("agent", {
+            goal: "在《" + (item.title || item.path || "上一版") + "》的基础上继续修改：",
+            autoStart: false
+        })
+    }
+
     function humanSize(bytes) {
         var n = Number(bytes ?? 0)
         if (n < 1024) return n + " B"
@@ -124,6 +186,8 @@ Flickable {
         if (_loaded || !shell) return
         _loaded = true
         load()
+        // 单独一次，因为它只服务「重新生成」这一个按钮，失败了也不该影响列表。
+        loadRunGoals()
     }
     onShellChanged: _firstLoad()
     Component.onCompleted: _firstLoad()
@@ -233,15 +297,39 @@ Flickable {
                             font.pixelSize: 11
                         }
 
-                        Button {
-                            text: page.selected === modelData.id ? "收起" : "查看"
-                            onClicked: page.selected === modelData.id
-                                       ? page.selected = ""
-                                       : page.open(modelData)
-                        }
-                        Button {
-                            text: "打开文件"
-                            onClicked: bridge.revealPath("reveal-" + Date.now(), modelData.path)
+                        // 固定宽度的操作列。按钮的 x 不能随文件名长短浮动 —— 上一轮
+                        // 审计抓到的正是这一类错位：一排按钮跟着卡片内容整体平移。
+                        RowLayout {
+                            Layout.preferredWidth: 320
+                            Layout.alignment: Qt.AlignVCenter
+                            spacing: 8
+
+                            Button {
+                                Layout.preferredWidth: 64
+                                text: page.selected === modelData.id ? "收起" : "查看"
+                                onClicked: page.selected === modelData.id
+                                           ? page.selected = ""
+                                           : page.open(modelData)
+                            }
+                            Button {
+                                Layout.preferredWidth: 64
+                                text: "打开"
+                                enabled: !!modelData.path
+                                Accessible.name: "打开 " + (modelData.title || "")
+                                onClicked: bridge.openPath("open-" + Date.now(), modelData.path)
+                            }
+                            Button {
+                                Layout.preferredWidth: 84
+                                text: "继续修改"
+                                Accessible.name: "继续修改 " + (modelData.title || "")
+                                onClicked: page.continueFrom(modelData)
+                            }
+                            Button {
+                                Layout.preferredWidth: 84
+                                text: "重新生成"
+                                Accessible.name: "重新生成 " + (modelData.title || "")
+                                onClicked: page.regenerate(modelData)
+                            }
                         }
                     }
 
@@ -315,6 +403,16 @@ Flickable {
                                 text: "接受"
                                 variant: "primary"
                                 onClicked: page.accept(modelData)
+                            }
+                            // 在文件夹里打开。**跟「打开」是两件事**：打开是让默认程序读这个
+                            // 文件，这个是让你看见它在哪 —— 而"文件到底在哪"正是这一版要
+                            // 回答的问题，不能只给一个。
+                            Button {
+                                text: "在文件夹中显示"
+                                variant: "ghost"
+                                enabled: !!modelData.path
+                                Accessible.name: "在文件夹中显示 " + (modelData.title || "")
+                                onClicked: page.reveal(modelData)
                             }
                             Item { Layout.fillWidth: true }
                         }

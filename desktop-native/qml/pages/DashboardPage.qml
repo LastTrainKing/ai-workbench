@@ -4,23 +4,24 @@ import QtQuick.Layouts
 import "../components"
 import "../theme.js" as Theme
 
-// The first thing the application shows, and the screen the whole redesign is about.
+// 首页 —— 用户打开软件看到的第一屏。
 //
-// It answers three questions, in that order, and nothing else:
+// 它按顺序回答三个问题，别的都不回答：
 //
-//   1. What can I ask the AI to do?      → the input at the top
-//   2. What am I in the middle of?       → recent projects, tasks and runs
-//   3. How do I carry on where I stopped? → "继续" on an unfinished run, which hands the
-//                                           original goal back to the Agent
+//   1. 我的 AI 员工在吗？      → 问候语 + 在岗员工
+//   2. 我想让它做什么？        → 输入框
+//   3. 上次做出来的东西在哪？  → 最近成果，每一条都能直接打开
 //
-// Everything below is a real query — `StatsService.dashboard` for the counts and the
-// provider state, `ProjectRepository` for the projects, `loadRuns` for the history. No
-// panel invents a number to fill space.
+// **刻意不回答的问题**：跑到第几步、调用了哪些工具、用了多少 token。那些是专家模式的
+// 答案，属于运行记录页。把它们摆在第一屏，就是把开发者视角当成了用户视角 —— 这正是
+// 这个页面之前的样子：一屏计数器，讲"发生过什么"，不讲"现在能做什么"。
 //
-// **Three requests, three states.** They used to be two requests and one string,
-// "读取中…", which stayed on screen after a failure — so a broken panel and a slow one
-// looked the same, and neither ever offered a way out. Each panel now reports its own
-// loading / empty / error and can retry on its own.
+// 数据全部来自真实查询：`loadEmployees` 查员工名册，`loadDeliverables` 查交付物，
+// `loadDashboard` 查模型服务状态。没有任何一个面板为了填满版面而编造数字。
+//
+// **三块各自独立的状态。** 它们曾经是两次请求加一个"读取中…"字符串，失败之后那行字
+// 会一直留着 —— 于是坏掉的面板和慢吞吞的面板长得一模一样，而且都没有出路。现在每块
+// 自己报告 加载中 / 空 / 出错，并且能自己重试。
 Flickable {
     id: page
     property var shell
@@ -29,107 +30,143 @@ Flickable {
     contentHeight: column.implicitHeight
     clip: true
 
-    // `summary`, not `data`: `data` is a built-in `Item` property — the default property
-    // that owns the item's children — and declaring it again shadows the engine's own
-    // member.
+    // `summary`，不是 `data`：`data` 是 Item 的内建属性（持有子项的默认属性），
+    // 重新声明它会遮蔽引擎自己的成员。
     property var summary: null
     property string dashState: "loading"
     property string dashError: ""
     property string dashErrorHint: ""
     property string dashErrorDetail: ""
 
-    property var projects: []
-    property string projectsState: "loading"
-    property string projectsError: ""
-    property string projectsErrorHint: ""
-    property string projectsErrorDetail: ""
+    //: `summary.providers.llm` —— 注意不是 `summary.llm`。dashboard 的返回里只有
+    //: `providers`，写错名字不会报错，只会让 `api_key_set` 永远是 undefined，于是首页
+    //: 对着一个配好 Key 的用户说"未配置 API Key"，并把他送去重新填一遍。
+    //: 这条路径上写错字段名不产生异常，只产生一句假话 —— 抓图时才看出来。
+    readonly property var llm: (summary && summary.providers && summary.providers.llm)
+                               ? summary.providers.llm : ({})
 
-    property var runs: []
-    property int runsTotal: 0
-    property string runsState: "loading"
-    property string runsError: ""
-    property string runsErrorHint: ""
-    property string runsErrorDetail: ""
+    property var employees: []
+    property string employeesState: "loading"
+    property string employeesError: ""
 
-    //: What each panel should draw, given both the call's state and whether the call
-    //: returned anything. "Loaded and empty" and "still loading" are different sentences
-    //: and the panel has to be able to tell them apart.
-    readonly property string projectsViewState:
-        projectsState === "ready" && projects.length === 0 ? "empty" : projectsState
-    readonly property string todoViewState:
-        dashState === "ready" && todo.length === 0 ? "empty" : dashState
-    readonly property string runsViewState:
-        runsState === "ready" && runs.length === 0 ? "empty" : runsState
-    readonly property string knowledgeViewState:
-        dashState === "ready" && (knowledge.documents ?? 0) === 0 ? "empty" : dashState
+    property var deliverables: []
+    property int deliverablesTotal: 0
+    property string deliverablesState: "loading"
+    property string deliverablesError: ""
+    property string deliverablesErrorHint: ""
+    property string deliverablesErrorDetail: ""
 
-    //: What the user is about to ask the AI.
-    property string goalText: ""
-
-    //: What a panel says while its data is on the way. While the local stack is still
-    //: coming up, "读取中…" is not true — the request has not been sent, it is waiting for
-    //: a database to finish starting.
-    readonly property string busyText:
-        (bridge && (bridge.startupState === "starting" || bridge.startupState === "idle"))
-        ? "等待本地环境…" : "读取中…"
-
-    readonly property var tasks: summary ? (summary.tasks ?? {}) : {}
-    readonly property var knowledge: summary ? (summary.knowledge ?? {}) : {}
-    readonly property var llm: (summary && summary.providers) ? (summary.providers.llm ?? {}) : {}
-    readonly property var embedding: (summary && summary.providers) ? (summary.providers.embedding ?? {}) : {}
-
-    //: Due today or flagged high priority, in that order, without duplicates.
-    readonly property var todo: {
-        if (!summary) return []
-        var seen = {}
-        var out = []
-        var source = (tasks.due_today ?? []).concat(tasks.high_priority ?? [])
-        for (var i = 0; i < source.length; i++) {
-            var t = source[i]
-            if (t && t.id && !seen[t.id]) { seen[t.id] = true; out.push(t) }
+    //: 在岗员工数 —— 只有真的能接活的才算（空闲 / 工作中 / 等授权）。
+    readonly property int onDutyCount: {
+        var n = 0
+        for (var i = 0; i < employees.length; i++) {
+            if (Theme.employeeIsActive(employees[i].status)) n++
         }
-        return out
+        return n
     }
 
-    //: Runs that stopped without finishing *and* know what they were asked to do. The
-    //: second half matters: without the goal there is nothing to continue, and a button
-    //: that cannot do what it says is worse than no button.
-    readonly property var resumable: {
-        var out = []
-        for (var i = 0; i < runs.length; i++) {
-            var r = runs[i]
-            if (!r || !r.goal) continue
-            if (r.status === "INCOMPLETE" || r.status === "INTERRUPTED" || r.status === "FAILED") {
-                out.push(r)
-            }
-        }
-        return out
+    //: 问候语用的名字。`loadDashboard` 的返回里不一定有用户信息，所以这里不假设它
+    //: 存在 —— 没有就只说"你好"，而不是显示一个 undefined。
+    readonly property string userName: {
+        if (!summary) return ""
+        if (summary.user && summary.user.display_name) return summary.user.display_name
+        if (summary.display_name) return summary.display_name
+        return ""
     }
 
-    function ago(iso) {
+    readonly property string rosterLine: {
+        if (employeesState === "loading") return "正在点名…"
+        if (employeesState === "error") return "没能读到员工名册"
+        if (employees.length === 0) return "还没有员工。去「我的员工」雇一个，它就能开始接活了。"
+        return onDutyCount + " 位员工在岗"
+    }
+
+    //: "加载完了但是空的"和"还在加载"是两句不同的话，面板得能分辨。
+    readonly property string deliverablesViewState:
+        deliverablesState === "ready" && deliverables.length === 0
+            ? "empty" : deliverablesState
+
+    // ------------------------------------------------------------------ 文案 --
+    //: 相对时间。写成函数而不是内联三元，是因为交付物列表和详情页要用同一套说法。
+    function relativeTime(iso) {
         if (!iso) return ""
         var then = Date.parse(iso)
         if (isNaN(then)) return ""
-        var minutes = Math.round((Date.now() - then) / 60000)
+        var minutes = Math.floor((Date.now() - then) / 60000)
         if (minutes < 1) return "刚刚"
         if (minutes < 60) return minutes + " 分钟前"
-        var hours = Math.round(minutes / 60)
+        var hours = Math.floor(minutes / 60)
         if (hours < 24) return hours + " 小时前"
-        return Math.round(hours / 24) + " 天前"
+        var days = Math.floor(hours / 24)
+        if (days < 30) return days + " 天前"
+        return Math.floor(days / 30) + " 个月前"
     }
 
-    // ------------------------------------------------------------------ loading --
+    //: 文件类型。任务书里的样例用的是图标，这里照做 —— 一个交付物列表里，读者先要
+    //: 认出"这是个 PPT 还是个表格"，文字标签反而要读。
+    function kindGlyph(kind) {
+        switch (kind) {
+        case "pptx":  return "📊"
+        case "docx":  return "📝"
+        case "xlsx":  return "📈"
+        case "csv":   return "📈"
+        case "pdf":   return "📕"
+        case "code":  return "💻"
+        case "md":    return "📄"
+        case "report": return "📄"
+        default:      return "📄"
+        }
+    }
+
+    function kindLabel(kind) {
+        switch (kind) {
+        case "pptx":  return "演示文稿"
+        case "docx":  return "Word 文档"
+        case "xlsx":  return "表格"
+        case "csv":   return "数据表"
+        case "pdf":   return "PDF"
+        case "code":  return "代码"
+        case "md":    return "Markdown"
+        case "report": return "报告"
+        default:      return kind || "文件"
+        }
+    }
+
+    function humanSize(bytes) {
+        var n = Number(bytes || 0)
+        if (n <= 0) return "空文件"
+        if (n < 1024) return n + " 字节"
+        if (n < 1024 * 1024) return (n / 1024).toFixed(1) + " KB"
+        return (n / 1048576).toFixed(1) + " MB"
+    }
+
+    //: 一个交付物此刻算什么状态。**校验和接受是两件事**，不能合成一个词：校验说的是
+    //: "文件真的存在、读得回来"，接受说的是"用户认了"。合并它们就是之前那个 bug ——
+    //: 一个 70 KB 的成品被标成"未校验"，因为运行失败了。
+    function deliverableStatus(item) {
+        if (item.accepted === true) return "已接受"
+        if (item.verified === true) return "已校验"
+        return "待确认"
+    }
+
+    function deliverableTone(item) {
+        if (item.accepted === true) return Theme.accent
+        if (item.verified === true) return Theme.info
+        return Theme.warn
+    }
+
+    // ------------------------------------------------------------------ 加载 --
     function load() {
         loadSummary()
-        loadProjects()
-        loadRuns()
+        loadEmployees()
+        loadDeliverables()
     }
 
     function loadSummary() {
         page.dashState = "loading"
         page.dashError = ""
-        var id = "wb-summary-" + Date.now()
-        shell.request("工作台", id, function (payload) {
+        var id = "home-summary-" + Date.now()
+        shell.request("服务状态", id, function (payload) {
             if (!payload) {
                 page.dashState = "error"
                 page.dashError = "服务没有返回数据"
@@ -138,9 +175,8 @@ Flickable {
             page.summary = payload
             page.dashState = "ready"
         }, function (message, code, human) {
-            // `message` is already a sentence in the reader's terms — the shell ran it
-            // through `Errors.human`. The hint and the exception come along too, so the
-            // panel can offer the next step and keep the raw text one toggle away.
+            // `message` 已经是读者视角的句子 —— shell 过了 `Errors.human`。提示和原始
+            // 异常一起带回来，面板就能给出下一步，并把原始文本留在一键之外。
             page.dashState = "error"
             page.dashError = message
             page.dashErrorHint = human ? human.hint : ""
@@ -149,74 +185,60 @@ Flickable {
         bridge.loadDashboard(id)
     }
 
-    function loadProjects() {
-        page.projectsState = "loading"
-        page.projectsError = ""
-        var id = "wb-projects-" + Date.now()
-        shell.request("最近项目", id, function (payload) {
-            // `payload` itself can be null when the call failed; `??` guards the field
-            // and not the object, and the error then reads as a broken binding.
-            page.projects = (payload && payload.items ? payload.items : []).slice(0, 5)
-            page.projectsState = "ready"
-        }, function (message, code, human) {
-            // `message` is already a sentence in the reader's terms — the shell ran it
-            // through `Errors.human`. The hint and the exception come along too, so the
-            // panel can offer the next step and keep the raw text one toggle away.
-            page.projectsState = "error"
-            page.projectsError = message
-            page.projectsErrorHint = human ? human.hint : ""
-            page.projectsErrorDetail = human ? human.raw : ""
+    function loadEmployees() {
+        page.employeesState = "loading"
+        page.employeesError = ""
+        var id = "home-employees-" + Date.now()
+        shell.request("我的员工", id, function (payload) {
+            page.employees = (payload && payload.items ? payload.items : [])
+            page.employeesState = "ready"
+        }, function (message) {
+            page.employeesState = "error"
+            page.employeesError = message
         })
-        bridge.loadProjects(id)
+        bridge.loadEmployees(id)
     }
 
-    function loadRuns() {
-        page.runsState = "loading"
-        page.runsError = ""
-        var id = "wb-runs-" + Date.now()
-        shell.request("最近运行", id, function (payload) {
-            page.runs = (payload && payload.items ? payload.items : []).slice(0, 8)
-            page.runsTotal = (payload && payload.total) ? payload.total : page.runs.length
-            page.runsState = "ready"
+    function loadDeliverables() {
+        page.deliverablesState = "loading"
+        page.deliverablesError = ""
+        var id = "home-deliverables-" + Date.now()
+        shell.request("最近成果", id, function (payload) {
+            // `payload` 本身可能是 null；`??` 护的是字段不是对象，直接用会让错误读成
+            // 一个坏掉的绑定。
+            var items = (payload && payload.items ? payload.items : [])
+            page.deliverables = items.slice(0, 6)
+            page.deliverablesTotal = (payload && payload.total) ? payload.total : items.length
+            page.deliverablesState = "ready"
         }, function (message, code, human) {
-            // `message` is already a sentence in the reader's terms — the shell ran it
-            // through `Errors.human`. The hint and the exception come along too, so the
-            // panel can offer the next step and keep the raw text one toggle away.
-            page.runsState = "error"
-            page.runsError = message
-            page.runsErrorHint = human ? human.hint : ""
-            page.runsErrorDetail = human ? human.raw : ""
+            page.deliverablesState = "error"
+            page.deliverablesError = message
+            page.deliverablesErrorHint = human ? human.hint : ""
+            page.deliverablesErrorDetail = human ? human.raw : ""
         })
-        bridge.loadRuns(id, 20)
+        bridge.loadDeliverables(id, "20")
     }
 
-    // ---------------------------------------------------------------- navigation --
+    // ---------------------------------------------------------------- 导航 --
     function go(name, params) {
-        // The shell's one navigation door: it clears stale page parameters and marks the
-        // requests this page still has in flight as belonging to a page that is leaving.
+        // shell 唯一的导航入口：它会清掉过期的页面参数，并把本页还在飞的请求标记为
+        // 属于一个正在离开的页面。
         shell.navigate(name, params)
     }
 
-    // The quick actions take the user to the page that owns the action *and* ask it to open
-    // its own dialog. A button that only navigates makes the user find the same button again.
-    function createTask() { go("tasks", { autoCreate: true }) }
-    function createProject() { go("projects", { autoCreate: true }) }
-    function importDocument() { go("knowledge", { autoCreate: true }) }
-
-    //: Hand the goal to the Agent and let it run. The Agent page is the only thing in the
-    //: product that executes a task; this screen does not grow a second executor.
+    //: 把目标交给员工去执行。Agent 页是全产品唯一执行任务的地方；这一屏不再长出第二个
+    //: 执行器。
     function executeGoal() {
         var text = goalArea.text.trim()
         if (text === "") {
-            shell.toast("warn", "先写下你想让 AI 做什么")
+            shell.toast("warn", "先写下你想让员工做什么")
             goalArea.forceActiveFocus()
             return
         }
         go("agent", { goal: text, autoStart: true })
     }
 
-    //: The same goal, but as a question — the multi-turn conversation, which answers
-    //: rather than does.
+    //: 同一个目标，但当作问题 —— 多轮对话，回答而不是执行。
     function askGoal() {
         var text = goalArea.text.trim()
         if (text === "") {
@@ -227,8 +249,24 @@ Flickable {
         go("conversation", { prompt: text })
     }
 
-    function resumeRun(run) {
-        go("agent", { goal: run.goal, autoStart: true })
+    //: 打开成果。`openPath` 走系统默认程序；打不开时会回落成"在文件夹里显示"，
+    //: 由桥接层决定，页面不重复实现一遍。
+    function openDeliverable(item) {
+        if (!item.path) {
+            shell.toast("warn", "这条成果没有记录文件路径")
+            return
+        }
+        bridge.openPath("open-" + Date.now(), item.path)
+    }
+
+    //: 在已有成果上继续。**不自动开跑** —— 用户点"继续修改"是想改点什么，直接把它
+    //: 交给员工会跳过他正要说的那句话。
+    function continueFrom(item) {
+        var name = item.title || item.path || "上一版"
+        go("agent", {
+            goal: "在《" + name + "》的基础上继续修改：",
+            autoStart: false
+        })
     }
 
     property bool _loaded: false
@@ -245,26 +283,33 @@ Flickable {
     ColumnLayout {
         id: column
         width: page.width
-        spacing: Theme.space4
+        spacing: Theme.space5
 
-        // ================================================================ header ==
+        // ============================================================== 问候 ==
         RowLayout {
             Layout.fillWidth: true
             spacing: Theme.space3
 
-            Text {
-                text: "工作台"
-                color: Theme.text
-                font.pixelSize: Theme.fontDisplay
-                font.bold: true
+            ColumnLayout {
                 Layout.fillWidth: true
+                spacing: Theme.space1
+
+                Text {
+                    text: page.userName === "" ? "你好" : "你好，" + page.userName
+                    color: Theme.text
+                    font.pixelSize: Theme.fontDisplay
+                    font.bold: true
+                    Accessible.role: Accessible.Heading
+                    Accessible.name: text
+                }
+                Text {
+                    objectName: "home-roster"
+                    text: page.rosterLine
+                    color: page.employees.length === 0 ? Theme.warn : Theme.textMuted
+                    font.pixelSize: Theme.fontBody
+                }
             }
-            Text {
-                text: page.dashState === "ready" ? "已更新"
-                     : page.dashState === "error" ? "读取失败" : page.busyText
-                color: Theme.textFaint
-                font.pixelSize: Theme.fontSmall
-            }
+
             Button {
                 text: "刷新"
                 variant: "ghost"
@@ -272,11 +317,7 @@ Flickable {
             }
         }
 
-        // ============================================================ AI 输入区 ==
-        //
-        // The first thing on the screen, because it is the first thing the product is for.
-        // It was four small tiles at the bottom of the page before, below a panel of
-        // counters — which answered "what happened" and not "what do I do now".
+        // ============================================================ 输入区 ==
         Rectangle {
             Layout.fillWidth: true
             Layout.preferredHeight: hero.implicitHeight + Theme.space5 * 2
@@ -292,12 +333,12 @@ Flickable {
                 spacing: Theme.space3
 
                 Text {
-                    text: "让 AI 做什么"
+                    text: "让员工做什么"
                     color: Theme.text
                     font.pixelSize: Theme.fontTitle
                     font.bold: true
                     Accessible.role: Accessible.Heading
-                    Accessible.name: "让 AI 做什么"
+                    Accessible.name: "让员工做什么"
                 }
 
                 Rectangle {
@@ -313,17 +354,17 @@ Flickable {
                         objectName: "goal-input"
                         anchors.fill: parent
                         anchors.margins: 10
-                        placeholderText: "例如：根据知识库里的资料做一份产品介绍 PPT"
+                        placeholderText: "例如：帮我写一份产品分析报告，输出 Markdown"
                         color: Theme.text
                         placeholderTextColor: Theme.textFaint
                         font.pixelSize: Theme.fontBody
                         wrapMode: TextArea.Wrap
                         background: null
                         selectByMouse: true
-                        Accessible.name: "描述你想让 AI 完成的事"
+                        Accessible.name: "描述你想让员工完成的事"
                         Keys.onPressed: function (event) {
-                            // Ctrl+Enter submits. Enter alone has to keep making newlines:
-                            // a goal is often more than one line.
+                            // Ctrl+Enter 提交。单独的 Enter 必须继续换行：一个目标经常
+                            // 不止一行。
                             if ((event.key === Qt.Key_Return || event.key === Qt.Key_Enter)
                                     && (event.modifiers & Qt.ControlModifier)) {
                                 page.executeGoal()
@@ -338,11 +379,14 @@ Flickable {
                     spacing: Theme.space2
 
                     Repeater {
+                        // 任务书 §4 给的例子。换掉之前那四个是因为它们描述的是产品功能
+                        // （"根据知识库回答问题"），而这四个描述的是用户想干的事。
                         model: [
-                            "根据资料做一份 PPT",
-                            "总结项目里的文档",
-                            "写一个代码项目",
-                            "根据知识库回答问题"
+                            "帮我写毕业论文",
+                            "整理资料",
+                            "制作 PPT",
+                            "分析代码",
+                            "生成报告"
                         ]
                         delegate: Rectangle {
                             required property var modelData
@@ -394,7 +438,7 @@ Flickable {
                     }
                     Button {
                         objectName: "hero-execute"
-                        text: "交给 Agent 执行"
+                        text: "交给员工执行"
                         variant: "primary"
                         onClicked: page.executeGoal()
                     }
@@ -402,397 +446,163 @@ Flickable {
             }
         }
 
-        // =========================================================== 最近工作 ==
-        RowLayout {
+        // ============================================================ 最近成果 ==
+        Card {
             Layout.fillWidth: true
-            spacing: Theme.space4
-
-            // ------------------------------------------------------ 最近项目 --
-            Card {
-                Layout.fillWidth: true
-                Layout.preferredWidth: 1
-                Layout.alignment: Qt.AlignTop
-                title: "最近项目"
-                // `page.summary` guarded: it is null until the call comes back, and
-                // `page.summary.workspace` on null is "Value is null and could not be
-                // converted to an object" — the error this pass is about, in miniature.
-                subtitle: page.projectsState === "error" ? ""
-                          : (page.projectsState === "loading" ? page.busyText
-                          : ((page.summary ? (page.summary.workspace ?? {}).projects : 0) ?? 0)
-                            + " 个项目")
-
-                StateBlock {
-                    Layout.fillWidth: true
-                    state: page.projectsViewState
-                    busyText: page.busyText
-                    errorText: page.projectsError
-                    errorHint: page.projectsErrorHint
-                    errorDetail: page.projectsErrorDetail
-                    emptyText: "还没有项目。项目把相关的任务和产物放在一起。"
-                    onRetry: page.loadProjects()
-                }
-
-                Repeater {
-                    model: page.projects
-                    delegate: Rectangle {
-                        required property var modelData
-                        Layout.fillWidth: true
-                        implicitHeight: 38
-                        radius: Theme.radiusSm
-                        color: rowMouse.containsMouse ? Theme.bgCardHover : "transparent"
-
-                        RowLayout {
-                            anchors.fill: parent
-                            anchors.leftMargin: Theme.space2
-                            anchors.rightMargin: Theme.space2
-                            spacing: Theme.space2
-                            Text {
-                                text: modelData.name
-                                color: Theme.text
-                                font.pixelSize: Theme.fontBody
-                                Layout.fillWidth: true
-                                elide: Text.ElideRight
-                            }
-                            Text {
-                                text: modelData.status ?? ""
-                                color: Theme.textFaint
-                                font.pixelSize: Theme.fontTiny
-                            }
-                        }
-
-                        MouseArea {
-                            id: rowMouse
-                            anchors.fill: parent
-                            hoverEnabled: true
-                            cursorShape: Qt.PointingHandCursor
-                            Accessible.role: Accessible.Button
-                            Accessible.name: "打开项目 " + modelData.name
-                            onClicked: page.go("project", { projectId: modelData.id,
-                                                            projectName: modelData.name })
-                        }
-                    }
-                }
-
-                RowLayout {
-                    Layout.fillWidth: true
-                    spacing: Theme.space2
-                    visible: page.projectsState === "ready"
-                    Button {
-                        // Text, not a box. The one primary action on this screen is the
-                        // goal box at the top; everything here is a way to go somewhere
-                        // else, and nine filled buttons in a band is what made the page
-                        // read as a toolbar.
-                        text: "新建项目"
-                        variant: "ghost"
-                        onClicked: page.createProject()
-                    }
-                    Button {
-                        text: "全部项目"
-                        variant: "ghost"
-                        onClicked: page.go("projects")
-                    }
-                }
-            }
-
-            // ------------------------------------------------------ 待办任务 --
-            Card {
-                Layout.fillWidth: true
-                Layout.preferredWidth: 1
-                Layout.alignment: Qt.AlignTop
-                title: "待办任务"
-                subtitle: page.dashState === "error" ? ""
-                          : (page.dashState === "loading" ? page.busyText
-                          : ((page.tasks.open ?? 0) + " 件进行中，"
-                             + page.todo.length + " 件今天要看"))
-
-                StateBlock {
-                    Layout.fillWidth: true
-                    state: page.todoViewState
-                    busyText: page.busyText
-                    errorText: page.dashError
-                    errorHint: page.dashErrorHint
-                    errorDetail: page.dashErrorDetail
-                    emptyText: (page.tasks.total ?? 0) === 0
-                               ? "还没有任务。用「新建任务」写下第一件。"
-                               : "今天没有到期或高优先级的任务。"
-                    onRetry: page.loadSummary()
-                }
-
-                Repeater {
-                    model: page.dashState === "ready" ? page.todo.slice(0, 6) : []
-                    delegate: RowLayout {
-                        required property var modelData
-                        Layout.fillWidth: true
-                        spacing: Theme.space2
-                        Rectangle {
-                            width: 6; height: 6; radius: 3
-                            color: (modelData.priority === "HIGH" || modelData.priority === "URGENT")
-                                   ? Theme.warn : Theme.accent
-                            Layout.alignment: Qt.AlignVCenter
-                        }
-                        Text {
-                            text: modelData.title
-                            color: Theme.text
-                            font.pixelSize: Theme.fontBody
-                            Layout.fillWidth: true
-                            elide: Text.ElideRight
-                        }
-                        Text {
-                            text: Theme.taskWord(modelData.status)
-                            color: Theme.textFaint
-                            font.pixelSize: Theme.fontTiny
-                        }
-                    }
-                }
-
-                RowLayout {
-                    Layout.fillWidth: true
-                    spacing: Theme.space2
-                    visible: page.dashState === "ready"
-                    Button {
-                        text: "新建任务"
-                        variant: "ghost"
-                        onClicked: page.createTask()
-                    }
-                    Button {
-                        text: "全部任务"
-                        variant: "ghost"
-                        onClicked: page.go("tasks")
-                    }
-                }
-            }
-        }
-
-        // ==================================================== 运行 / 知识与资料 ==
-        RowLayout {
-            Layout.fillWidth: true
-            spacing: Theme.space4
-
-            // ------------------------------------------------------ 最近运行 --
-            Card {
-                Layout.fillWidth: true
-                Layout.preferredWidth: 1
-                Layout.alignment: Qt.AlignTop
-                title: "最近运行"
-                subtitle: page.runsState !== "ready"
-                          ? (page.runsState === "error" ? "" : page.busyText)
-                          : (page.runsTotal > 0
-                             ? ("共 " + page.runsTotal + " 条 Agent 运行记录")
-                             : "还没有运行记录")
-
-                StateBlock {
-                    Layout.fillWidth: true
-                    state: page.runsViewState
-                    busyText: page.busyText
-                    errorText: page.runsError
-                    errorHint: page.runsErrorHint
-                    errorDetail: page.runsErrorDetail
-                    emptyText: "还没有让 Agent 做过事。在上面写下目标，交给它执行。"
-                    onRetry: page.loadRuns()
-                }
-
-                Repeater {
-                    model: page.runsState === "ready" ? page.runs.slice(0, 4) : []
-                    delegate: Rectangle {
-                        required property var modelData
-                        readonly property bool unfinished:
-                            modelData.status === "INCOMPLETE"
-                            || modelData.status === "INTERRUPTED"
-                            || modelData.status === "FAILED"
-
-                        Layout.fillWidth: true
-                        implicitHeight: 40
-                        radius: Theme.radiusSm
-                        color: runMouse.containsMouse ? Theme.bgCardHover : "transparent"
-
-                        RowLayout {
-                            anchors.fill: parent
-                            anchors.leftMargin: Theme.space2
-                            anchors.rightMargin: Theme.space2
-                            spacing: Theme.space2
-
-                            Rectangle {
-                                width: 6; height: 6; radius: 3
-                                color: Theme.runTone(modelData.status)
-                                Layout.alignment: Qt.AlignVCenter
-                            }
-                            ColumnLayout {
-                                Layout.fillWidth: true
-                                spacing: 0
-                                Text {
-                                    Layout.fillWidth: true
-                                    text: modelData.goal !== ""
-                                          ? modelData.goal
-                                          : (modelData.model || "Agent 运行")
-                                    color: Theme.text
-                                    font.pixelSize: Theme.fontBody
-                                    elide: Text.ElideRight
-                                }
-                                Text {
-                                    Layout.fillWidth: true
-                                    text: Theme.runWord(modelData.status) + " · "
-                                          + page.ago(modelData.created_at)
-                                    color: Theme.textFaint
-                                    font.pixelSize: Theme.fontTiny
-                                    elide: Text.ElideRight
-                                }
-                            }
-                            Button {
-                                objectName: "resume-run"
-                                visible: modelData.goal !== ""
-                                         && (modelData.status === "INCOMPLETE"
-                                             || modelData.status === "INTERRUPTED"
-                                             || modelData.status === "FAILED")
-                                text: "继续"
-                                variant: "ghost"
-                                onClicked: page.resumeRun(modelData)
-                            }
-                        }
-
-                        MouseArea {
-                            id: runMouse
-                            anchors.fill: parent
-                            hoverEnabled: true
-                            cursorShape: Qt.PointingHandCursor
-                            // Sits under the 继续 button so the button still wins the click.
-                            z: -1
-                            Accessible.role: Accessible.Button
-                            Accessible.name: "查看运行记录"
-                            onClicked: page.go("runs")
-                        }
-                    }
-                }
-
-                RowLayout {
-                    Layout.fillWidth: true
-                    spacing: Theme.space2
-                    visible: page.runsState === "ready"
-                    Button {
-                        text: "全部运行记录"
-                        variant: "ghost"
-                        onClicked: page.go("runs")
-                    }
-                    Button {
-                        text: "让 Agent 做事"
-                        variant: "ghost"
-                        onClicked: page.go("agent")
-                    }
-                }
-            }
-
-            // --------------------------------------------------- 知识与资料 --
-            Card {
-                Layout.fillWidth: true
-                Layout.preferredWidth: 1
-                Layout.alignment: Qt.AlignTop
-                title: "知识与资料"
-                subtitle: page.dashState === "error" ? ""
-                          : (page.dashState === "loading" ? page.busyText
-                          : ((page.knowledge.knowledge_bases ?? 0) + " 个知识库，"
-                             + (page.knowledge.documents ?? 0) + " 份资料，"
-                             + (page.knowledge.chunks ?? 0) + " 个片段"))
-
-                StateBlock {
-                    Layout.fillWidth: true
-                    state: page.knowledgeViewState
-                    busyText: page.busyText
-                    errorText: page.dashError
-                    errorHint: page.dashErrorHint
-                    errorDetail: page.dashErrorDetail
-                    emptyText: "还没有资料。导入一份文件，AI 就能引用它回答问题。"
-                    onRetry: page.loadSummary()
-                }
-
-                ColumnLayout {
-                    Layout.fillWidth: true
-                    spacing: Theme.space2
-                    visible: page.dashState === "ready"
-
-                    Text {
-                        Layout.fillWidth: true
-                        color: Theme.textMuted
-                        font.pixelSize: Theme.fontSmall
-                        wrapMode: Text.WordWrap
-                        text: (page.knowledge.documents ?? 0) === 0
-                              ? "导入资料 → 建立知识库 → 提问 → 让 Agent 用这些资料干活。"
-                              : "AI 回答时会引用这些资料，答案后面会标出出处。"
-                    }
-                }
-
-                RowLayout {
-                    Layout.fillWidth: true
-                    spacing: Theme.space2
-                    visible: page.dashState === "ready"
-                    Button {
-                        objectName: "hero-import"
-                        text: "导入资料"
-                        variant: "secondary"
-                        Layout.fillWidth: true
-                        onClicked: page.importDocument()
-                    }
-                    Button {
-                        text: "知识库"
-                        variant: "ghost"
-                        onClicked: page.go("knowledge")
-                    }
-                    Button {
-                        text: "问答"
-                        variant: "ghost"
-                        onClicked: page.go("ask")
-                    }
-                }
-            }
-        }
-
-        // ============================================================ 系统状态 ==
-        //
-        // A strip, not a panel. Whether a key is configured is worth knowing and is not
-        // worth a third of the screen — which is what it had.
-        Rectangle {
-            Layout.fillWidth: true
-            Layout.preferredHeight: statusRow.implicitHeight + Theme.space3 * 2
-            radius: Theme.radiusMd
-            color: Theme.surface
+            title: "最近成果"
+            subtitle: page.deliverablesState === "ready" && page.deliverablesTotal > 0
+                      ? page.deliverablesTotal + " 件，最新的在前面"
+                      : ""
 
             RowLayout {
-                id: statusRow
-                anchors.left: parent.left
-                anchors.right: parent.right
-                anchors.verticalCenter: parent.verticalCenter
-                anchors.margins: Theme.space3
-                spacing: Theme.space3
+                Layout.fillWidth: true
+                spacing: Theme.space2
 
-                Rectangle {
-                    width: 7; height: 7; radius: 3.5
-                    color: page.dashState !== "ready" ? Theme.textFaint
-                         : page.llm.api_key_set ? Theme.success : Theme.warn
-                    Layout.alignment: Qt.AlignVCenter
-                    Accessible.ignored: true
-                }
                 Text {
                     Layout.fillWidth: true
-                    color: Theme.textMuted
-                    font.pixelSize: Theme.fontSmall
-                    elide: Text.ElideRight
-                    text: page.dashState === "error"
-                          ? "本地服务不可用，AI 状态暂时读不到。"
-                          : page.dashState !== "ready"
-                          ? page.busyText
-                          : (page.llm.api_key_set
-                             ? "AI 服务：" + (page.llm.model || "已配置") + "，可以调用云端模型。"
-                             : "AI 服务：未配置 API Key，当前用内置离线引擎。功能可用，回答质量不如云端模型。")
-                }
-                Text {
-                    visible: page.dashState === "ready" && page.embedding.degraded === true
+                    visible: page.deliverablesState === "ready" && page.deliverables.length > 0
+                    text: "每一件都能直接打开；点「继续修改」把它交回给员工接着做。"
                     color: Theme.textFaint
                     font.pixelSize: Theme.fontTiny
-                    text: "语义检索未启用，关键词检索正常"
                 }
                 Button {
-                    text: page.llm.api_key_set ? "AI 设置" : "填写 API Key"
-                    variant: page.llm.api_key_set ? "ghost" : "secondary"
-                    onClicked: page.go("settings")
+                    text: "全部成果"
+                    variant: "ghost"
+                    onClicked: page.go("deliverables")
                 }
+            }
+
+            StateBlock {
+                Layout.fillWidth: true
+                state: page.deliverablesViewState
+                busyText: "正在读取成果…"
+                emptyText: "还没有成果。在上面写一句你想做的事，员工做完就会出现在这里。"
+                errorText: page.deliverablesError
+                errorHint: page.deliverablesErrorHint
+                errorDetail: page.deliverablesErrorDetail
+                onRetry: page.loadDeliverables()
+            }
+
+            Repeater {
+                model: page.deliverables
+                delegate: Rectangle {
+                    required property var modelData
+
+                    Layout.fillWidth: true
+                    implicitHeight: row.implicitHeight + Theme.space3 * 2
+                    radius: Theme.radiusMd
+                    color: itemMouse.containsMouse ? Theme.bgCardHover : "transparent"
+                    border.width: 1
+                    border.color: Theme.divider
+
+                    RowLayout {
+                        id: row
+                        anchors.left: parent.left
+                        anchors.right: parent.right
+                        anchors.verticalCenter: parent.verticalCenter
+                        anchors.margins: Theme.space3
+                        spacing: Theme.space3
+
+                        Text {
+                            text: page.kindGlyph(modelData.kind)
+                            font.pixelSize: 22
+                            Layout.alignment: Qt.AlignTop
+                        }
+
+                        ColumnLayout {
+                            Layout.fillWidth: true
+                            Layout.minimumWidth: 120
+                            spacing: 2
+
+                            Text {
+                                Layout.fillWidth: true
+                                text: modelData.title || modelData.path || "(未命名)"
+                                color: Theme.text
+                                font.pixelSize: Theme.fontBody
+                                font.bold: true
+                                elide: Text.ElideRight
+                                Accessible.name: text
+                            }
+                            Text {
+                                Layout.fillWidth: true
+                                text: [
+                                    page.kindLabel(modelData.kind),
+                                    page.humanSize(modelData.size_bytes),
+                                    modelData.version > 1 ? "第 " + modelData.version + " 版" : "",
+                                    page.relativeTime(modelData.created_at)
+                                ].filter(function (s) { return s !== "" }).join(" · ")
+                                color: Theme.textFaint
+                                font.pixelSize: Theme.fontTiny
+                                elide: Text.ElideRight
+                            }
+                        }
+
+                        Text {
+                            text: page.deliverableStatus(modelData)
+                            color: page.deliverableTone(modelData)
+                            font.pixelSize: Theme.fontTiny
+                        }
+
+                        // 固定宽度的操作列：按钮的 x 不随文件名长短浮动。上一轮审计
+                        // 抓到的正是这一类错位 —— 一排按钮跟着卡片内容整体平移。
+                        RowLayout {
+                            Layout.preferredWidth: 168
+                            Layout.alignment: Qt.AlignVCenter
+                            spacing: Theme.space2
+
+                            Button {
+                                Layout.preferredWidth: 76
+                                text: "打开"
+                                variant: "secondary"
+                                enabled: !!modelData.path
+                                Accessible.name: "打开 " + (modelData.title || "")
+                                onClicked: page.openDeliverable(modelData)
+                            }
+                            Button {
+                                Layout.preferredWidth: 84
+                                text: "继续修改"
+                                variant: "ghost"
+                                Accessible.name: "继续修改 " + (modelData.title || "")
+                                onClicked: page.continueFrom(modelData)
+                            }
+                        }
+                    }
+
+                    MouseArea {
+                        id: itemMouse
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        acceptedButtons: Qt.NoButton
+                    }
+                }
+            }
+        }
+
+        // ============================================================ 服务状态 ==
+        //
+        // 只有一行，而且是给"不能用"这种情况准备的：模型没配 Key 的时候，用户需要
+        // 立刻知道，并且一步就能去配。正常情况下它不抢注意力。
+        RowLayout {
+            Layout.fillWidth: true
+            spacing: Theme.space3
+
+            Text {
+                Layout.fillWidth: true
+                text: page.dashState === "loading" ? "正在检查 AI 服务…"
+                    : page.dashState === "error"
+                      ? "AI 服务状态未知：" + page.dashError
+                    : (page.llm.api_key_set
+                       ? "AI 服务：" + (page.llm.model || "已配置") + "，可以调用云端模型。"
+                       : "AI 服务：未配置 API Key，当前用内置离线引擎。功能可用，回答质量不如云端模型。")
+                color: page.dashState === "error" ? Theme.warn
+                     : (page.summary && page.llm.api_key_set ? Theme.textFaint : Theme.warn)
+                font.pixelSize: Theme.fontTiny
+                wrapMode: Text.WordWrap
+            }
+            Button {
+                text: page.llm.api_key_set ? "AI 设置" : "填写 API Key"
+                variant: page.llm.api_key_set ? "ghost" : "secondary"
+                onClicked: page.go("settings")
             }
         }
 
