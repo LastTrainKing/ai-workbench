@@ -141,27 +141,52 @@
 
 ## 6. 全量测试结果
 
-**状态：RUNNING（未完成）**
-
 命令（干净进程）：
 
 ```
 cd backend && ../.venv/Scripts/python.exe -m pytest tests -q -p no:randomly --tb=line -rs
 ```
 
-| 项 | 值 |
-|---|---|
-| 起始 HEAD | `c4ef2d7` |
-| 环境 | 真实 PostgreSQL / Redis / Qdrant（非 stub） |
-| 测试库 | `aiworkbench_test`，alembic `a1e5c7b9d204` |
-| 日志 | `build/rc/v1-full-test.log` |
-| 进度 | 24%（本报告提交时仍在运行） |
+环境：真实 PostgreSQL / Redis / Qdrant（非 stub）；测试库 `aiworkbench_test`，alembic `a1e5c7b9d204`。
 
-**本节在测试跑完前不填通过/失败数字。** §16 把「最终干净全量测试没有实际执行且被报告成通过」
-列为发布闸门 —— 所以这里如实写 RUNNING，而不是从分组结果拼一个结论。
+### 6.1 第一次全量 —— **1 failed, 1488 passed, 11 skipped**（11:13）
 
-跑完后填入：passed / failed / skipped 实数，以及每个 skipped 的原因。
+```
+1 failed, 1488 passed, 11 skipped, 5 warnings in 673.41s (0:11:13)
+```
 
-**已知的一次教训**：本轮在测试运行期间并发跑了 Git 历史扫描（读取 63 MB 对象）与若干数据库
-查询，测试明显变慢。这正是上一轮那 18 个假失败（并发干扰）的同一个成因 —— 全量测试应当在
-没有其他负载时跑。
+**唯一的失败是我自己引入的，而且它只在全量里出现。**
+
+```
+tests/unit/test_workspace_layout.py:34
+assert WindowsPath('.../.runtime/test-runtime/workspace')
+    == WindowsPath('.../.runtime/workspace')
+```
+
+根因：上一轮为了不让测试读到开发机的 AI 配置，把 `AI_WORKBENCH_DATA_DIR` 指到了
+`.runtime/test-runtime`（`conftest.py`）。而这条断言把运行时目录**硬编码**成 `.runtime`，
+于是它测的不再是"默认位置在产品内、不在桌面"（它 docstring 里的意图），而变成了
+"运行时目录必须叫 .runtime"。
+
+**为什么分组复跑没有发现它**：上一轮我只重跑了受影响的三个文件
+（`test_api_contract` / `test_schema_guard` / `test_release_freeze_stub_provider`），
+没有跑全量。**分组通过确实掩盖了它** —— 这正是任务书坚持要一次干净全量的理由。
+
+修法不是改数字让它变绿：断言改为从 `runtime_root()`（"这个副本把数据放哪"的唯一答案）
+推导，两边问同一个来源就不会再分家。`test_workspace_layout.py` 单独复跑 **10/10 通过**。
+
+### 6.2 skipped 逐条原因（11 条）
+
+| 数量 | 位置 | 原因 |
+|---|---|---|
+| 4 | `tests/api/test_release_freeze_ownership.py:79` | `deliberately public` —— 有意跳过 |
+| 6 | `tests/integration/test_deepseek_live.py` | `DEEPSEEK_API_KEY is not configured` —— 真实模型 live 测试。**这是测试隔离生效的表现**：Key 配在 `.runtime/ai-config.json`，而测试进程只读环境变量，读不到就不跑（而不是偷偷用开发机的 Key） |
+| 1 | `tests/unit/test_employee_layer.py:75` | 空白岗位就是让用户从零定义，不要求预填合同 |
+
+### 6.3 第二次全量（修复后）
+
+**状态：RUNNING** —— 修完 `test_workspace_layout.py` 后重跑，本次期间不执行任何并发操作
+（第一次跑慢的原因就是并发：Git 历史扫描读了 63 MB 对象）。
+
+**在它跑完之前，本报告不声明"全量通过"。** §16 把"最终干净全量测试没有实际执行且被报告成
+通过"列为发布闸门。

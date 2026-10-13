@@ -31,7 +31,18 @@ from app.ai.tools.permissions import (
 
 def test_the_workspace_is_not_on_the_users_desktop():
     workspace = default_workspace()
-    assert workspace == project_root() / ".runtime" / "workspace"
+    # **断言的是"在运行时目录里"，不是".runtime 这个字面名字"。**
+    #
+    # 原来这里写的是 `project_root() / ".runtime" / "workspace"`，把这条测试的意图
+    # （默认位置在产品内、不在桌面）绑成了"运行时目录必须叫 .runtime"。
+    # 测试自己有独立的 runtime（`.runtime/test-runtime`，`conftest.py` 设的，为的是
+    # 不让测试读到开发机的 AI 配置），于是这条断言在**全量运行**里失败，而在分组复跑里
+    # 从不失败 —— 因为分组复跑没跑到它。
+    #
+    # `runtime_root()` 是"这个副本把数据放哪"的唯一答案，两边都问它就不会再分家。
+    from app.core.config import runtime_root
+
+    assert workspace == runtime_root() / "workspace"
     # The project itself may sit on the desktop; what must not happen is the
     # workspace being a sibling of it, created directly on the desktop root.
     assert workspace.parent.name != "AI Workbench Workspace"
