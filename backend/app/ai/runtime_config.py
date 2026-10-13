@@ -102,17 +102,31 @@ def _coerce_owner(owner_id: Any) -> str | None:
     return text or None
 
 
-def _path_for(owner_id: Any) -> Path:
+def _path_for(owner_id: Any, root: Path | None = None) -> Path:
+    """Where one layer's file lives, under the configured runtime root or an explicit one.
+
+    ``root`` exists for the live integration tests. They are the one place that must read
+    the **machine's real** configuration — their whole purpose is "does the real service
+    work with the real credentials" — while the rest of the suite is deliberately pointed
+    at a throwaway runtime directory so it cannot pick up a developer's key. Passing the
+    root explicitly keeps both true without a second copy of the secret anywhere.
+    """
+    if root is None:
+        config_path, config_dir = CONFIG_PATH, CONFIG_DIR
+    else:
+        config_path = root / "ai-config.json"
+        config_dir = root / "ai-config"
+
     owner = _coerce_owner(owner_id)
     if owner is None:
-        return CONFIG_PATH
+        return config_path
     # `owner` is a user UUID, but it arrives as a string from a path/claim, so it is
     # sanitised rather than trusted: a value containing a separator would otherwise be a
     # path traversal into another file.
     safe = "".join(ch for ch in owner if ch.isalnum() or ch in "-_")
     if not safe:
         raise ValidationError("Invalid account id for AI configuration")
-    return CONFIG_DIR / f"{safe}.json"
+    return config_dir / f"{safe}.json"
 
 
 _lock = threading.Lock()
@@ -139,13 +153,16 @@ def _read_file(path: Path) -> dict[str, Any]:
         return {}
 
 
-def load(owner_id: Any = None, *, force: bool = False) -> dict[str, Any]:
+def load(owner_id: Any = None, *, force: bool = False, root: Path | None = None) -> dict[str, Any]:
     """Return one layer of overrides, re-reading the file when it changes.
 
     ``owner_id=None`` means the install-level file. Anything else means that account's
     own file, which is the only one a request ever writes.
+
+    ``root`` reads the layer from an explicit runtime root instead of the configured one.
+    Only the live integration tests use it; see ``_path_for``.
     """
-    path = _path_for(owner_id)
+    path = _path_for(owner_id, root)
     with _lock:
         try:
             mtime = path.stat().st_mtime if path.exists() else -1.0
@@ -532,7 +549,7 @@ def _first(*candidates: tuple[Any, str]) -> tuple[Any, str]:
     return None, "default"
 
 
-def resolve(owner_id: Any = None) -> ResolvedAIConfig:
+def resolve(owner_id: Any = None, *, root: Path | None = None) -> ResolvedAIConfig:
     """Merge this account's overrides over the installation's over the environment.
 
     Order: **account file → installation file → environment → defaults**. The account
@@ -543,10 +560,13 @@ def resolve(owner_id: Any = None) -> ResolvedAIConfig:
     With no owner — a background worker, a CLI, or a request that is not authenticated —
     only the installation layer applies. That is the correct reading of "whose setting is
     this?" when there is no user: nobody's.
+
+    ``root`` resolves against an explicit runtime root. Only the live integration tests
+    pass it; see ``_path_for`` for why they are the exception.
     """
     owner = _coerce_owner(owner_id) or current_owner()
-    account = load(owner) if owner else {}
-    install = load(None)
+    account = load(owner, root=root) if owner else {}
+    install = load(None, root=root)
     runtime = {**install, **account}
     origin = {key: ("account" if key in account else "install") for key in runtime}
     sources: dict[str, str] = {}
