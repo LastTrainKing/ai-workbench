@@ -462,10 +462,18 @@ async def ensure_schema(conn: Any) -> str:
         # ahead of this build), the original refusal stands unchanged.
         reachable = await asyncio.to_thread(revisions_reachable_from_head)
         if recorded not in reachable:
+            # **The message has to end in a command.** It used to say "请人工核对" and stop,
+            # which tells the reader that something is wrong and nothing about what to do —
+            # and this is the branch where the reader has no idea which side is behind.
+            # `alembic upgrade head` is deliberately *not* the advice here: it is what was
+            # just refused, and running it against a database ahead of this build either
+            # does nothing or moves it backwards.
             raise SchemaOutOfDateError(
                 f"数据库结构版本是 {recorded}，迁移脚本的 head 是 {head}，"
                 "且前者不在后者的历史路径上——可能来自另一条分支，或比这份程序更新。"
-                f"请人工核对（当前库：{settings.database_url.split('@')[-1]}）。"
+                f"先跑 `alembic current` 和 `alembic history` 看清它在哪条线上"
+                f"（当前库：{settings.database_url.split('@')[-1]}）；"
+                "如果这份程序才是落后的那一边，升级程序，而不是把数据库降级。"
             )
 
         backup = await asyncio.to_thread(backup_database, f"{recorded}-to-{head}")

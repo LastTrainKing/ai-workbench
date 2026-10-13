@@ -74,7 +74,15 @@ async def test_a_version_mismatch_is_refused_and_nothing_is_stamped(monkeypatch)
     message = str(excinfo.value)
     assert "deadbeefdead" in message, "the recorded revision is not named"
     assert head_revision() in message, "the head revision is not named"
-    assert "alembic upgrade head" in message, "no actionable command is given"
+    # The message has to end in something the reader can run.
+    #
+    # This used to require the literal string `alembic upgrade head`, which was the right
+    # advice when every mismatch took the same path. It is the wrong advice for *this*
+    # branch — the revision is not reachable from head, so `upgrade head` is exactly what
+    # was just refused, and running it against a database ahead of this build either does
+    # nothing or moves it backwards. The requirement is "names a command", and the command
+    # for an unknown revision is the one that shows you where it sits.
+    assert "alembic current" in message, "no actionable command is given"
     assert stamped["count"] == 0, "the guard tried to upgrade instead of refusing"
 
 

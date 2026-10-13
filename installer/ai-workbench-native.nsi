@@ -60,7 +60,7 @@ Unicode true
 !define APP_NAME        "AI Workbench"
 !define APP_EXE         "AI-Workbench-Native.exe"
 !define APP_PUBLISHER   "AI Workbench"
-!define APP_VERSION     "2.4.0"
+!define APP_VERSION     "2.5.0"
 !define UNINST_KEY      "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APP_NAME}"
 !define DATA_DIR_NAME   "AI Workbench Data"
 !define PAYLOAD         "..\build\native-installer-payload"
@@ -79,7 +79,7 @@ SetCompressor /SOLID lzma
 ShowInstDetails show
 ShowUninstDetails show
 
-VIProductVersion "2.4.0.0"
+VIProductVersion "2.5.0.0"
 VIAddVersionKey "ProductName"     "${APP_NAME}"
 VIAddVersionKey "CompanyName"     "${APP_PUBLISHER}"
 VIAddVersionKey "FileDescription" "${APP_NAME} installer"

@@ -229,6 +229,29 @@ def _runtime_facts() -> dict[str, Any]:
     return facts
 
 
+async def _reconcile() -> dict[str, Any]:
+    """Close what the last process left open. **Nothing is re-run.**
+
+    Imported lazily and by name: the reconciliation lives beside the HTTP application's
+    startup because that is where it was written, and importing the whole application
+    module here would pull the web stack into a build that deliberately does not serve
+    anything.
+
+    A failure is reported, not raised. The interface has a database and a model and can
+    be used; refusing to open because housekeeping failed would trade a small unknown
+    for a large one.
+    """
+    try:
+        from app.main import _reconcile_interrupted_runs
+
+        await _reconcile_interrupted_runs()
+        return {"ok": True}
+    except Exception as exc:  # noqa: BLE001 - the message is the report
+        # 不写日志，写进报告 —— 这个模块里每一条失败都是这么处理的，`ensure_ready` 的返回
+        # 值就是它唯一的出口，多一条旁路只会让"发生了什么"有两个地方可查。
+        return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+
+
 async def ensure_ready() -> dict[str, Any]:
     """Run every first-run check and return one structured report.
 
@@ -258,6 +281,17 @@ async def ensure_ready() -> dict[str, Any]:
     report["database"] = await _check_database()
     report["redis"] = await _check_redis()
     report["qdrant"] = await _check_qdrant()
+
+    # 收尾上一次进程留下的中间状态：没结束的运行、卡在「工作中」的员工。
+    #
+    # **这一段此前不存在，而原因是结构性的，不是疏忽。** 对账逻辑写在
+    # `app.main.lifespan` 里 —— 那是 FastAPI 的启动钩子。桌面版故意不起 HTTP 服务
+    # （bridge 直接进程内调服务，见 `bridge.py` 开头），所以 lifespan 在产品里从不执行。
+    # 开发时它跑（那里起 API），测试里它跑，产品里不跑。于是这类修复看起来"已经做了"。
+    #
+    # 放在 `ensure_ready` 里，因为它是每次启动的必经之路，而且它已经在做同一类事情 ——
+    # "把上一次留下的状态和这一次对齐"。
+    report["reconcile"] = await _reconcile()
 
     report["blocked"] = [
         name

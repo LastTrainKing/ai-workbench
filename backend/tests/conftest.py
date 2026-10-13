@@ -31,6 +31,44 @@ os.environ["REDIS_URL"] = "redis://127.0.0.1:6379/1"
 os.environ["QDRANT_COLLECTION"] = "ai_workbench_chunks_test"
 os.environ["AI_PROVIDER"] = "offline"
 os.environ["EMBEDDING_PROVIDER"] = "offline"
+# A test-only runtime directory, and not the developer's.
+#
+# The two lines above set the provider through **environment variables**, which sit below
+# an install-level `ai-config.json` in the resolution order. So on a machine where someone
+# had configured a real key — which the product asks them to do — 16 tests failed, all of
+# them asserting the offline engine, none of them wrong about anything except which
+# machine they were on.
+#
+# The suite already promised, in this file's own docstring, that it "can never touch
+# development data". For the AI configuration it did not keep that promise. Pointing the
+# runtime root somewhere of its own makes the promise structural: there is no file to read,
+# so nothing can outrank the environment.
+os.environ["AI_WORKBENCH_DATA_DIR"] = str(
+    __import__("pathlib").Path(__file__).resolve().parents[2] / ".runtime" / "test-runtime"
+)
+
+# ...and inherit the machine-local secrets it still needs.
+#
+# Qdrant is started with an API key that lives in the runtime directory, so moving the
+# runtime moved the key too and the dependency probe started reporting Qdrant as down. The
+# AI configuration is what the test runtime must *not* inherit; the rest of it is just the
+# machine's runtime, and a test environment that cannot reach Qdrant is testing a different
+# product.
+def _inherit_machine_runtime() -> None:
+    import pathlib
+    import shutil
+
+    machine = pathlib.Path(__file__).resolve().parents[2] / ".runtime"
+    mine = pathlib.Path(os.environ["AI_WORKBENCH_DATA_DIR"])
+    mine.mkdir(parents=True, exist_ok=True)
+    for name in ("qdrant-api-key.txt",):
+        source = machine / name
+        target = mine / name
+        if source.is_file() and not target.exists():
+            shutil.copyfile(source, target)
+
+
+_inherit_machine_runtime()
 os.environ["WORKER_ENABLED"] = "false"
 os.environ["CACHE_ENABLED"] = "true"
 os.environ["LOG_LEVEL"] = "WARNING"
