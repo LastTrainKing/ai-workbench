@@ -12,6 +12,7 @@ from app.api.v1.auth import user_router
 from app.api.v1.context import router as context_router
 from app.api.v1.conversations import router as conversations_router
 from app.api.v1.delivery import router as delivery_router
+from app.api.v1.employees import router as employees_router
 from app.api.v1.health import router as health_router
 from app.api.v1.insights import router as insights_router
 from app.api.v1.knowledge import documents_router, search_router
@@ -34,6 +35,7 @@ api_router.include_router(search_router)
 api_router.include_router(tasks_router)
 api_router.include_router(notes_router)
 api_router.include_router(skills_router)
+api_router.include_router(employees_router)
 api_router.include_router(ai_router)
 api_router.include_router(ai_config_router)
 api_router.include_router(agent_router)

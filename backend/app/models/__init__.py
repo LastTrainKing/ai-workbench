@@ -23,6 +23,7 @@ from app.models.context import (
 )
 from app.models.conversation import Conversation, Message, MessageKind, MessageRole
 from app.models.delivery import BuildRun, BuildStatus, Deliverable
+from app.models.employee import ACTIVE_EMPLOYEE_STATUSES, EMPLOYEE_STATUSES, Employee
 from app.models.job import ActivityEvent, Job
 from app.models.knowledge import (
     Concept,
@@ -71,6 +72,9 @@ __all__ = [  # noqa: RUF022 - grouped by domain layer, which is more readable he
     "ContextSnapshot",
     "Conversation",
     "Deliverable",
+    "Employee",
+    "EMPLOYEE_STATUSES",
+    "ACTIVE_EMPLOYEE_STATUSES",
     "MemoryCandidate",
     "MemoryEntry",
     "Message",
