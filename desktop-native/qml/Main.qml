@@ -24,6 +24,36 @@ ApplicationWindow {
     readonly property real railWidth: Theme.scale(236, uiScale)
 
     property string activePage: "dashboard"
+
+    //: 显示多少。普通模式只给"任务、状态、结果"；专家模式再加上步骤、工具调用、token
+    //: 和延迟。**持久化在磁盘上**（按账号，见 `app/services/ui_preferences.py`）——
+    //: 每次启动都退回默认值，等于每次都要重新选一遍。
+    property bool expertMode: false
+
+    function setExpertMode(value) {
+        shellRoot.expertMode = value
+        var id = "ui-prefs-save-" + Date.now()
+        // 写失败不弹错：下次启动退回默认显示而已，不该打断用户正在做的事。
+        request("显示偏好", id, function () {}, function () {})
+        bridge.saveUiPreferences(id, JSON.stringify({ expert_mode: value }))
+    }
+
+    function _loadUiPreferences() {
+        if (typeof bridge === "undefined" || !bridge) return
+        var id = "ui-prefs-load-" + Date.now()
+        request("显示偏好", id, function (payload) {
+            if (payload && typeof payload.expert_mode === "boolean") {
+                shellRoot.expertMode = payload.expert_mode
+            }
+        }, function () {
+            // 读不到就用默认（普通模式）。一个坏掉的首选项文件不该让界面打不开。
+        })
+        bridge.loadUiPreferences(id)
+    }
+
+    // 启动时读一次。`bridge` 是上下文属性，在 QML 加载之前就设好了，所以这里它在；
+    // 后端可能还没就绪，那一次读会失败，回调里已经咽掉，界面就用默认值。
+    Component.onCompleted: _loadUiPreferences()
     //: The numbered pages, in shortcut order, exposed so a keyboard test can ask the
     //: running shell which page each `Ctrl+N` should open instead of keeping its own copy
     //: of the list. A copy in the test would pass while the application was wrong.
@@ -184,7 +214,9 @@ ApplicationWindow {
             Layout.preferredWidth: shellRoot.railWidth
             activePage: shellRoot.activePage
             inflight: shellRoot.inflight
+            expertMode: shellRoot.expertMode
             onNavigate: function (page) { shellRoot.navigate(page) }
+            onToggleExpertMode: shellRoot.setExpertMode(!shellRoot.expertMode)
         }
 
         Rectangle {

@@ -28,6 +28,22 @@ Flickable {
     property var detail: null
     property string errorText: ""
 
+    //: 显示多少由 shell 决定并持久化，页面只读它。专家模式才给步骤、工具调用、token。
+    readonly property bool expertMode: shell ? shell.expertMode : false
+
+    //: 谁来干这件事。
+    //:
+    //: **这是这一页缺掉的那一环。** 页面原先只有一个目标输入框，运行走的是通用 agent
+    //: 路径 —— 也就是说，员工在名册里存在、能显示、能收窄权限，但从这个页面发起的任务
+    //: 根本没有经过任何一个员工。任务书 §12 的验收是"提出需求 → AI 员工执行"，中间那个
+    //: 词在这里是断的。
+    property var employees: []
+    property string employeeId: ""
+
+    //: 走员工路径时，被派出去的那次构建运行。
+    property string buildRunId: ""
+    property var buildRun: null
+
     readonly property var plan: detail ? (detail.plan ?? []) : []
     readonly property var calls: detail ? (detail.tool_calls ?? []) : []
     readonly property var unresolved: detail ? (detail.unresolved ?? []) : []
@@ -57,8 +73,16 @@ Flickable {
     property bool autoStart: false
     property bool _autoStarted: false
 
+    //: 名册还没回来之前不能自动开跑。
+    //:
+    //: 首页的「交给员工执行」是把目标和 autoStart 一起丢过来的，页面一挂载就会开始 ——
+    //: 而 `loadEmployees` 是异步的，员工 id 那时还是空的。不等这一下，用户按的是"交给
+    //: 员工"，跑起来的却是不带员工的通用路径，而且看起来完全正常。
+    property bool _employeesLoaded: false
+
     function _maybeAutoStart() {
         if (_autoStarted || !autoStart || goal === "" || running) return
+        if (!_employeesLoaded) return
         _autoStarted = true
         start()
     }
@@ -69,6 +93,18 @@ Flickable {
     }
     onAutoStartChanged: _maybeAutoStart()
 
+    Component.onCompleted: _loadRosterOnce()
+    onShellChanged: _loadRosterOnce()
+
+    // 名册只在拿到 shell 之后拉一次。跟本页其他数据不同，这个是在挂载时就发出去的 ——
+    // 而 `shell` 是外部注入的，没有它 `request` 就是一个未定义的调用。
+    property bool _rosterLoaded: false
+    function _loadRosterOnce() {
+        if (_rosterLoaded || !shell) return
+        _rosterLoaded = true
+        loadEmployees()
+    }
+
     function start() {
         var text = goal.trim()
         if (text === "") {
@@ -77,6 +113,14 @@ Flickable {
             return
         }
         if (running) return
+
+        // 选了员工就走员工路径：任务带着员工身份下发，权限按那份合同收窄，产出登记成
+        // 交付物。没选（一个员工都没有）就走通用路径 —— 那条路一直都在，也仍然可用。
+        if (employeeId !== "") {
+            startWithEmployee(text)
+            return
+        }
+
         running = true
         progressText = "正在启动…"
         outcome = null
@@ -96,6 +140,116 @@ Flickable {
             page.loadDetail(payload.run_id)
         })
         bridge.startAgentRun(id, text)
+    }
+
+    // ------------------------------------------------------------------ 员工 --
+    function loadEmployees() {
+        var id = "agent-employees-" + Date.now()
+        shell.request("我的员工", id, function (payload) {
+            var list = (payload && payload.items) ? payload.items : []
+            // 只留能接活的。把"已归档"和"上次失败"排进可选列表，等于让用户选一个不会
+            // 干活的员工，然后纳闷为什么没动静。
+            var usable = []
+            for (var i = 0; i < list.length; i++) {
+                if (Theme.employeeIsActive(list[i].status)) usable.push(list[i])
+            }
+            page.employees = usable
+            if (page.employeeId === "" && usable.length > 0) page.employeeId = usable[0].id
+            page._employeesLoaded = true
+            page._maybeAutoStart()
+        }, function () {
+            page.employees = []
+            // 读不到名册也要放行自动开跑：走通用路径总比按钮按下去什么都不发生好。
+            page._employeesLoaded = true
+            page._maybeAutoStart()
+        })
+        bridge.loadEmployees(id)
+    }
+
+    function employeeName() {
+        for (var i = 0; i < employees.length; i++) {
+            if (employees[i].id === employeeId) return employees[i].name
+        }
+        return ""
+    }
+
+    function buildRunWord(status) {
+        switch (status) {
+        case "DRAFT":     return "还没开始"
+        case "PLANNING":  return "正在制定方案"
+        case "READY":     return "方案就绪"
+        case "EXECUTING": return "正在执行"
+        case "VERIFYING": return "正在验证结果"
+        case "WAITING_USER": return "等你确认"
+        case "COMPLETED": return "已完成"
+        case "PARTIAL":   return "完成了一部分"
+        case "FAILED":    return "失败"
+        case "CANCELLED": return "已取消"
+        case "LIMIT_REACHED": return "到了资源上限"
+        default:          return status || ""
+        }
+    }
+
+    function startWithEmployee(text) {
+        running = true
+        progressText = "已交给" + employeeName() + "…"
+        outcome = null
+        detail = null
+        errorText = ""
+        buildRunId = ""
+        buildRun = null
+
+        var id = "agent-build-" + Date.now()
+        shell.request("交给员工", id, function (payload) {
+            page.buildRunId = (payload && payload.build_run_id) ? payload.build_run_id : ""
+            if (page.buildRunId === "") {
+                page.running = false
+                page.progressText = ""
+                page.errorText = "没能启动这次运行。"
+                return
+            }
+            // 交给后台了。进度靠轮询，不靠这一页等 —— 员工可能跑几分钟，而窗口不该
+            // 因此卡住或者假装知道下一秒会发生什么。
+            pollTimer.start()
+        }, function (title) {
+            page.running = false
+            page.progressText = ""
+            page.errorText = title
+        })
+        bridge.startBuildRun(id, text, employeeId)
+    }
+
+    function pollBuildRun() {
+        if (buildRunId === "") return
+        var id = "agent-poll-" + Date.now()
+        shell.request("运行进度", id, function (payload) {
+            var list = (payload && payload.items) ? payload.items : []
+            var found = null
+            for (var i = 0; i < list.length; i++) {
+                if (list[i].id === page.buildRunId) found = list[i]
+            }
+            if (!found) return
+            page.buildRun = found
+            page.progressText = page.buildRunWord(found.status)
+                + (found.steps_total > 0
+                   ? "　" + found.steps_done + "/" + found.steps_total + " 步" : "")
+            if (["COMPLETED", "PARTIAL", "FAILED", "CANCELLED", "LIMIT_REACHED"]
+                    .indexOf(found.status) >= 0) {
+                pollTimer.stop()
+                page.running = false
+                page.progressText = ""
+                shell.toast(found.status === "COMPLETED" ? "info" : "warn",
+                            "结束：" + page.buildRunWord(found.status))
+            }
+        })
+        bridge.loadBuildRuns(id, "10")
+    }
+
+    Timer {
+        id: pollTimer
+        interval: 4000
+        repeat: true
+        onTriggered: page.pollBuildRun()
     }
 
     function loadDetail(runId) {
@@ -193,6 +347,58 @@ Flickable {
                 }
             }
 
+            // 谁来干。名册为空时这一行不出现 —— 一个没有选项的选择器只是在占地方。
+            RowLayout {
+                Layout.fillWidth: true
+                visible: page.employees.length > 0
+                spacing: Theme.space2
+
+                Text {
+                    text: "交给"
+                    color: Theme.textFaint
+                    font.pixelSize: Theme.fontSmall
+                }
+                Flow {
+                    Layout.fillWidth: true
+                    spacing: Theme.space2
+
+                    Repeater {
+                        model: page.employees
+                        delegate: Rectangle {
+                            required property var modelData
+
+                            height: 26
+                            width: pickLabel.implicitWidth + Theme.space3 * 2
+                            radius: 13
+                            color: page.employeeId === modelData.id
+                                   ? Theme.bgCardHover
+                                   : (pickMouse.containsMouse ? Theme.bgCard : "transparent")
+                            border.width: 1
+                            border.color: page.employeeId === modelData.id
+                                          ? Theme.accent : Theme.divider
+
+                            Text {
+                                id: pickLabel
+                                anchors.centerIn: parent
+                                text: modelData.name
+                                color: page.employeeId === modelData.id
+                                       ? Theme.text : Theme.textMuted
+                                font.pixelSize: Theme.fontSmall
+                            }
+                            MouseArea {
+                                id: pickMouse
+                                anchors.fill: parent
+                                hoverEnabled: true
+                                cursorShape: Qt.PointingHandCursor
+                                Accessible.role: Accessible.RadioButton
+                                Accessible.name: "交给 " + modelData.name
+                                onClicked: page.employeeId = modelData.id
+                            }
+                        }
+                    }
+                }
+            }
+
             RowLayout {
                 Layout.fillWidth: true
                 spacing: 10
@@ -229,6 +435,65 @@ Flickable {
             }
         }
 
+        // ------------------------------------------------- 员工在做（§5 的任务/员工/状态）--
+        Card {
+            Layout.fillWidth: true
+            visible: page.buildRun !== null
+            title: "员工在做"
+            subtitle: page.employeeName() === "" ? "" : ("交给 " + page.employeeName())
+
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 10
+                Rectangle {
+                    width: 10; height: 10; radius: 5
+                    color: page.buildRun && page.buildRun.status === "COMPLETED"
+                           ? Theme.success
+                           : page.buildRun && page.buildRun.status === "FAILED"
+                             ? Theme.danger : Theme.accent
+                }
+                Text {
+                    text: page.buildRun ? page.buildRunWord(page.buildRun.status) : ""
+                    color: Theme.text
+                    font.pixelSize: 15
+                    font.bold: true
+                }
+                Text {
+                    Layout.fillWidth: true
+                    text: page.buildRun && page.buildRun.steps_total > 0
+                          ? (page.buildRun.steps_done + "/" + page.buildRun.steps_total + " 步")
+                          : ""
+                    color: Theme.textMuted
+                    font.pixelSize: 12
+                }
+            }
+
+            Text {
+                Layout.fillWidth: true
+                visible: page.buildRun !== null && (page.buildRun.result_summary ?? "") !== ""
+                wrapMode: Text.WordWrap
+                color: Theme.textMuted
+                font.pixelSize: 12
+                text: page.buildRun ? (page.buildRun.result_summary ?? "") : ""
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: Theme.space2
+                Text {
+                    Layout.fillWidth: true
+                    text: "产出文件在「交付物」里，可以直接打开。"
+                    color: Theme.textFaint
+                    font.pixelSize: Theme.fontTiny
+                }
+                Button {
+                    text: "查看成果"
+                    variant: "secondary"
+                    onClicked: page.shell.navigate("deliverables")
+                }
+            }
+        }
+
         // ------------------------------------------------------------------ 运行状态 --
         Card {
             Layout.fillWidth: true
@@ -250,9 +515,21 @@ Flickable {
                 }
                 Text {
                     Layout.fillWidth: true
+                    // 结束原因和步数是专家模式的东西。普通模式下这一行空着，由下面那句
+                    // 人话接手 —— 留着它只会让"已完成"旁边挂一串 stopped_reason。
+                    visible: page.expertMode
                     text: page.outcome
                           ? ("结束原因：" + page.outcome.stopped_reason
                              + "　用了 " + page.outcome.steps + " 步")
+                          : ""
+                    color: Theme.textMuted
+                    font.pixelSize: 12
+                }
+                Text {
+                    Layout.fillWidth: true
+                    visible: !page.expertMode
+                    text: page.outcome && page.outcome.status === "SUCCEEDED"
+                          ? "它把这件事做完了。产出在下面的「产物」里。"
                           : ""
                     color: Theme.textMuted
                     font.pixelSize: 12
@@ -271,10 +548,15 @@ Flickable {
         }
 
         // ------------------------------------------------------- 规划 / 步骤 / 结果 --
+        //
+        // **专家模式专属。** 这是任务书 §7 的分界线：普通模式给"任务、状态、结果"，
+        // 专家模式再加上步骤、工具调用、token 和延迟。把它整块藏起来，而不是让它变淡，
+        // 是因为读它的人本来就会去开专家模式 —— 一个半透明的技术面板只会让普通用户
+        // 以为自己漏看了什么。
         RowLayout {
             Layout.fillWidth: true
             spacing: 16
-            visible: page.detail !== null
+            visible: page.detail !== null && page.expertMode
 
             ColumnLayout {
                 Layout.fillWidth: true

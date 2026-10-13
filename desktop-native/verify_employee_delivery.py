@@ -34,14 +34,14 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "desktop-native"))
 
-from PySide6.QtCore import QCoreApplication  # noqa: E402
+from PySide6.QtCore import QCoreApplication
 
 app = QCoreApplication(sys.argv[:1] + ["delivery-check"])
 
-from awbnative import resources  # noqa: E402
+from awbnative import resources
 
 resources.configure()
-from awbnative.bridge import ServiceBridge  # noqa: E402
+from awbnative.bridge import ServiceBridge
 
 RESULTS: list[tuple[str, bool, str]] = []
 

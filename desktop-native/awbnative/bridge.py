@@ -2240,6 +2240,36 @@ class ServiceBridge(QObject):
 
         self._submit(request_id, work)
 
+    # ------------------------------------------------------- preferences --
+    #
+    # 显示偏好。**走文件，不走数据库**：它是"这个人想看到多少"，不是应用数据，而且
+    # 每次切换都要写一次 —— 一条每次点开关都产生一行审计记录的路径，会把运行记录淹掉。
+    @Slot(str)
+    def loadUiPreferences(self, request_id: str) -> None:
+        async def work() -> dict[str, Any]:
+            from app.services import ui_preferences
+
+            owner = await self._owner()
+            return ui_preferences.load(owner)
+
+        self._submit(request_id, work)
+
+    @Slot(str, str)
+    def saveUiPreferences(self, request_id: str, payload: str) -> None:
+        async def work() -> dict[str, Any]:
+            from app.services import ui_preferences
+
+            owner = await self._owner()
+            try:
+                values = json.loads(payload or "{}")
+            except ValueError as exc:
+                raise ValueError(f"偏好不是合法的 JSON：{exc}") from exc
+            if not isinstance(values, dict):
+                raise TypeError("偏好必须是一个对象")
+            return ui_preferences.save(owner, values)
+
+        self._submit(request_id, work)
+
     # ------------------------------------------------------- confirmations --
     #
     # `ConfirmationBroker` already parks a high-risk tool call and waits. Without a screen

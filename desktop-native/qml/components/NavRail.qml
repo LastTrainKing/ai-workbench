@@ -23,7 +23,10 @@ Rectangle {
 
     property string activePage: "dashboard"
     property int inflight: 0
+    //: 显示多少。由 shell 持有并持久化，这里只负责画和发信号。
+    property bool expertMode: false
     signal navigate(string page)
+    signal toggleExpertMode()
 
     color: Theme.bgElevated
 
@@ -78,7 +81,7 @@ Rectangle {
         anchors.left: parent.left
         anchors.right: parent.right
         anchors.top: parent.top
-        anchors.bottom: railStatus.top
+        anchors.bottom: railMode.top
         anchors.bottomMargin: Theme.space2
         contentWidth: width
         contentHeight: railColumn.implicitHeight + Theme.space4 * 2
@@ -333,6 +336,58 @@ Rectangle {
             GradientStop { position: 1.0; color: Theme.bg }
         }
         Accessible.ignored: true
+    }
+
+    // 显示模式。**两个都写出来**，而不是一个开关：开关只说明"现在是哪边"，用户得先
+    // 知道另一边叫什么，才能决定要不要按。两种模式各有名字，就把名字给出来。
+    RowLayout {
+        id: railMode
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.bottom: railStatus.top
+        anchors.leftMargin: Theme.space4
+        anchors.rightMargin: Theme.space4
+        anchors.bottomMargin: Theme.space2
+        spacing: Theme.space1
+
+        Repeater {
+            model: [
+                { label: "普通", value: false, hint: "只看任务和结果" },
+                { label: "专家", value: true, hint: "加上步骤、工具调用、token 和延迟" }
+            ]
+            delegate: Rectangle {
+                required property var modelData
+
+                Layout.fillWidth: true
+                implicitHeight: 24
+                radius: Theme.radiusSm
+                color: rail.expertMode === modelData.value
+                       ? Theme.bgCardHover
+                       : (modeMouse.containsMouse ? Theme.bgCard : "transparent")
+                border.width: 1
+                border.color: rail.expertMode === modelData.value
+                              ? Theme.accent : Theme.divider
+
+                Text {
+                    anchors.centerIn: parent
+                    text: modelData.label
+                    color: rail.expertMode === modelData.value ? Theme.text : Theme.textFaint
+                    font.pixelSize: Theme.fontTiny
+                }
+                MouseArea {
+                    id: modeMouse
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    Accessible.role: Accessible.RadioButton
+                    Accessible.name: modelData.label + "模式：" + modelData.hint
+                    onClicked: {
+                        // 只在真的换了才发信号，否则点当前那一档会白白写一次磁盘。
+                        if (rail.expertMode !== modelData.value) rail.toggleExpertMode()
+                    }
+                }
+            }
+        }
     }
 
     // Honest state, not a spinner that means nothing: how many calls are outstanding.
