@@ -38,12 +38,13 @@ run and there is no history to be consistent with.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Any
 
 from sqlalchemy import inspect, text
 
-from app.core.config import settings
+from app.core.config import PROJECT_ROOT, runtime_root, settings
 from app.core.logging import get_logger
 
 logger = get_logger(__name__)
@@ -99,16 +100,103 @@ async def table_names(conn: Any) -> set[str]:
     return await conn.run_sync(lambda sync_conn: set(inspect(sync_conn).get_table_names()))
 
 
-def _upgrade_to_head() -> None:
-    """Run the migrations. Blocking, so it is called from a worker thread."""
+def _alembic_config() -> Any:
     from alembic.config import Config
-
-    from alembic import command
 
     config = Config(str(ALEMBIC_INI))
     config.set_main_option("script_location", str(BACKEND_ROOT / "alembic"))
     config.set_main_option("sqlalchemy.url", settings.database_url)
-    command.upgrade(config, "head")
+    return config
+
+
+def _upgrade_to_head() -> None:
+    """Run the migrations. Blocking, so it is called from a worker thread."""
+    from alembic import command
+
+    command.upgrade(_alembic_config(), "head")
+
+
+def revisions_reachable_from_head() -> set[str]:
+    """Every revision on the path from head down to base.
+
+    Used to tell a **forward** upgrade — the database is behind, and running the migrations
+    moves it forward — from a database on another branch or ahead of this build. The second
+    must still be refused: `upgrade head` against it would either do nothing or move it
+    backwards.
+    """
+    from alembic.script import ScriptDirectory
+
+    script = ScriptDirectory.from_config(_alembic_config())
+    return {revision.revision for revision in script.walk_revisions()}
+
+
+def find_pg_dump() -> Path | None:
+    """`pg_dump` from this copy's own runtime, or from PATH. None if there is neither."""
+    import shutil
+
+    candidates = [
+        # The frozen layout: `_internal` sits beside `vendor/`, and PROJECT_ROOT is the
+        # directory holding both.
+        PROJECT_ROOT / "vendor" / "runtime" / "pgsql" / "pgsql" / "bin" / "pg_dump.exe",
+        PROJECT_ROOT / "vendor" / "runtime" / "pgsql" / "bin" / "pg_dump.exe",
+        PROJECT_ROOT / "vendor" / "pgsql" / "pgsql" / "bin" / "pg_dump.exe",
+    ]
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+    found = shutil.which("pg_dump")
+    return Path(found) if found else None
+
+
+def backup_database(reason: str) -> Path:
+    """Take a restorable copy of the database **before** changing its structure.
+
+    Before, not after. A migration that goes wrong and a migration whose backup was taken
+    afterwards are the same event with different amounts of recovery available, and the
+    point of a local-first product is that the copy is the user's.
+
+    Raises when no `pg_dump` can be found rather than proceeding without a copy: an app
+    that will not start is recoverable, a database migrated with no way back is not.
+    """
+    import subprocess
+    import time
+    from urllib.parse import urlparse
+
+    binary = find_pg_dump()
+    if binary is None:
+        raise SchemaOutOfDateError(
+            "需要先升级数据库结构，但找不到 pg_dump，无法在改动前留下可恢复的副本。"
+            "请确认安装目录下 vendor 中的 pgsql 带有 pg_dump，或把它加入 PATH，然后重新启动。"
+        )
+
+    target_dir = runtime_root() / "backups"
+    target_dir.mkdir(parents=True, exist_ok=True)
+    target = target_dir / f"schema-{reason}-{time.strftime('%Y%m%d-%H%M%S')}.dump"
+
+    parsed = urlparse(settings.database_url.replace("+asyncpg", ""))
+    completed = subprocess.run(
+        [
+            str(binary),
+            "-h", parsed.hostname or "127.0.0.1",
+            "-p", str(parsed.port or 5432),
+            "-U", parsed.username or "aiworkbench",
+            "-d", (parsed.path or "/aiworkbench").lstrip("/"),
+            "-Fc",
+            "-f", str(target),
+        ],
+        capture_output=True,
+        text=True,
+        env={**os.environ, "PGPASSWORD": parsed.password or ""},
+        timeout=600,
+        check=False,
+    )
+    if completed.returncode != 0 or not target.is_file() or target.stat().st_size == 0:
+        raise SchemaOutOfDateError(
+            f"备份数据库失败（pg_dump 退出码 {completed.returncode}），因此没有升级结构。"
+            f"数据库保持原样。诊断信息：{(completed.stderr or '').strip()[:300]}"
+        )
+    logger.info("schema_backup_taken", extra={"path": str(target), "bytes": target.stat().st_size})
+    return target
 
 
 #: Names PostgreSQL treats as synonyms. Compared after normalisation, because the two sides
@@ -358,11 +446,44 @@ async def ensure_schema(conn: Any) -> str:
         return "adopted"
 
     if recorded != head:
-        raise SchemaOutOfDateError(
-            f"数据库结构版本是 {recorded}，迁移脚本的 head 是 {head}，两者不一致。"
-            f"请先执行 `alembic upgrade head`（当前库：{settings.database_url.split('@')[-1]}）。"
-            "启动不会自动升级，也不会把版本号直接改成 head —— 那样只会让记录和实际结构继续分家。"
+        # **A forward upgrade is not the thing this used to refuse.**
+        #
+        # The refusal exists so the recorded revision and the actual structure cannot drift
+        # apart — stamping `head` onto a database that was never migrated is exactly the
+        # lie it prevents. But it also caught the ordinary case: a release that adds a
+        # migration, installed over a database one revision behind. A desktop user has no
+        # terminal to run `alembic upgrade head` in, and the first release to add a
+        # migration left them with an app that refused to open its own data. Measured:
+        # after installing 2.4.0 over 2.3.0, `alembic_version` still said `3f1c9d7a52be`
+        # and the new table did not exist.
+        #
+        # So: if the recorded revision is on the path to head, run the real migrations —
+        # with a restorable copy taken first. If it is not (another branch, or a database
+        # ahead of this build), the original refusal stands unchanged.
+        reachable = await asyncio.to_thread(revisions_reachable_from_head)
+        if recorded not in reachable:
+            raise SchemaOutOfDateError(
+                f"数据库结构版本是 {recorded}，迁移脚本的 head 是 {head}，"
+                "且前者不在后者的历史路径上——可能来自另一条分支，或比这份程序更新。"
+                f"请人工核对（当前库：{settings.database_url.split('@')[-1]}）。"
+            )
+
+        backup = await asyncio.to_thread(backup_database, f"{recorded}-to-{head}")
+        logger.info(
+            "schema_forward_upgrade",
+            extra={"from_revision": recorded, "to_revision": head, "backup": str(backup)},
         )
+        await asyncio.to_thread(_upgrade_to_head)
+
+        # Read it back rather than assume. If the upgrade did not land, the caller hears
+        # about it now rather than on the first query that needs the new table.
+        after = await current_revision(conn)
+        if after != head:
+            raise SchemaOutOfDateError(
+                f"迁移执行后版本号仍是 {after}，期望 {head}。"
+                f"数据库已备份到 {backup}，请人工核对。"
+            )
+        return "upgraded"
 
     logger.info("schema_verified", extra={"revision": recorded, "tables": len(user_tables)})
     return "verified"
