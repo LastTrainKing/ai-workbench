@@ -281,6 +281,14 @@ class AgentPolicy:
     max_files_modified: int = 50
     max_download_bytes: int = 200_000_000
     confirmation_timeout_seconds: int = 180
+    #: The tools this policy admits, or `None` for "every tool the registries have".
+    #:
+    #: Set from an employee's `skills` list. It lives on the policy rather than in the
+    #: registry because the registry decides what the *model is offered* and this decides
+    #: what the *executor permits* — and the second is the one that has to hold when the
+    #: model names a tool nobody offered it. Filtering the registry alone would leave the
+    #: check one hallucination away from being bypassed.
+    allowed_tools: frozenset[str] | None = None
 
     @classmethod
     def from_settings(cls, **overrides: Any) -> AgentPolicy:
@@ -851,6 +859,24 @@ class PermissionManager:
         required_level = PermissionLevel(int(getattr(spec, "permission_level", 1)))
         risk = RiskLevel(str(getattr(spec, "risk_level", "low")))
         name = getattr(spec, "name", "unknown")
+
+        # First, before the level check: an employee that does not have this tool does not
+        # get it by raising its own permission level. Denied rather than confirmed —
+        # there is nothing to approve here, the tool is simply not in this employee's
+        # contract, and offering a confirmation would turn a scope boundary into a
+        # prompt the user learns to click through.
+        if self.policy.allowed_tools is not None and name not in self.policy.allowed_tools:
+            return _deny(
+                f"'{name}' is not one of this employee's tools",
+                risk=risk,
+                operation=name,
+                target=str(arguments)[:200],
+                detail=(
+                    f"This employee has {len(self.policy.allowed_tools)} tools; "
+                    f"'{name}' is not among them."
+                ),
+                impact="Add it to the employee's skills in 我的员工, or ask a different employee.",
+            )
 
         if self.policy.mode is AgentMode.ASSIST and getattr(spec, "mutates_state", False):
             return _deny(

@@ -23,6 +23,7 @@ from app.ai.agent.autonomous import AutonomousAgent
 from app.ai.agent.control import RunCancelledError, RunController, get_run_registry
 from app.ai.agent.plan import RunState
 from app.ai.agent.snapshot import get_snapshot_manager
+from app.ai.employees.policy import narrow_policy
 from app.ai.providers.factory import build_llm_provider
 from app.ai.tools.audit import make_audit_sink
 from app.ai.tools.confirmation import get_broker
@@ -49,11 +50,38 @@ def _build_agent(
     controller: RunController,
     deliverable_kind: str = "",
     ai_run_id: uuid.UUID | None = None,
+    employee: Any | None = None,
 ) -> AutonomousAgent:
-    """Assemble an autonomous agent for one run."""
+    """Assemble an autonomous agent for one run.
+
+    `employee` is optional, and that is deliberate: a run started without one behaves
+    exactly as it did before this parameter existed. When there *is* one, its contract
+    narrows the run — the same narrowing the 我的员工 page displays, applied to the thing
+    that actually executes rather than to a label.
+    """
     # Scoped to the owner. A shared policy file meant one account's permission level
     # applied to every account on the machine.
     policy = build_policy(owner_id)
+
+    if employee is not None:
+        # `narrow_policy` cannot widen, so an employee whose stored profile asks for more
+        # than the user granted still gets the user's answer. See
+        # `app/ai/employees/policy.py` and its exhaustive test.
+        policy = narrow_policy(
+            policy,
+            {
+                **(employee.permission_profile or {}),
+                "skills": list(employee.skills or []),
+            },
+        )
+        logger.info(
+            "run_narrowed_by_employee",
+            extra={
+                "employee": employee.name,
+                "level": int(policy.level),
+                "tools": len(policy.allowed_tools) if policy.allowed_tools is not None else -1,
+            },
+        )
     # The workspace is created with its layout, not just as an empty directory:
     # the shape is part of the contract, so a run never has to invent a place to
     # put things and never has to wonder where a previous run put them.
@@ -68,7 +96,14 @@ def _build_agent(
         max_runtime_seconds=policy.max_runtime_seconds,
     )
     executor = ToolExecutor(policy, audit=make_audit_sink(session))
-    registry = UnifiedToolRegistry(business, computer, executor, confirm=get_broker().request, limits=limits)
+    registry = UnifiedToolRegistry(
+        business,
+        computer,
+        executor,
+        confirm=get_broker().request,
+        limits=limits,
+        allowed=policy.allowed_tools,
+    )
     llm, _ = build_llm_provider()
 
     return AutonomousAgent(
@@ -88,6 +123,43 @@ def _build_agent(
     )
 
 
+async def _load_employee(
+    session: AsyncSession, owner_id: uuid.UUID, employee_id: uuid.UUID | None
+) -> Any | None:
+    """The employee this run belongs to, or None.
+
+    Scoped by owner on the same principle as every other read: the id arrives from the
+    build run's scope, and a run must not be able to borrow another account's employee
+    and inherit its contract. A miss returns None rather than raising — a run whose
+    employee was deleted should still be able to finish under the user's own policy,
+    which is the narrower-of-the-two answer anyway only if the user's is narrower, so
+    the caller logs it.
+    """
+    if employee_id is None:
+        return None
+    from app.models.employee import Employee
+
+    employee = await session.get(Employee, employee_id)
+    if employee is None or employee.user_id != owner_id:
+        logger.warning(
+            "run_employee_not_found",
+            extra={"employee_id": str(employee_id), "owner": str(owner_id)},
+        )
+        return None
+    return employee
+
+
+async def _set_employee_status(session: AsyncSession, employee: Any, status: str) -> None:
+    """Move the employee to a status and commit it.
+
+    Committed on its own so the roster reflects it immediately: the run's own session
+    holds a long transaction, and a status change that only becomes visible when the
+    run finishes is not a status change.
+    """
+    employee.status = status
+    await session.commit()
+
+
 async def _execute_run(
     run_id: str,
     db_run_id: uuid.UUID,
@@ -97,12 +169,30 @@ async def _execute_run(
     project_id: uuid.UUID | None,
     controller: RunController,
     deliverable_kind: str = "",
+    employee_id: uuid.UUID | None = None,
 ) -> None:
     """The background half: run the agent and persist the outcome."""
     try:
         async with session_scope() as session:
-            agent = _build_agent(session, owner_id, controller, deliverable_kind, db_run_id)
+            employee = await _load_employee(session, owner_id, employee_id)
+            if employee is not None:
+                # Visible while it works. A roster that says 空闲 while the employee is
+                # mid-task is the same class of lie as a progress bar that never moves.
+                await _set_employee_status(session, employee, "working")
+
+            agent = _build_agent(
+                session, owner_id, controller, deliverable_kind, db_run_id, employee
+            )
             result = await agent.run(goal, context=context)
+
+            if employee is not None:
+                # `failed` when the run ended badly, so the roster shows the one state a
+                # user can act on. Anything else goes back to idle.
+                await _set_employee_status(
+                    session,
+                    employee,
+                    "idle" if result.state.value == "COMPLETED" else "failed",
+                )
 
             # Persist the plan, the event stream and the outcome onto the AI run,
             # so the run can be replayed after the process restarts.
@@ -223,6 +313,7 @@ async def start_run(
     context: str = "",
     project_id: uuid.UUID | None = None,
     deliverable_kind: str = "",
+    employee_id: uuid.UUID | None = None,
 ) -> dict[str, Any]:
     """Register the run, create the recorder, and launch the background task."""
     policy = build_policy(owner_id)
@@ -246,7 +337,14 @@ async def start_run(
         model=getattr(llm, "model", "") or llm_info.model,
         prompt_name="agent_planner",
         prompt_version=1,
-        request_payload={"goal": goal, "mode": "autonomous", "level": int(policy.level)},
+        request_payload={
+            "goal": goal,
+            "mode": "autonomous",
+            "level": int(policy.level),
+            # So the run history can answer "who did this" — which is the first thing
+            # anyone asks when a run produces something unexpected.
+            "employee_id": str(employee_id) if employee_id else None,
+        },
         project_id=project_id,
     )
     await recorder.attach_agent_run(goal=goal, max_steps=policy.max_tool_calls)
@@ -264,6 +362,7 @@ async def start_run(
             project_id,
             controller,
             deliverable_kind,
+            employee_id,
         )
     )
     _tasks[recorder.run_id] = task

@@ -289,6 +289,9 @@ def test_describe_narrowing_names_what_changed() -> None:
     narrowed = narrow_policy(base, {"level": 1, "max_tool_calls": 10})
     changes = describe_narrowing(base, narrowed)
     assert "level" in changes
+    # Both forms: the label for the API, the number for a window that has to translate it.
+    assert changes["level"]["to_value"] == 1
+    assert changes["level"]["to"] == "Workspace"
     assert changes["max_tool_calls"] == {"from": 100, "to": 10}
 
 
@@ -314,3 +317,109 @@ def test_whitelist_admits_only_what_it_names() -> None:
     profile = {"skills": ["file_read", "knowledge_search"]}
     assert tool_allowed(profile, "file_read") is True
     assert tool_allowed(profile, "file_delete") is False
+
+# --------------------------------------------------------------------------- #
+# the whitelist reaches the executor, not just the display
+# --------------------------------------------------------------------------- #
+def test_narrow_policy_carries_the_tool_whitelist() -> None:
+    base = _base_policy()
+    assert base.allowed_tools is None
+    narrowed = narrow_policy(base, {"skills": ["file_read", "file_write"]})
+    assert narrowed.allowed_tools == frozenset({"file_read", "file_write"})
+
+
+def test_an_employee_can_only_remove_tools_from_the_users_set() -> None:
+    """Intersection, not replacement: a user-level whitelist is a floor, not a suggestion."""
+    from dataclasses import replace
+
+    base = replace(_base_policy(), allowed_tools=frozenset({"file_read", "file_write"}))
+    narrowed = narrow_policy(base, {"skills": ["file_read", "run_build"]})
+    assert narrowed.allowed_tools == frozenset({"file_read"})
+
+
+def test_empty_skills_is_a_denial_not_an_omission() -> None:
+    narrowed = narrow_policy(_base_policy(), {"skills": []})
+    assert narrowed.allowed_tools == frozenset()
+
+
+def test_no_skills_key_inherits() -> None:
+    assert narrow_policy(_base_policy(), {}).allowed_tools is None
+
+
+class _Spec:
+    """The minimum a spec needs for `check_tool` to have an opinion."""
+
+    def __init__(self, name: str, *, level: int = 0, risk: str = "low") -> None:
+        self.name = name
+        self.permission_level = level
+        self.risk_level = risk
+        self.mutates_state = False
+        self.requires_confirmation = False
+
+
+def test_the_executor_denies_a_tool_outside_the_whitelist() -> None:
+    """The check that holds when the model names a tool nobody offered it.
+
+    Filtering the registry is what the model *sees*; this is what it may *do*. Without
+    this, one hallucinated tool name walks straight past the contract.
+    """
+    from dataclasses import replace
+
+    from app.ai.tools.permissions import Decision, PermissionManager
+
+    policy = replace(_base_policy(), allowed_tools=frozenset({"file_read"}))
+    manager = PermissionManager(policy)
+
+    allowed = manager.check_tool(_Spec("file_read"))
+    assert allowed.decision is not Decision.DENY
+
+    denied = manager.check_tool(_Spec("run_build", level=2, risk="high"))
+    assert denied.decision is Decision.DENY
+    assert "not one of this employee's tools" in denied.reason
+
+
+def test_a_denied_tool_cannot_be_reached_by_raising_the_level() -> None:
+    """The reason the whitelist is checked before the level, not after."""
+    from dataclasses import replace
+
+    from app.ai.tools.permissions import Decision, PermissionLevel, PermissionManager
+
+    policy = replace(
+        _base_policy(),  # already FULL_CONTROL
+        allowed_tools=frozenset({"file_read"}),
+    )
+    assert policy.level is PermissionLevel.FULL_CONTROL
+    assert PermissionManager(policy).check_tool(_Spec("terminal_exec", level=3)).decision is (
+        Decision.DENY
+    )
+
+
+def test_a_policy_without_a_whitelist_admits_everything() -> None:
+    from app.ai.tools.permissions import Decision, PermissionManager
+
+    manager = PermissionManager(_base_policy())
+    assert manager.check_tool(_Spec("file_read")).decision is not Decision.DENY
+
+
+def test_the_registry_offers_only_the_whitelisted_tools() -> None:
+    """What the model sees, as opposed to what it may do."""
+    from app.ai.agent.tools import build_default_registry
+    from app.ai.tools.unified import UnifiedToolRegistry
+
+    business = build_default_registry()
+    everything = UnifiedToolRegistry(business)
+    assert len(everything.names()) == len(business.names())
+
+    narrowed = UnifiedToolRegistry(business, allowed=frozenset({"knowledge_search"}))
+    assert narrowed.names() == ["knowledge_search"]
+    assert [spec.name for spec in narrowed.specs()] == ["knowledge_search"]
+    assert narrowed.get_spec("task_create") is None
+
+
+def test_an_empty_whitelist_offers_nothing() -> None:
+    from app.ai.agent.tools import build_default_registry
+    from app.ai.tools.unified import UnifiedToolRegistry
+
+    registry = UnifiedToolRegistry(build_default_registry(), allowed=frozenset())
+    assert registry.names() == []
+    assert registry.specs() == []

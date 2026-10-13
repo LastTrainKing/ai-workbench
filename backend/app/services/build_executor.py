@@ -116,6 +116,22 @@ async def execute_build_run(
     # The goal is passed through unchanged. The plan is a translation of the user's
     # words; rewriting them here would mean the run works on something the user did
     # not ask for.
+    # Which employee this run belongs to, if the caller named one. It arrives in the
+    # run's `scope` because that is where "what this run is about" is recorded, and it
+    # is what narrows the policy the agent runs under — see
+    # `autonomous_service._build_agent`. Absent, the run uses the user's own policy,
+    # which is exactly what every run did before employees existed.
+    employee_id: uuid.UUID | None = None
+    raw_employee = (run.scope or {}).get("employee_id")
+    if raw_employee:
+        try:
+            employee_id = uuid.UUID(str(raw_employee))
+        except (TypeError, ValueError):
+            logger.warning(
+                "build_run_employee_id_unreadable",
+                extra={"build_run_id": str(run.id), "value": str(raw_employee)[:64]},
+            )
+
     started = await start_run(
         session,
         owner_id=run.user_id,
@@ -125,6 +141,7 @@ async def execute_build_run(
         # The format the user asked for travels into the planner, so "make me a PPT"
         # cannot be satisfied with a markdown outline.
         deliverable_kind=run.deliverable_kind,
+        employee_id=employee_id,
     )
 
     # The foreign key wants the row's UUID; the controller wants the short id.

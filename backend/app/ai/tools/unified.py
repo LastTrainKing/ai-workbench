@@ -77,12 +77,20 @@ class UnifiedToolRegistry:
         *,
         confirm: ConfirmHandler | None = None,
         limits: ResourceLimits | None = None,
+        allowed: frozenset[str] | None = None,
     ) -> None:
         self.business = business
         self.computer = computer
         self.executor = executor
         self._confirm = confirm
         self.limits = limits
+        #: What the model is offered, when an employee's contract names a subset.
+        #:
+        #: This is *not* the security boundary — `PermissionManager.check_tool` is, and it
+        #: runs before every execution regardless of what was offered. This is the other
+        #: half: an employee whose contract says "19 tools" should not be looking at 55
+        #: and spending context on the 36 it may not use.
+        self._allowed = allowed
 
     # -------------------------------------------------------------- catalogue --
     @property
@@ -93,7 +101,12 @@ class UnifiedToolRegistry:
         names = list(self.business.names()) if hasattr(self.business, "names") else []
         if self.computer:
             names += self.computer.names()
-        return sorted(set(names))
+        return sorted(self._filter(set(names)))
+
+    def _filter(self, names: set[str]) -> set[str]:
+        if self._allowed is None:
+            return names
+        return {name for name in names if name in self._allowed}
 
     def get_spec(self, name: str) -> Any | None:
         """The spec for `name`, across both halves of the union.
@@ -149,6 +162,8 @@ class UnifiedToolRegistry:
                 "duplicate_tool_names",
                 extra={"names": sorted(set(duplicates))},
             )
+        if self._allowed is not None:
+            specs = [spec for spec in specs if spec.name in self._allowed]
         return specs
 
     def catalog(self) -> list[dict[str, Any]]:

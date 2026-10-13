@@ -83,6 +83,27 @@ def _narrow_level(base: PermissionLevel, requested: Any) -> PermissionLevel:
     return want if want < base else base
 
 
+def _narrow_tools(
+    base: frozenset[str] | None, profile: dict[str, Any]
+) -> frozenset[str] | None:
+    """The employee's tool whitelist, intersected with the user's if the user has one.
+
+    Three cases, and the middle one is the one that matters:
+
+    * no ``skills`` key — inherit the base unchanged (``None`` means "all")
+    * ``skills`` present — the intersection. An employee may only *remove* tools
+    * ``skills`` is an empty list — the empty set, which denies everything. "I listed no
+      tools" is a statement, not an omission.
+    """
+    if "skills" not in profile:
+        return base
+    skills = profile.get("skills")
+    if not isinstance(skills, list):
+        return base
+    wanted = frozenset(str(s) for s in skills)
+    return wanted if base is None else wanted & base
+
+
 def narrow_policy(base: AgentPolicy, profile: dict[str, Any] | None) -> AgentPolicy:
     """Apply an employee's profile to the user's policy. Returns a new policy.
 
@@ -100,6 +121,7 @@ def narrow_policy(base: AgentPolicy, profile: dict[str, Any] | None) -> AgentPol
         denied_paths=list(base.denied_paths),
         allowed_domains=list(base.allowed_domains),
         blocked_domains=list(base.blocked_domains),
+        allowed_tools=_narrow_tools(base.allowed_tools, profile),
     )
     for field in _CEILING_FIELDS:
         setattr(narrowed, field, getattr(base, field))
@@ -145,12 +167,22 @@ def narrow_policy(base: AgentPolicy, profile: dict[str, Any] | None) -> AgentPol
 
 
 def describe_narrowing(base: AgentPolicy, narrowed: AgentPolicy) -> dict[str, Any]:
-    """What changed, for the employee detail page. Empty dict = identical to the user's."""
+    """What changed, for the employee detail page. Empty dict = identical to the user's.
+
+    **Both the label and the number.** The label is what an API response should carry —
+    `"Observe only"` reads well in a JSON dump and in the audit log. The number is what a
+    window needs, because the window has to say it in its own language and translating an
+    English label back into an integer is a lookup table nobody maintains. The first
+    version sent only the label, and the employee page rendered
+    「权限降到「Observe only」」 on a Chinese screen.
+    """
     changes: dict[str, Any] = {}
     if narrowed.level != base.level:
         changes["level"] = {
             "from": PermissionLevel.label(int(base.level)),
+            "from_value": int(base.level),
             "to": PermissionLevel.label(int(narrowed.level)),
+            "to_value": int(narrowed.level),
         }
     if narrowed.mode != base.mode:
         changes["mode"] = {"from": base.mode.value, "to": narrowed.mode.value}
