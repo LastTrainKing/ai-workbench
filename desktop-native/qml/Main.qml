@@ -306,6 +306,10 @@ ApplicationWindow {
                 // file and not a new branch in a switch.
                 sourceComponent: {
                     switch (shellRoot.activePage) {
+                    case "employees":    return employeesPage
+                    case "deliverables": return deliverablesPage
+                    case "memory":       return memoryPage
+                    case "approvals":    return approvalsPage
                     case "knowledge":    return knowledgePage
                     case "documents":    return documentsPage
                     case "ask":          return askPage
@@ -381,6 +385,10 @@ ApplicationWindow {
     Component { id: notesPage;     NotesPage     { shell: shellRoot } }
     Component { id: runsPage;      RunsPage      { shell: shellRoot } }
     Component { id: settingsPage;  SettingsPage  { shell: shellRoot } }
+    Component { id: employeesPage;    EmployeesPage    { shell: shellRoot } }
+    Component { id: deliverablesPage; DeliverablesPage { shell: shellRoot } }
+    Component { id: memoryPage;       MemoryPage       { shell: shellRoot } }
+    Component { id: approvalsPage;    ApprovalsPage    { shell: shellRoot } }
 
     // ---------------------------------------------------------------- toast UI --
     Rectangle {

@@ -145,6 +145,64 @@ function scale(base, factor) {
     return Math.round(base * factor)
 }
 
+
+
+//: Permission levels, in the window's language. The backend's `PermissionLevel.label()`
+//: returns "Observe only" — correct for an API response and wrong on a Chinese screen.
+//: Kept as a map from the same integers so the two cannot disagree about the ordering.
+function permissionLevelLabel(level) {
+    switch (Number(level)) {
+    case 0:  return "只看不改"
+    case 1:  return "工作区内"
+    case 2:  return "系统级"
+    case 3:  return "完全控制"
+    default: return String(level)
+    }
+}
+
+//: Autonomy mode, same reasoning.
+function agentModeLabel(mode) {
+    switch (mode) {
+    case "assist":     return "只建议"
+    case "supervised": return "受监督"
+    case "autonomous": return "自主"
+    default:           return mode || ""
+    }
+}
+
+//: How an employee's status reads on screen. The wire values are lower-case machine
+//: words; these are what a person is shown. Kept here rather than in the page so the
+//: roster and the detail view cannot disagree.
+function employeeStatusLabel(status) {
+    switch (status) {
+    case "idle":             return "空闲"
+    case "working":          return "工作中"
+    case "waiting_approval": return "等待授权"
+    case "waiting_user":     return "等你回答"
+    case "paused":           return "已暂停"
+    case "failed":           return "上次失败"
+    case "archived":         return "已归档"
+    default:                 return status || "未知"
+    }
+}
+
+//: Statuses that mean "this employee can take work right now".
+function employeeIsActive(status) {
+    return status === "idle" || status === "working" || status === "waiting_approval"
+}
+
+//: The accent for a status. Only "needs you" is loud.
+function employeeStatusTone(status) {
+    switch (status) {
+    case "working":          return accent
+    case "waiting_approval":
+    case "waiting_user":     return warn
+    case "failed":           return danger
+    case "archived":         return textFaint
+    default:                 return textMuted
+    }
+}
+
 // ------------------------------------------------------- navigation model --
 //
 // **The one list.** The rail renders these groups, and `pages` below is this same list
@@ -162,16 +220,27 @@ var navGroups = [
         { key: "documents",    label: "文档",     icon: "page" },
         { key: "notes",        label: "笔记",     icon: "note" }
     ] },
+    // **The group this release is about.** Everything here was reachable through the API
+    // and nowhere in the window: an agent could produce a file, verify it, register it and
+    // version it, and there was no screen that showed any of it.
+    { title: "员工", entries: [
+        { key: "employees",    label: "我的员工", icon: "person" },
+        { key: "deliverables", label: "交付物",   icon: "box" }
+    ] },
     { title: "AI 工作", entries: [
         { key: "conversation", label: "对话",     icon: "chat" },
         { key: "agent",        label: "Agent",    icon: "spark" },
-        { key: "runs",         label: "运行记录", icon: "history" }
+        { key: "runs",         label: "运行记录", icon: "history" },
+        // Last, and not numbered: it is empty most of the time, and an approval is
+        // something the user goes looking for rather than browses.
+        { key: "approvals",    label: "待审批",   icon: "alert" }
     ] },
     { title: "知识", entries: [
         { key: "knowledge",    label: "知识库",   icon: "book" },
         { key: "ask",          label: "问答",     icon: "question" },
         { key: "search",       label: "搜索",     icon: "search" },
-        { key: "graph",        label: "图谱",     icon: "graph" }
+        { key: "graph",        label: "图谱",     icon: "graph" },
+        { key: "memory",       label: "记忆",     icon: "memory" }
     ] },
     { title: "计划", entries: [
         { key: "planner",      label: "Planner",  icon: "calendar" }

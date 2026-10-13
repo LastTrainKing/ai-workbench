@@ -69,6 +69,7 @@ Rectangle {
     }
 
     Flickable {
+        id: railScroll
         // **Ends above the status row, not behind it.** Padding the content was the first
         // attempt and it only moved the problem: at 800px the list is still taller than the
         // space, so the last entries scrolled under the row that says whether anything is
@@ -148,7 +149,7 @@ Rectangle {
                         font.letterSpacing: 1.1
                         Layout.fillWidth: true
                         Layout.leftMargin: Theme.space3
-                        Layout.topMargin: Theme.space3
+                        Layout.topMargin: Theme.space2
                         Layout.bottomMargin: Theme.space1
                         Accessible.role: Accessible.StaticText
                         Accessible.name: group.modelData.title + "分组"
@@ -169,7 +170,7 @@ Rectangle {
                             readonly property string entryKey: modelData.key
 
                             Layout.fillWidth: true
-                            Layout.preferredHeight: 34
+                            Layout.preferredHeight: 32
                             radius: Theme.radiusSm
                             //: A selected row is a filled surface plus an accent edge.
                             //: Colour alone is not the signal: the label changes weight too,
@@ -314,6 +315,26 @@ Rectangle {
         }
     }
 
+    // **The rail is taller than the window now, and this is what says so.**
+    //
+    // Nineteen entries and six group headings do not fit 800px, so the list scrolls —
+    // which the `Flickable` above was built for. What it did not do was *look* like it
+    // scrolled: the row at the boundary was cut through the middle of its text and sat
+    // directly on the status row below, so the last entry read as broken rather than as
+    // "there is more". A fade costs one rectangle and turns a defect into a cue.
+    Rectangle {
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.bottom: railScroll.bottom
+        height: Theme.space5
+        visible: railScroll.contentHeight > railScroll.height
+        gradient: Gradient {
+            GradientStop { position: 0.0; color: Qt.rgba(0, 0, 0, 0) }
+            GradientStop { position: 1.0; color: Theme.bg }
+        }
+        Accessible.ignored: true
+    }
+
     // Honest state, not a spinner that means nothing: how many calls are outstanding.
     RowLayout {
         id: railStatus
@@ -322,7 +343,6 @@ Rectangle {
         anchors.bottom: parent.bottom
         anchors.margins: Theme.space4
         spacing: Theme.space2
-
         Rectangle {
             width: 7; height: 7; radius: 3.5
             color: rail.inflight > 0 ? Theme.accent : Theme.textFaint

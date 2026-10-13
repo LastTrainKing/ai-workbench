@@ -294,6 +294,19 @@ Flickable {
                             text: modelData.description
                         }
 
+                        // **Five slots, always.** These used to be hidden when they did not
+                        // apply, and a hidden item takes no space in a `RowLayout` — so the
+                        // buttons that stayed shifted left by one button's width for every
+                        // one that went. Measured with a three-level tree: 「删除」 sat at
+                        // 604 on two cards and 708 on the other four. A reader sees six
+                        // cards with their actions in six different places and reads it as
+                        // sloppy, which is exactly the complaint this page already earned
+                        // once.
+                        //
+                        // Disabled rather than hidden: the slot stays, the button greys out,
+                        // and a greyed 「开始」 on an in-progress task is information rather
+                        // than noise. Disabled buttons are also out of the tab order, so
+                        // nothing unreachable becomes focusable.
                         RowLayout {
                             Layout.fillWidth: true
                             spacing: 8
@@ -302,32 +315,32 @@ Flickable {
                                 objectName: "task-start-" + modelData.id
                                 text: "开始"
                                 variant: "primary"
-                                visible: modelData.status === "TODO" || modelData.status === "BLOCKED"
-                                enabled: !page.busy
+                                enabled: (modelData.status === "TODO"
+                                          || modelData.status === "BLOCKED") && !page.busy
                                 onClicked: page.setStatus(modelData.id, "IN_PROGRESS")
                                 Accessible.name: "开始任务 " + modelData.title
                             }
                             Button {
                                 objectName: "task-block-" + modelData.id
                                 text: "标记受阻"
-                                visible: modelData.status === "TODO" || modelData.status === "IN_PROGRESS"
-                                enabled: !page.busy
+                                enabled: (modelData.status === "TODO"
+                                          || modelData.status === "IN_PROGRESS") && !page.busy
                                 onClicked: page.setStatus(modelData.id, "BLOCKED")
                                 Accessible.name: "标记受阻 " + modelData.title
                             }
                             Button {
                                 objectName: "task-done-" + modelData.id
                                 text: "完成"
-                                visible: modelData.status !== "DONE" && modelData.status !== "CANCELLED"
-                                enabled: !page.busy
+                                enabled: modelData.status !== "DONE"
+                                         && modelData.status !== "CANCELLED" && !page.busy
                                 onClicked: page.setStatus(modelData.id, "DONE")
                                 Accessible.name: "完成任务 " + modelData.title
                             }
                             Button {
                                 objectName: "task-cancel-" + modelData.id
                                 text: "取消"
-                                visible: modelData.status !== "CANCELLED" && modelData.status !== "DONE"
-                                enabled: !page.busy
+                                enabled: modelData.status !== "CANCELLED"
+                                         && modelData.status !== "DONE" && !page.busy
                                 onClicked: page.setStatus(modelData.id, "CANCELLED")
                                 Accessible.name: "取消任务 " + modelData.title
                             }

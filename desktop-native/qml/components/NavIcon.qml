@@ -169,6 +169,58 @@ Item {
                     ctx.lineTo(12 + Math.cos(a) * 9, 12 + Math.sin(a) * 9)
                 }
                 ctx.stroke()
+            } else if (n === "person") {
+                // An employee. Head and shoulders, on the same 24-unit grid as the rest.
+                ctx.beginPath()
+                ctx.arc(12, 8.6, 3.6, 0, Math.PI * 2)
+                ctx.stroke()
+                ctx.beginPath()
+                ctx.moveTo(4.6, 20.4)
+                ctx.bezierCurveTo(4.6, 16.4, 7.9, 14.2, 12, 14.2)
+                ctx.bezierCurveTo(16.1, 14.2, 19.4, 16.4, 19.4, 20.4)
+                ctx.stroke()
+            } else if (n === "box") {
+                // A deliverable: a lidded box, open at the top so it reads as produced
+                // rather than stored.
+                ctx.beginPath()
+                ctx.moveTo(3.6, 8.4); ctx.lineTo(20.4, 8.4)
+                ctx.lineTo(18.8, 20.4); ctx.lineTo(5.2, 20.4); ctx.closePath()
+                ctx.moveTo(3.6, 8.4); ctx.lineTo(5.2, 4.6)
+                ctx.lineTo(18.8, 4.6); ctx.lineTo(20.4, 8.4)
+                ctx.moveTo(9.6, 12.6); ctx.lineTo(14.4, 12.6)
+                ctx.stroke()
+            } else if (n === "alert") {
+                // A pending approval. A triangle with a stem and a dot — the dot is filled
+                // so the mark still reads at 16px, where a 1.7px stem nearly vanishes.
+                ctx.beginPath()
+                ctx.moveTo(12, 3.6); ctx.lineTo(21.2, 19.6); ctx.lineTo(2.8, 19.6); ctx.closePath()
+                ctx.stroke()
+                ctx.beginPath()
+                ctx.moveTo(12, 9.6); ctx.lineTo(12, 14.4)
+                ctx.stroke()
+                ctx.beginPath()
+                ctx.arc(12, 17, 1.05, 0, Math.PI * 2)
+                ctx.fill()
+            } else if (n === "memory") {
+                // Memory: a chip, because the thing being shown is a stored record with a
+                // scope and a source, not a mind.
+                ctx.beginPath()
+                ctx.moveTo(7, 7); ctx.lineTo(17, 7); ctx.lineTo(17, 17); ctx.lineTo(7, 17); ctx.closePath()
+                ctx.stroke()
+                ctx.beginPath()
+                ctx.moveTo(10.2, 10.2); ctx.lineTo(13.8, 10.2)
+                ctx.lineTo(13.8, 13.8); ctx.lineTo(10.2, 13.8); ctx.closePath()
+                ctx.stroke()
+                ctx.beginPath()
+                ctx.moveTo(4, 10.4); ctx.lineTo(7, 10.4)
+                ctx.moveTo(4, 13.6); ctx.lineTo(7, 13.6)
+                ctx.moveTo(17, 10.4); ctx.lineTo(20, 10.4)
+                ctx.moveTo(17, 13.6); ctx.lineTo(20, 13.6)
+                ctx.moveTo(10.4, 4); ctx.lineTo(10.4, 7)
+                ctx.moveTo(13.6, 4); ctx.lineTo(13.6, 7)
+                ctx.moveTo(10.4, 17); ctx.lineTo(10.4, 20)
+                ctx.moveTo(13.6, 17); ctx.lineTo(13.6, 20)
+                ctx.stroke()
             }
         }
     }
