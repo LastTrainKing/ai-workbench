@@ -176,3 +176,64 @@ async def test_restart_leaves_a_finished_run_alone(session: Any, owner: User) ->
 
     await session.refresh(waiting)
     assert waiting.status == "waiting_user"
+
+
+# --------------------------------------------------------------------------- #
+# the outcome actually reaches the database
+# --------------------------------------------------------------------------- #
+@pytest.mark.asyncio
+async def test_persisting_a_result_writes_the_finish_time(session: Any, owner: User) -> None:
+    """`_persist_run` must actually run, and this is how that is checked.
+
+    It was not checked, and it did not run. The first version of the finish-time fix read
+    `run.started_at` — a column `AIRun` does not have, because `started_at` belongs to
+    `ToolCall`. That raised `AttributeError`, the caller's try/except swallowed it, and the
+    whole function was skipped: no status, no answer, no `finished_at`, `total_tokens` 0.
+
+    Nothing failed. The run still reported COMPLETED, because the build executor reads the
+    in-memory controller rather than this row. The only trace was one log line whose
+    structured fields do not render. Measured afterwards: every autonomous run since had
+    `finished_at` NULL, while a row written before the change had a real timestamp.
+
+    So this asserts the one thing that was missing: after persisting, the row has an end
+    time and a duration. A future `AttributeError` here fails a test instead of a log line.
+    """
+    from datetime import UTC, datetime
+    from types import SimpleNamespace
+
+    from app.ai.agent.plan import RunState
+    from app.models.ai import AIRun
+    from app.services.autonomous_service import _persist_run
+
+    run = AIRun(
+        run_id=f"run_{uuid.uuid4().hex[:12]}",
+        owner_id=owner.id,
+        run_type="agent",
+        status="running",
+        created_at=datetime.now(UTC),
+    )
+    session.add(run)
+    await session.commit()
+
+    result = SimpleNamespace(
+        state=RunState.COMPLETED,
+        answer="done",
+        error="",
+        steps_used=2,
+        plan=None,
+        verified=True,
+        snapshot_id="",
+        retries=0,
+        files_modified=1,
+        verification_evidence=[],
+        elapsed_seconds=12.5,
+    )
+
+    await _persist_run(session, run.id, result)
+    await session.commit()
+
+    await session.refresh(run)
+    assert run.finished_at is not None, "落库没有写结束时间 —— 这条断言就是它缺失的那条"
+    assert run.latency_ms == 12500, run.latency_ms
+    assert run.response_text == "done"
+    assert run.status == "SUCCEEDED"

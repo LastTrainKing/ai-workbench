@@ -323,16 +323,20 @@ async def _persist_run(session: AsyncSession, db_run_id: uuid.UUID, result: Any)
     run.response_text = result.answer
     run.error_message = result.error
 
-    # **The finish time, which nothing was writing.** `status` said SUCCEEDED and
-    # `finished_at` stayed NULL on every autonomous run — measured on a real one. A run
-    # record that claims to have succeeded but has no end time cannot be shown as a
-    # duration, cannot be ordered against its siblings, and cannot be told apart from a
-    # run that is still going when the process dies. `RunResult` carries the wall clock
-    # it measured; this is where it belongs.
+    # **The finish time, which nothing was writing.**
+    #
+    # The first attempt at this read `run.started_at` — a column that does not exist on
+    # `AIRun` (it belongs to `ToolCall`). That raised `AttributeError`, which the caller's
+    # try/except swallowed, so **none of this function ran**: no status, no answer, no
+    # finished_at. Measured afterwards: every autonomous run since had `finished_at` NULL
+    # and `total_tokens` 0, while a row written before the change had both.
+    #
+    # The agent already measures its own wall clock, so use that rather than recomputing
+    # from a column that is not there.
     now = datetime.now(UTC)
     run.finished_at = now
-    if run.started_at is not None:
-        run.latency_ms = int((now - run.started_at).total_seconds() * 1000)
+    if result.elapsed_seconds:
+        run.latency_ms = int(result.elapsed_seconds * 1000)
 
     if run.agent_run is not None:
         run.agent_run.steps_used = result.steps_used
