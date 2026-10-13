@@ -1,0 +1,132 @@
+{
+  "code": {
+    "backend_app": [
+      138,
+      41445
+    ],
+    "backend_tests": [
+      75,
+      17687
+    ],
+    "migrations": [
+      9,
+      1366
+    ],
+    "desktop_python": [
+      8,
+      3498
+    ],
+    "qml": [
+      29,
+      7693
+    ],
+    "scripts": [
+      79,
+      19095
+    ],
+    "qml_pages": 16,
+    "qml_components": 12
+  },
+  "tables": {
+    "count": 34,
+    "names": [
+      "activity_events",
+      "agent_runs",
+      "ai_run_sources",
+      "ai_runs",
+      "build_runs",
+      "concepts",
+      "context_snapshots",
+      "conversations",
+      "deliverables",
+      "document_chunks",
+      "document_concepts",
+      "document_tags",
+      "documents",
+      "installed_skills",
+      "jobs",
+      "knowledge_bases",
+      "memory_candidates",
+      "memory_entries",
+      "messages",
+      "notes",
+      "projects",
+      "prompt_versions",
+      "prompts",
+      "revoked_tokens",
+      "tags",
+      "task_dependencies",
+      "task_documents",
+      "task_tags",
+      "tasks",
+      "tool_audit_log",
+      "tool_calls",
+      "user_preferences",
+      "user_profile",
+      "users"
+    ]
+  },
+  "migrations": [
+    "20261003_0159_368e36738b68_initial_schema.py",
+    "20261006_0206_1867e3419108_personal_context_layer.py",
+    "20261006_0448_312c9ff3ef28_delivery_layer_build_runs_and_.py",
+    "20261006_0511_f2957e9513b4_rename_build_runs_agent_run_id_to_ai_.py",
+    "20261006_1434_90407e6e4bd7_memory_provenance_candidates_carry_.py",
+    "20261009_1547_81cce5214260_conversation_installed_skills_and_tool_.py",
+    "20261009_1923_6068bb13c474_revoked_tokens.py",
+    "20261010_0052_6a1884572148_tool_call_invocations.py",
+    "20261010_0910_3f1c9d7a52be_tool_call_reconciliation.py"
+  ],
+  "api": {
+    "paths": 123,
+    "operations": 155,
+    "methods": [
+      "delete",
+      "get",
+      "patch",
+      "post"
+    ]
+  },
+  "tools": {
+    "business": 11,
+    "business_names": [
+      "calculator",
+      "knowledge_document_read",
+      "knowledge_link",
+      "knowledge_search",
+      "note_create",
+      "project_list",
+      "task_create",
+      "task_create_batch",
+      "task_list",
+      "task_planner",
+      "task_update"
+    ],
+    "computer": 44,
+    "categories": {
+      "code": 4,
+      "filesystem": 14,
+      "git": 8,
+      "project": 4,
+      "process": 4,
+      "network": 3,
+      "observation": 2,
+      "terminal": 5
+    }
+  },
+  "desktop": {
+    "slots": 46,
+    "required_slots": 0,
+    "theme_colours": 43
+  },
+  "config": {
+    "allowed_extensions": ".md,.markdown,.txt,.pdf",
+    "max_upload_mb": "25"
+  },
+  "git": {
+    "branch": "fix/release-freeze-20261009",
+    "head": "72d9a255af9236c2a818f7f937b5f9b040c0e774",
+    "commits": "242",
+    "version": "2.3.0"
+  }
+}
