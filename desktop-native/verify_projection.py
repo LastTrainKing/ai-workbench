@@ -217,6 +217,52 @@ def run_mapping_checks() -> None:
           and call("modelPolicyLines(null)") == []
           and call("knowledgeScopeLines('not an object')") == [])
 
+    # ---- 记忆（§5）：7 类 kind 全部有中文标签，未知值有安全回退 ----
+    #
+    # 取值来自后端常量 `MEMORY_KINDS`（`ai/memory/evaluator.py:73`）。这里逐条钉住，
+    # 是因为**漏掉一个 kind 的表现不是报错，而是界面上多出一个英文单词**。
+    kinds = {
+        "identity": "身份", "goal": "目标", "preference": "偏好", "skill": "技能",
+        "constraint": "约束", "fact": "事实", "decision": "决定",
+    }
+    missing = [k for k in kinds if call(f"memoryKindLabel('{k}')") != kinds[k]]
+    check("memory", "7 类 kind 全部有中文标签", not missing, f"未映射 {missing}")
+    check("memory", "未知 kind 显示原始值而不是归入已知类别",
+          call("memoryKindLabel('speculation')") == "未知类型（speculation）",
+          str(call("memoryKindLabel('speculation')")))
+    # 缺值时**不补一个已知类别**。原来的界面写 `?? "fact"`，把没有依据的记忆说成"事实"。
+    check("memory", "kind 缺值说「类型未知」，不补 fact",
+          call("memoryKindLabel(undefined)") == "类型未知"
+          and call("memoryKindLabel('')") == "类型未知",
+          str(call("memoryKindLabel(undefined)")))
+
+    sources = {"agent": "员工执行时写入", "conversation": "对话中写入",
+               "delivery": "交付时写入"}
+    bad_sources = [k for k in sources if call(f"memorySourceLabel('{k}')") != sources[k]]
+    check("memory", "来源全部有中文标签", not bad_sources, f"未映射 {bad_sources}")
+    check("memory", "未知来源有安全回退",
+          call("memorySourceLabel('telepathy')") == "未知来源（telepathy）",
+          str(call("memorySourceLabel('telepathy')")))
+
+    statuses = {"active": "生效中", "pending": "待你确认", "rejected": "已拒绝"}
+    bad_status = [k for k in statuses if call(f"memoryStatusLabel('{k}')") != statuses[k]]
+    check("memory", "状态有中文标签", not bad_status, f"未映射 {bad_status}")
+    check("memory", "未知状态有安全回退",
+          call("memoryStatusLabel('zombie')") == "未知状态（zombie）",
+          str(call("memoryStatusLabel('zombie')")))
+
+    # 置信度只格式化，不评级 —— 后端没有定义过阈值
+    check("memory", "置信度只格式化不评级",
+          call("confidenceText(0.82)") == "置信度 0.82",
+          str(call("confidenceText(0.82)")))
+    check("memory", "置信度缺失不编造数字",
+          call("confidenceText(undefined)") == "置信度未知",
+          str(call("confidenceText(undefined)")))
+    # 记忆的 scope 复用员工声明那套映射（global/project 是两者共有的）
+    check("memory", "记忆范围复用中文映射",
+          call("memoryScopeLabel('global')") == "全局记忆"
+          and call("memoryScopeLabel('project')") == "项目记忆")
+
     check("declared", "岗位声明共 3 节",
           len(call("declaredSections.map(function (s) { return s.key })") or []) == 3,
           str(call("declaredSections.map(function (s) { return s.key })")))

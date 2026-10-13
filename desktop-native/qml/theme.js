@@ -283,6 +283,65 @@ var contractSections = [
     { title: "产出位置",   key: "deliverable_location", single: true }
 ]
 
+// ------------------------------------------------------------ 记忆（§5）--
+//
+// 7 类 `kind`、`source`、`status` 的中文映射。取值来自后端实际常量，不是猜的：
+//
+//   * `MEMORY_KINDS`（`ai/memory/evaluator.py:73`）= identity / goal / preference /
+//     skill / constraint / fact / decision
+//   * `source` = agent / conversation / delivery（全仓库搜到的全部赋值）
+//   * 记忆条目 `status` 默认 `active`；候选 `status` 默认 `pending`，另有 `rejected`
+//
+// **未知值必须显示成"未知（原始值）"**，不能落进某个已知类别。把一个没见过的 kind
+// 说成"事实"，比说"我不认识它"更糟 —— 前者是编的。
+
+function memoryKindLabel(kind) {
+    // 缺值说"未知"，**不补一个已知类别**。原来的界面写的是 `?? "fact"` —— 那是在
+    // 没有依据时把一条记忆说成"事实"，比说"我不知道"更糟。
+    if (kind === undefined || kind === null || kind === "") return "类型未知"
+    switch (kind) {
+    case "identity":   return "身份"
+    case "goal":       return "目标"
+    case "preference": return "偏好"
+    case "skill":      return "技能"
+    case "constraint": return "约束"
+    case "fact":       return "事实"
+    case "decision":   return "决定"
+    default:           return "未知类型（" + kind + "）"
+    }
+}
+
+function memorySourceLabel(source) {
+    if (source === undefined || source === null || source === "") return "来源未知"
+    switch (source) {
+    case "agent":        return "员工执行时写入"
+    case "conversation": return "对话中写入"
+    case "delivery":     return "交付时写入"
+    default:             return "未知来源（" + source + "）"
+    }
+}
+
+function memoryStatusLabel(status) {
+    if (status === undefined || status === null || status === "") return "状态未知"
+    switch (status) {
+    case "active":   return "生效中"
+    case "pending":  return "待你确认"
+    case "approved": return "已确认"
+    case "rejected": return "已拒绝"
+    case "archived": return "已归档"
+    case "deleted":  return "已删除"
+    default:         return "未知状态（" + status + "）"
+    }
+}
+
+//: 置信度。**只格式化，不评级** —— 后端没有定义过"高/中/低"的阈值，编一个出来
+//: 就是把一个没有依据的判断画成有依据的样子。
+function confidenceText(value) {
+    var n = Number(value)
+    if (isNaN(n)) return "置信度未知"
+    return "置信度 " + n.toFixed(2)
+}
+//
 // ------------------------------------------------------- 岗位声明（尚未生效）--
 //
 // 这三个字段**只在模板里声明、被 API 返回，运行时从不读取**。这不是推测，是查过的：

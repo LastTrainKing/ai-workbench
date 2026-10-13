@@ -202,9 +202,12 @@ Flickable {
                             }
                             Text {
                                 Layout.fillWidth: true
-                                text: (modelData.proposed_kind ?? "fact") + " · "
-                                      + (modelData.proposed_scope ?? "global") + " · 置信度 "
-                                      + Number(modelData.confidence ?? 0).toFixed(2)
+                                // 候选：类型 / 范围 / 置信度，全部中文化。
+                                // **不再 `?? "fact"`** —— 缺值时说"类型未知"，不补一个
+                                // 已知类别（那是把"我不知道"写成"这是一条事实"）。
+                                text: Theme.memoryKindLabel(modelData.proposed_kind)
+                                      + " · " + Theme.memoryScopeLabel(modelData.proposed_scope)
+                                      + " · " + Theme.confidenceText(modelData.confidence)
                                       + ((modelData.conflicts_with ?? "") !== ""
                                          ? " · ⚠ 与既有记忆冲突" : "")
                                 color: (modelData.conflicts_with ?? "") !== ""
@@ -297,10 +300,12 @@ Flickable {
                                     wrapMode: Text.WordWrap
                                 }
                                 Text {
-                                    text: (modelData.kind ?? "fact") + " · "
-                                          + (modelData.scope ?? "global") + " · 来源 "
-                                          + (modelData.source ?? "?") + " · 用过 "
-                                          + (modelData.use_count ?? 0) + " 次"
+                                    // 生效中的记忆：类型 / 范围 / 状态 / 来源 / 使用次数。
+                                    text: Theme.memoryKindLabel(modelData.kind)
+                                          + " · " + Theme.memoryScopeLabel(modelData.scope)
+                                          + " · " + Theme.memoryStatusLabel(modelData.status)
+                                          + " · " + Theme.memorySourceLabel(modelData.source)
+                                          + " · 用过 " + (modelData.use_count ?? 0) + " 次"
                                           + (modelData.confirmed_by_user ? " · 你确认过" : "")
                                     color: Theme.textFaint
                                     font.pixelSize: 11
