@@ -156,6 +156,71 @@ def run_mapping_checks() -> None:
     check("contract", "6 个岗位都有图标", all(isinstance(g, str) and g for g in glyphs),
           str(glyphs))
 
+    # ---- 形状判断：字典不得被渲染成 [object Object] ----
+    #
+    # 这条守的是一个真实存在的坑：`String({})` 是 `"[object Object]"`，直接渲染出来就是
+    # 一句凭空造出来的话。`Array.isArray` 又对 QML 的类数组返回 false —— 两个坑夹在一起，
+    # 一度让两节整节消失（见 `toLines` 的注释）。
+    check("declared", "字典不渲染成 [object Object]",
+          call("toLines({a: 1})") == [], str(call("toLines({a: 1})")))
+    check("declared", "空字典给空",
+          call("toLines({})") == [], str(call("toLines({})")))
+    check("declared", "字符串给一行",
+          call("toLines('abc')") == ["abc"], str(call("toLines('abc')")))
+    check("declared", "数字给一行",
+          call("toLines(7)") == ["7"], str(call("toLines(7)")))
+    check("declared", "null / undefined 给空",
+          call("toLines(null)") == [] and call("toLines(undefined)") == [])
+
+    # ---- 中文标签：内部值不得泄漏到界面 ----
+    check("declared", "记忆范围有中文标签",
+          call("memoryScopeLabel('global')") == "全局记忆"
+          and call("memoryScopeLabel('project')") == "项目记忆",
+          str(call("memoryScopeLabel('global')")))
+    # `user` 不在记忆系统的词表里（evaluator.py:321 只产出 global / project）。
+    # 照实翻译并说明，而不是伪装成已知类别 —— 那会掩盖"声明与实现对不上"这个事实。
+    check("declared", "词表外的范围照实说明，不伪装成已知类别",
+          "记忆系统当前不使用" in call("memoryScopeLabel('user')"),
+          str(call("memoryScopeLabel('user')")))
+    check("declared", "未知范围有安全回退并带原始值",
+          call("memoryScopeLabel('weird')") == "未知范围（weird）",
+          str(call("memoryScopeLabel('weird')")))
+    check("declared", "模型路由有中文标签",
+          call("modelRouteLabel('main')") == "主力模型"
+          and call("modelRouteLabel('reasoning')") == "推理模型"
+          and call("modelRouteLabel('fast')") == "快速模型",
+          str(call("modelRouteLabel('fast')")))
+    check("declared", "未知路由有安全回退",
+          call("modelRouteLabel('nope')") == "未知路由（nope）",
+          str(call("modelRouteLabel('nope')")))
+
+    # ---- 三节的取值 ----
+    js.evaluate("var MEM = {read: ['global', 'project'], write: ['global']};")
+    mem_lines = call("memoryScopeLines(MEM)") or []
+    check("declared", "记忆范围给出可读/可写两行", len(mem_lines) == 2, str(mem_lines))
+    check("declared", "记忆范围用「声明」口吻，不写成权限",
+          all("声明" in line for line in mem_lines), str(mem_lines))
+
+    js.evaluate("var MODEL = {primary: 'reasoning', light: 'fast'};")
+    model_lines = call("modelPolicyLines(MODEL)") or []
+    check("declared", "模型策略给出两行", len(model_lines) == 2, str(model_lines))
+    check("declared", "模型策略不泄漏内部名",
+          not any(w in " ".join(model_lines) for w in ("reasoning", "fast", "main")),
+          str(model_lines))
+
+    js.evaluate("var KNOW = {knowledge_bases: [], projects: []};")
+    know_lines = call("knowledgeScopeLines(KNOW)") or []
+    check("declared", "空知识范围说「未限定」而不是「没有」",
+          any("未限定" in line for line in know_lines), str(know_lines))
+    check("declared", "空值/字典不崩溃",
+          call("memoryScopeLines(null)") == []
+          and call("modelPolicyLines(null)") == []
+          and call("knowledgeScopeLines('not an object')") == [])
+
+    check("declared", "岗位声明共 3 节",
+          len(call("declaredSections.map(function (s) { return s.key })") or []) == 3,
+          str(call("declaredSections.map(function (s) { return s.key })")))
+
 
 # =========================================================================== #
 # 2. 渲染：无头加载真实界面，读渲染树
@@ -300,6 +365,20 @@ def run_render_checks() -> None:
     # SOP 编号：展开的合同里应当出现 1. 2. 3. …
     sop_lines = [t for t in expanded_texts if t.strip().rstrip(".").isdigit()]
     check("contract", "SOP 有步骤编号", len(sop_lines) >= 2, f"编号 {sop_lines[:6]}")
+
+    # 岗位声明三节 + 那条"尚未生效"的警告
+    declared_titles = ["记忆范围", "知识范围", "模型策略"]
+    present_declared = [t for t in declared_titles if t in expanded_texts]
+    check("declared", "岗位声明 3 节全部渲染", len(present_declared) == 3,
+          f"渲染出 {present_declared}")
+    check("declared", "标出「尚未接入执行」",
+          any("尚未接入执行" in t for t in expanded_texts),
+          "警告未出现")
+    # 内部名不得泄漏到界面
+    leaked_names = [t for t in expanded_texts
+                    if any(w in t for w in ("reasoning", "fast", "main", "[object"))]
+    check("declared", "界面不泄漏内部名或 [object Object]", not leaked_names,
+          str(leaked_names[:3]))
 
     # 同时只展开一个
     other = next((e for e in employees if e.get("id") != subject.get("id")), None)

@@ -228,12 +228,38 @@ function contractField(employee, templates, key) {
     return t ? t[key] : undefined
 }
 
+//: 把任意值转成"要渲染的若干行"。**这是本文件里唯一一处做形状判断的地方。**
+//:
+//: 两个坑，都在真实运行里出现过：
+//:
+//: 1. `Array.isArray` 对**类数组**返回 false。QML 的 `property var` 在传递 QVariantList
+//:    时给出的对象有 `length` 和索引，却不被 `Array.isArray` 认。原来那句
+//:    `Array.isArray(v) ? v : [String(v)]` 于是把它当成标量 —— 要么渲染成
+//:    `[object Object]`，要么（在加了字典分支之后）直接返回空，**整节消失**。
+//: 2. 字典必须返回空。`String({a:1})` 是 `"[object Object]"` —— 一句凭空造出来的话。
+//:
+//: 判据用"有没有 `length`"而不是 `Array.isArray`：它同时覆盖原生数组与类数组，
+//: 而且字典没有 `length`，天然被排除。
+function toLines(v) {
+    if (v === undefined || v === null || v === "") return []
+    if (typeof v === "string") return [v]
+    if (typeof v === "number" || typeof v === "boolean") return [String(v)]
+    if (typeof v.length === "number") {
+        var out = []
+        for (var i = 0; i < v.length; i++) {
+            var item = v[i]
+            if (item === undefined || item === null) continue
+            out.push(String(item))
+        }
+        return out
+    }
+    return []
+}
+
 //: 一份清单，渲染成一行一行。**不用顿号连成一句**：SOP 是有顺序的步骤，职责是可数的
 //: 条目，连成一行会让"第 3 步"这类信息消失。
 function contractLines(employee, templates, key) {
-    var v = contractField(employee, templates, key)
-    if (v === undefined || v === null || v === "") return []
-    return Array.isArray(v) ? v : [String(v)]
+    return toLines(contractField(employee, templates, key))
 }
 
 function hasContract(employee, templates, key) {
@@ -256,6 +282,113 @@ var contractSections = [
     { title: "产出格式",   key: "deliverable_kind",     single: true },
     { title: "产出位置",   key: "deliverable_location", single: true }
 ]
+
+// ------------------------------------------------------- 岗位声明（尚未生效）--
+//
+// 这三个字段**只在模板里声明、被 API 返回，运行时从不读取**。这不是推测，是查过的：
+//
+//   * `employee.model_policy` —— 全仓库没有一处读它；`"reasoning"` / `"fast"` 只出现在
+//     注释里，从没被当作路由键解析过。模型仍然是全局的那一个。
+//   * `employee.memory_scope` —— 没有任何代码按它过滤记忆。而且它声明的
+//     `["global","user","project"]` 里，`user` **不是** `MemoryEntry.scope` 的合法值
+//     （`ai/memory/evaluator.py:321` 只产出 `global` 与 `project`）。
+//   * `employee.knowledge_scope` —— 六个模板里都是 `{"knowledge_bases": [], "projects": []}`，
+//     即全部为空。
+//
+// 所以它们**不能**被当成边界来展示。"这个员工只能写全局记忆"是一句假话，而它是
+// 安全方向上的假话 —— 用户会据此认为存在一道并不存在的墙。
+//
+// 展示它们是对的（字段确实存在，藏起来是另一种不诚实），但必须标成声明，
+// 并明说它还没接进执行。这一节的措辞因此比别处硬。
+
+//: 记忆范围的值 → 中文。`user` 与 `task` 当前不在记忆系统的词表里，但**照实翻译**：
+//: 把它们显示成"未知"会掩盖"声明与实现对不上"这个事实本身。
+function memoryScopeLabel(scope) {
+    switch (scope) {
+    case "global":  return "全局记忆"
+    case "user":    return "用户偏好（记忆系统当前不使用这个词）"
+    case "project": return "项目记忆"
+    case "task":    return "当前任务（记忆系统当前不使用这个词）"
+    case "session": return "本次会话（记忆系统当前不使用这个词）"
+    default:        return "未知范围（" + scope + "）"
+    }
+}
+
+//: 模型路由的值 → 中文。这些是**策略名**，不是模型名。
+function modelRouteLabel(route) {
+    switch (route) {
+    case "main":      return "主力模型"
+    case "reasoning": return "推理模型"
+    case "fast":      return "快速模型"
+    case "light":     return "轻量模型"
+    default:          return "未知路由（" + route + "）"
+    }
+}
+
+//: `{read: [...], write: [...]}` → 两行中文。**不写成权限口吻**：它现在不是权限。
+//:
+//: 用 `toLines` 而不是 `Array.isArray` —— 同一个类数组的坑，这里也会踩。
+function memoryScopeLines(scope) {
+    if (!scope || typeof scope !== "object") return []
+    var out = []
+    if (scope.read !== undefined) {
+        var read = toLines(scope.read)
+        out.push("声明可读：" + (read.length ? read.map(memoryScopeLabel).join("、") : "无"))
+    }
+    if (scope.write !== undefined) {
+        var write = toLines(scope.write)
+        out.push("声明可写：" + (write.length ? write.map(memoryScopeLabel).join("、") : "无"))
+    }
+    return out
+}
+
+//: `{primary: "main", light: "fast"}` → 两行中文。
+function modelPolicyLines(policy) {
+    if (!policy || typeof policy !== "object") return []
+    var out = []
+    if (policy.primary) out.push("复杂任务声明使用：" + modelRouteLabel(policy.primary))
+    if (policy.light) out.push("轻量任务声明使用：" + modelRouteLabel(policy.light))
+    return out
+}
+
+//: `{knowledge_bases: [], projects: []}` → 一行或两行。空数组是"未限定"，不是"没有"。
+function knowledgeScopeLines(scope) {
+    if (!scope || typeof scope !== "object") return []
+    var out = []
+    if (scope.knowledge_bases !== undefined) {
+        var bases = toLines(scope.knowledge_bases)
+        out.push("知识库：" + (bases.length ? bases.join("、") : "未限定（使用运行时提供的全部）"))
+    }
+    if (scope.projects !== undefined) {
+        var projects = toLines(scope.projects)
+        out.push("项目：" + (projects.length ? projects.join("、") : "未限定"))
+    }
+    return out
+}
+
+//: 取某一节的渲染行。**按 `render` 分派，不按 key 猜** —— 字典字段走 `contractLines`
+//: 会得到 `["[object Object]"]`，那是一句凭空造出来的话。
+function declaredLines(employee, templates, key, render) {
+    var value = contractField(employee, templates, key)
+    switch (render) {
+    case "memory":    return memoryScopeLines(value)
+    case "model":     return modelPolicyLines(value)
+    case "knowledge": return knowledgeScopeLines(value)
+    default:          return []
+    }
+}
+
+//: 岗位声明三节。与 `contractSections` 分开，因为它们的形状不同（字典 vs 清单），
+//: 而且要带上"尚未生效"的标记。
+var declaredSections = [
+    { title: "记忆范围", key: "memory_scope",    render: "memory" },
+    { title: "知识范围", key: "knowledge_scope", render: "knowledge" },
+    { title: "模型策略", key: "model_policy",    render: "model" }
+]
+
+//: 这一节的内容来自岗位声明，但**尚未接入执行**。组件据此显示那条警告。
+var declaredNotice =
+    "以上是岗位声明，当前尚未接入执行：模型仍是全局配置，记忆也不会按此过滤。"
 
 //: How an employee's status reads on screen. The wire values are lower-case machine
 //: words; these are what a person is shown. Kept here rather than in the page so the
