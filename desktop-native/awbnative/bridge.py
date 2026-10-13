@@ -1816,6 +1816,462 @@ class ServiceBridge(QObject):
         """The last startup report, as JSON. For the settings page and the verifiers."""
         return _json(self._environment)
 
+    # ------------------------------------------------------- employees --
+    #
+    # The employee layer is the one part of this product whose absence was structural
+    # rather than cosmetic: everything else the brief asked for — memory governance,
+    # tiered permissions, approval waiting, deliverable verification — already existed in
+    # the backend and had no way to reach the window. These slots are that way.
+
+    @Slot(str)
+    def loadEmployeeTemplates(self, request_id: str) -> None:
+        async def work() -> dict[str, Any]:
+            from app.services.employee_service import EmployeeService
+
+            # No owner and no session: the catalogue is the same six templates for
+            # everybody. Looking the user up first would be a database round-trip that
+            # cannot change the answer, which is why the service method is a static one.
+            return EmployeeService.template_catalogue()
+
+        self._submit(request_id, work)
+
+    @Slot(str)
+    def loadEmployees(self, request_id: str) -> None:
+        async def work() -> dict[str, Any]:
+            from app.infrastructure.database import session_scope
+            from app.services.employee_service import EmployeeService
+
+            owner = await self._owner()
+            async with session_scope() as session:
+                service = EmployeeService(session)
+                employees = await service.list_employees(owner, include_archived=True)
+                # The derived fields are computed here for the same reason the API
+                # computes them: `unknown_skills` can change when a tool is removed, and
+                # the effective policy moves when the *user's* policy moves.
+                items = []
+                for employee in employees:
+                    _, narrowing = service.effective_policy(employee)
+                    items.append({
+                        **employee.to_dict(),
+                        "unknown_skills": service.unknown_skills(employee),
+                        "effective_narrowing": narrowing,
+                    })
+            return {"items": items, "total": len(items)}
+
+        self._submit(request_id, work)
+
+    @Slot(str)
+    def loadEmployeeHall(self, request_id: str) -> None:
+        async def work() -> dict[str, Any]:
+            from app.infrastructure.database import session_scope
+            from app.services.employee_service import EmployeeService
+
+            owner = await self._owner()
+            async with session_scope() as session:
+                return await EmployeeService(session).hall_summary(owner)
+
+        self._submit(request_id, work)
+
+    @Slot(str, str)
+    def createEmployee(self, request_id: str, payload_json: str) -> None:
+        async def work() -> dict[str, Any]:
+            from app.infrastructure.database import session_scope
+            from app.services.employee_service import EmployeeService
+
+            owner = await self._owner()
+            payload = json.loads(payload_json)
+            async with session_scope() as session:
+                service = EmployeeService(session)
+                employee = await service.create_from_template(
+                    owner,
+                    role_id=str(payload.get("role_id") or ""),
+                    name=payload.get("name") or None,
+                    overrides=payload.get("overrides") or {},
+                )
+                return employee.to_dict()
+
+        self._submit(request_id, work)
+
+    @Slot(str, str, str)
+    def updateEmployee(self, request_id: str, employee_id: str, changes_json: str) -> None:
+        async def work() -> dict[str, Any]:
+            from app.infrastructure.database import session_scope
+            from app.services.employee_service import EmployeeService
+
+            owner = await self._owner()
+            async with session_scope() as session:
+                employee = await EmployeeService(session).update_employee(
+                    owner, uuid.UUID(employee_id), json.loads(changes_json)
+                )
+                return employee.to_dict()
+
+        self._submit(request_id, work)
+
+    @Slot(str, str, bool)
+    def setEmployeeArchived(self, request_id: str, employee_id: str, archived: bool) -> None:
+        async def work() -> dict[str, Any]:
+            from app.infrastructure.database import session_scope
+            from app.services.employee_service import EmployeeService
+
+            owner = await self._owner()
+            async with session_scope() as session:
+                employee = await EmployeeService(session).archive_employee(
+                    owner, uuid.UUID(employee_id), archived=archived
+                )
+                return employee.to_dict()
+
+        self._submit(request_id, work)
+
+    @Slot(str, str)
+    def deleteEmployee(self, request_id: str, employee_id: str) -> None:
+        async def work() -> dict[str, Any]:
+            from app.infrastructure.database import session_scope
+            from app.services.employee_service import EmployeeService
+
+            owner = await self._owner()
+            async with session_scope() as session:
+                await EmployeeService(session).delete_employee(owner, uuid.UUID(employee_id))
+            return {"deleted": employee_id}
+
+        self._submit(request_id, work)
+
+    @Slot(str, str)
+    def reviewPersona(self, request_id: str, text: str) -> None:
+        """Check a persona before saving. Findings, not a refusal.
+
+        No database: the guard is a pure function over the text, and reaching for a
+        session to call it would have meant constructing a service object with no
+        session — which is how this was written the first time.
+        """
+
+        async def work() -> dict[str, Any]:
+            from app.ai.employees.persona_guard import review_persona
+
+            return review_persona(text).to_dict()
+
+        self._submit(request_id, work)
+
+    # ------------------------------------------------------- deliverables --
+    #
+    # Nineteen endpoints existed and none of them were reachable from the window. A
+    # product whose claim is "the employee hands you a file" cannot hide the files.
+
+    @Slot(str, str)
+    def loadDeliverables(self, request_id: str, limit: str = "50") -> None:
+        async def work() -> dict[str, Any]:
+            from app.infrastructure.database import session_scope
+            from app.services.delivery_service import DeliveryService
+
+            owner = await self._owner()
+            async with session_scope() as session:
+                items = await DeliveryService(session).list_deliverables(
+                    owner_id=owner, limit=int(limit or 50)
+                )
+                return {"items": [item.as_dict() for item in items], "total": len(items)}
+
+        self._submit(request_id, work)
+
+    @Slot(str, str)
+    def loadDeliverableDetail(self, request_id: str, deliverable_id: str) -> None:
+        async def work() -> dict[str, Any]:
+            from app.infrastructure.database import session_scope
+            from app.services.delivery_service import DeliveryService
+
+            owner = await self._owner()
+            async with session_scope() as session:
+                service = DeliveryService(session)
+                item = await service.get_deliverable(
+                    owner_id=owner, deliverable_id=uuid.UUID(deliverable_id)
+                )
+                chain = await service.version_chain(
+                    owner_id=owner, deliverable_id=uuid.UUID(deliverable_id)
+                )
+                payload = item.as_dict()
+                payload["versions"] = [v.as_dict() for v in chain]
+                return payload
+
+        self._submit(request_id, work)
+
+    @Slot(str, str)
+    def verifyDeliverable(self, request_id: str, deliverable_id: str) -> None:
+        async def work() -> dict[str, Any]:
+            from app.infrastructure.database import session_scope
+            from app.services.delivery_service import DeliveryService
+
+            owner = await self._owner()
+            async with session_scope() as session:
+                service = DeliveryService(session)
+                item = await service.get_deliverable(
+                    owner_id=owner, deliverable_id=uuid.UUID(deliverable_id)
+                )
+                result = await service.verify_deliverable(item)
+                return {"deliverable": item.as_dict(), "verification": result}
+
+        # Verification re-opens the file and can re-run a checker; 120s is the default and
+        # a DOCX check is quick, but a code deliverable re-runs its test command.
+        self._submit(request_id, work, timeout=300.0)
+
+    @Slot(str, str)
+    def acceptDeliverable(self, request_id: str, deliverable_id: str) -> None:
+        async def work() -> dict[str, Any]:
+            from app.infrastructure.database import session_scope
+            from app.services.delivery_service import DeliveryService
+
+            owner = await self._owner()
+            async with session_scope() as session:
+                item = await DeliveryService(session).accept(
+                    owner_id=owner, deliverable_id=uuid.UUID(deliverable_id)
+                )
+                return item.as_dict()
+
+        self._submit(request_id, work)
+
+    @Slot(str, str, str)
+    def rejectDeliverable(self, request_id: str, deliverable_id: str, reason: str) -> None:
+        async def work() -> dict[str, Any]:
+            from app.infrastructure.database import session_scope
+            from app.services.delivery_service import DeliveryService
+
+            owner = await self._owner()
+            async with session_scope() as session:
+                item = await DeliveryService(session).reject(
+                    owner_id=owner, deliverable_id=uuid.UUID(deliverable_id), reason=reason
+                )
+                return item.as_dict()
+
+        self._submit(request_id, work)
+
+    @Slot(str)
+    def loadDeliverySummary(self, request_id: str) -> None:
+        async def work() -> dict[str, Any]:
+            from app.infrastructure.database import session_scope
+            from app.services.delivery_service import DeliveryService
+
+            owner = await self._owner()
+            async with session_scope() as session:
+                return await DeliveryService(session).summary(owner_id=owner)
+
+        self._submit(request_id, work)
+
+    @Slot(str, str, str)
+    def startBuildRun(self, request_id: str, goal: str, employee_id: str = "") -> None:
+        """Create a run and start it. **One call, because they are one action.**
+
+        The API splits create from execute on purpose — a run created but not started is a
+        legitimate state, and the endpoint says so. But from the window, "让研究员做这件事"
+        is one intention, and a UI that creates and forgets is the exact bug the delivery
+        service's docstring describes: the run sat in DRAFT while the screen looked like
+        work in progress.
+        """
+
+        async def work() -> dict[str, Any]:
+            from app.infrastructure.database import session_scope
+            from app.services.delivery_service import DeliveryService
+
+            owner = await self._owner()
+            async with session_scope() as session:
+                service = DeliveryService(session)
+                scope: dict[str, Any] = {}
+                if employee_id:
+                    # Recorded so the run can say which employee did it, and so the
+                    # employee's own permission profile is what the run is bounded by.
+                    scope["employee_id"] = employee_id
+                run = await service.create_build_run(
+                    owner_id=owner, goal=goal, deliverable_kind="mixed", scope=scope
+                )
+                started = await service.start_build_run(run)
+                return {"build_run_id": str(run.id), **(started or {})}
+
+        # Starting hands off to a background agent run; the call itself is quick, but the
+        # context assembly inside it reads the knowledge base.
+        self._submit(request_id, work, timeout=300.0)
+
+    @Slot(str, str)
+    def loadBuildRuns(self, request_id: str, limit: str = "50") -> None:
+        async def work() -> dict[str, Any]:
+            from app.infrastructure.database import session_scope
+            from app.services.delivery_service import DeliveryService
+
+            owner = await self._owner()
+            async with session_scope() as session:
+                runs = await DeliveryService(session).list_build_runs(
+                    owner_id=owner, limit=int(limit or 50)
+                )
+                return {"items": [run.as_dict() for run in runs], "total": len(runs)}
+
+        self._submit(request_id, work)
+
+    @Slot(str, str, str)
+    def controlBuildRun(self, request_id: str, build_run_id: str, action: str) -> None:
+        """pause / resume / cancel — the same three the run page offers."""
+
+        async def work() -> dict[str, Any]:
+            from app.infrastructure.database import session_scope
+            from app.services.autonomous_service import control
+            from app.services.delivery_service import DeliveryService
+
+            owner = await self._owner()
+            async with session_scope() as session:
+                run = await DeliveryService(session).get_build_run(
+                    owner_id=owner, build_run_id=uuid.UUID(build_run_id)
+                )
+                if run.ai_run_id is None:
+                    raise ValueError("这次任务还没有开始执行")
+                return control(str(run.ai_run_id), action)
+
+        self._submit(request_id, work)
+
+    # ------------------------------------------------------------- memory --
+    #
+    # Twenty endpoints for a memory system with candidate review, conflict detection and a
+    # plan-then-apply cleanup — and no screen. The brief's §8 asks the user be able to
+    # "查看、修改、删除" their memory; that requires the memory to be visible.
+
+    @Slot(str)
+    def loadMemories(self, request_id: str) -> None:
+        async def work() -> dict[str, Any]:
+            from app.infrastructure.database import session_scope
+            from app.models.context import MemoryEntry
+            from sqlalchemy import select
+
+            owner = await self._owner()
+            async with session_scope() as session:
+                stmt = (
+                    select(MemoryEntry)
+                    .where(MemoryEntry.user_id == owner, MemoryEntry.status == "active")
+                    .order_by(MemoryEntry.created_at.desc())
+                    .limit(200)
+                )
+                rows = list((await session.execute(stmt)).scalars())
+                return {"items": [row.as_dict() for row in rows], "total": len(rows)}
+
+        self._submit(request_id, work)
+
+    @Slot(str)
+    def loadMemoryCandidates(self, request_id: str) -> None:
+        async def work() -> dict[str, Any]:
+            from app.infrastructure.database import session_scope
+            from app.models.context import MemoryCandidate
+            from sqlalchemy import select
+
+            owner = await self._owner()
+            async with session_scope() as session:
+                stmt = (
+                    select(MemoryCandidate)
+                    .where(MemoryCandidate.user_id == owner, MemoryCandidate.status == "pending")
+                    .order_by(MemoryCandidate.created_at.desc())
+                    .limit(200)
+                )
+                rows = list((await session.execute(stmt)).scalars())
+                return {"items": [row.as_dict() for row in rows], "total": len(rows)}
+
+        self._submit(request_id, work)
+
+    @Slot(str)
+    def loadMemoryStats(self, request_id: str) -> None:
+        async def work() -> dict[str, Any]:
+            from app.ai.memory import MemoryEvaluator
+            from app.infrastructure.database import session_scope
+
+            owner = await self._owner()
+            async with session_scope() as session:
+                return await MemoryEvaluator(session, llm=None, user_id=owner).stats()
+
+        self._submit(request_id, work)
+
+    @Slot(str, str, bool)
+    def resolveMemoryCandidate(self, request_id: str, candidate_id: str, approve: bool) -> None:
+        async def work() -> dict[str, Any]:
+            from app.ai.memory import MemoryEvaluator
+            from app.infrastructure.database import session_scope
+
+            owner = await self._owner()
+            async with session_scope() as session:
+                evaluator = MemoryEvaluator(session, llm=None, user_id=owner)
+                if approve:
+                    entry = await evaluator.approve(uuid.UUID(candidate_id))
+                    if entry is None:
+                        raise ValueError("候选不存在")
+                    return {"approved": str(candidate_id), "memory": entry.as_dict()}
+                if not await evaluator.reject(uuid.UUID(candidate_id)):
+                    raise ValueError("候选不存在")
+                return {"rejected": str(candidate_id)}
+
+        self._submit(request_id, work)
+
+    @Slot(str, str)
+    def deleteMemory(self, request_id: str, memory_id: str) -> None:
+        """Hard delete, matching the endpoint.
+
+        An archive flag that still gets retrieved is worse than no delete button: the user
+        believes the memory is gone and it is not.
+        """
+
+        async def work() -> dict[str, Any]:
+            from app.infrastructure.database import session_scope
+            from app.models.context import MemoryEntry
+
+            owner = await self._owner()
+            async with session_scope() as session:
+                entry = await session.get(MemoryEntry, uuid.UUID(memory_id))
+                if entry is None or entry.user_id != owner:
+                    raise ValueError("记忆不存在")
+                await session.delete(entry)
+                await session.flush()
+            return {"deleted": memory_id}
+
+        self._submit(request_id, work)
+
+    @Slot(str)
+    def loadContextPreview(self, request_id: str) -> None:
+        """"What would the model be told right now" — assembled, without calling a model."""
+
+        async def work() -> dict[str, Any]:
+            from app.ai.memory import ContextAssembler
+            from app.infrastructure.database import session_scope
+
+            owner = await self._owner()
+            async with session_scope() as session:
+                assembler = ContextAssembler(session, user_id=owner, budget_tokens=1800)
+                assembled = await assembler.assemble(goal="")
+                payload = assembled.as_dict()
+                payload["budget_tokens"] = 1800
+                return payload
+
+        self._submit(request_id, work)
+
+    # ------------------------------------------------------- confirmations --
+    #
+    # `ConfirmationBroker` already parks a high-risk tool call and waits. Without a screen
+    # the run stops at WAITING_CONFIRMATION and the user is never told there is a question.
+
+    @Slot(str)
+    def loadConfirmations(self, request_id: str) -> None:
+        async def work() -> dict[str, Any]:
+            from app.ai.tools.confirmation import get_broker
+
+            # `all_pending` already returns the rendered dicts, and it includes the *why*
+            # (`reason`, `impact`, `detail`) rather than just the tool name — which is what
+            # the user needs in order to answer.
+            items = get_broker().all_pending()
+            return {"items": items, "total": len(items)}
+
+        self._submit(request_id, work)
+
+    @Slot(str, str, bool)
+    def resolveConfirmation(self, request_id: str, confirmation_id: str, approve: bool) -> None:
+        async def work() -> dict[str, Any]:
+            from app.ai.tools.confirmation import get_broker
+
+            resolved = await get_broker().resolve(confirmation_id, approved=approve)
+            return {
+                "confirmation_id": confirmation_id,
+                "approved": approve,
+                "resolved": bool(resolved),
+            }
+
+        self._submit(request_id, work)
+
     # ---------------------------------------------------------------- lifecycle --
     @Slot()
     def shutdown(self) -> None:

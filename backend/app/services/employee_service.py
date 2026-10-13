@@ -260,7 +260,14 @@ class EmployeeService:
                 details={"unknown": unknown},
             )
 
-    def template_catalogue(self) -> dict[str, Any]:
+    @staticmethod
+    def template_catalogue() -> dict[str, Any]:
+        """The role catalogue. A static method because it reads no database.
+
+        The window loads this before anything else, and it is identical for every user —
+        so requiring a session to ask for it would be a round-trip that cannot change the
+        answer.
+        """
         return {
             "templates": [t.to_public_dict() for t in role_templates.TEMPLATES],
             "default_role_id": role_templates.DEFAULT_ROLE_ID,
