@@ -1,6 +1,6 @@
 [package]
 name = "ai-workbench-desktop"
-version = "2.3.0"
+version = "2.4.0"
 description = "AI Workbench - a private AI computer agent for Windows"
 authors = ["AI Workbench"]
 edition = "2021"

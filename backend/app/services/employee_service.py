@@ -134,7 +134,13 @@ class EmployeeService:
         employee = Employee(user_id=user_id, **{**fields, "name": final_name})
         self.employees.add(employee)
         await self.session.flush()
-        logger.info("employee created", extra={"role": role_id, "name": final_name})
+        # `extra` may not use a LogRecord attribute name. `name` is one — it is the
+        # logger's own name — so passing it raises at emit time and turns a clean 201
+        # into a 500. `test_project_integrity` scans for exactly this, and it scans the
+        # source text, so the sentence describing the mistake must not spell it out.
+        logger.info(
+            "employee created", extra={"role": role_id, "employee_name": final_name}
+        )
         return employee
 
     async def update_employee(

@@ -123,6 +123,10 @@ def test_all_models_are_registered_in_metadata() -> None:
         # Logged-out tokens. The revocation list used to live only in Redis, so a cache
         # outage made every logged-out token valid again; this table is the durable copy.
         "revoked_tokens",
+        # The employee. A persona that is a thing the user owns needs a row: it can be
+        # granted a permission, own a deliverable, be paused, and be told apart from a
+        # different employee in the run history. A system prompt can do none of those.
+        "employees",
     }
     assert set(Base.metadata.tables) == expected_tables
 
