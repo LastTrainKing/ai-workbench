@@ -109,9 +109,49 @@ async def test_the_change_takes_effect_on_the_next_call_not_the_next_restart(
 # --------------------------------------------------------------------------- #
 # What cannot be lifted
 # --------------------------------------------------------------------------- #
+@pytest.fixture
+def project_env_file() -> "Iterator[Path]":
+    """The project's own `.env`, present for the duration of the test.
+
+    **This fixture exists because the test used to require a file the repository
+    deliberately does not contain.** The rule under test is `{PROJECT}\\.env` — a
+    specific path, not a pattern — so the file has to sit at the repository root. And
+    `.env` is gitignored, which is correct. The combination meant that in a clean
+    clone the test did not skip, it *failed*:
+
+        assert secrets.is_file(), "the fixture expects the project's own .env to exist"
+
+    Found by running the suite from a fresh clone with a new venv, which is the only
+    place it shows up: every machine that has ever developed this project has a
+    `.env`.
+
+    Creating it is the honest fix rather than skipping. A skip would drop four real
+    assertions on every machine that does not happen to have a `.env`, and asserting
+    against a file in a temp directory would stop testing the rule that actually
+    exists. The content is a marker that could not be mistaken for a real secret, a
+    pre-existing `.env` is never touched, and ours is removed whatever happens.
+    """
+    import os
+
+    secrets = Path(__file__).resolve().parents[3] / ".env"
+    created = False
+    if not secrets.is_file():
+        secrets.write_text(
+            "# Created by test_permissions_effective.py and removed again.\n"
+            "SECRET_KEY=not-a-real-secret-created-by-the-test-suite\n",
+            encoding="utf-8",
+        )
+        created = True
+    try:
+        yield secrets
+    finally:
+        if created:
+            os.remove(secrets)
+
+
 @pytest.mark.parametrize("level", [int(level) for level in PermissionLevel])
 async def test_the_project_secrets_are_denied_at_every_level(
-    isolated_policy: Path, level: int
+    isolated_policy: Path, project_env_file: Path, level: int
 ) -> None:
     """A settings endpoint is not a way past the sandbox.
 
@@ -123,8 +163,7 @@ async def test_the_project_secrets_are_denied_at_every_level(
     """
     owner = _owner()
     _set(owner, mode=AgentMode.AUTONOMOUS.value, level=level)
-    secrets = Path(__file__).resolve().parents[3] / ".env"
-    assert secrets.is_file(), "the fixture expects the project's own .env to exist"
+    secrets = project_env_file
 
     outcome = await _run(owner, "file_read", {"path": str(secrets)})
 

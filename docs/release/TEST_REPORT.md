@@ -236,9 +236,9 @@ All checks passed!
 0.17.0 对当前工作区同样报 `All checks passed!`，两边一致 —— 但这是**验证过的巧合**，
 不是保证。要它成为保证，需要把 `requirements-dev.txt` 钉到具体版本。
 
-### 5.2 干净克隆发现的两个真实缺陷
+### 5.2 干净克隆发现的三个真实缺陷
 
-§15 的干净克隆跑出来的，都不是开发机上看得到的：
+§15 的干净克隆跑出来的，**没有一个是开发机上看得到的**：
 
 1. **`desktop-native/verify_projection.py` 在 Python 3.11 上根本解析不了。**
    一处 f-string 用了嵌套转义引号（`f"{call('a', \"b\")}"`），那是 3.12 语法。
@@ -249,8 +249,26 @@ All checks passed!
    恰恰相反：`per-file-ignores` 的 glob 相对**配置文件所在目录**解析，从仓库根传
    `--config` 会让 `tests/**` 不再匹配 —— CI 报 131 个错误，本地 0 个。
    已删除该 flag 并就地写明原因。
+3. **`README` 让新用户跑不起来测试。** README 说：建 venv、装
+   `backend/requirements-dev.txt`、跑 `pytest`。而 `tests/unit/test_ai_config_status.py`
+   与 `tests/unit/test_native_bridge_session.py` 导入 `awbnative.bridge`，后者导入
+   PySide6 —— **测试在收集阶段就死了**，一个测试都没跑，报
+   `ModuleNotFoundError: No module named 'PySide6'`。
+   修法：新增 `desktop-native/requirements.txt`（`PySide6-Essentials>=6.6,<7.0`），
+   由 `backend/requirements-dev.txt` 以 `-r` 引入，一条命令覆盖测试与客户端。
 
-**这两个都是"本地全绿、换台机器就红"的形态**，而 §15 要求的正是换台机器跑一遍。
+**三个都是"本地全绿、换台机器就红"的形态**，而 §15 要求的正是换台机器跑一遍。
+第 3 个尤其说明问题：它是新用户做的**第一件事**，而它一直是坏的。
+
+### 5.3 `requirements` 是范围不是锁
+
+| 环境 | ruff | PySide6 |
+|---|---|---|
+| 开发机 `.venv` | 0.16.10 | 6.12.0 |
+| 干净克隆新建的 venv | **0.17.0** | 最新匹配版 |
+
+`ruff>=0.5,<1.0` 与 `PySide6-Essentials>=6.6,<7.0` 都是范围。这次两边结论一致，
+但那是**验证过的巧合**，不是保证。要它成为保证，需要钉到具体版本。
 
 ---
 

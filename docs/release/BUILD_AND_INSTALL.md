@@ -171,51 +171,58 @@ AI-Workbench-Native-Setup.exe
 
 ## 5. 干净克隆验证
 
-§15 要求在不依赖开发者的 `.runtime` / `.env` / 缓存 / 全局包 / 现存数据库的干净目录里  
+§15 要求在不依赖开发者的 `.runtime` / `.env` / 缓存 / 全局包 / 现存数据库的干净目录里
 按 README 走一遍。
 
-### 5.1 已执行的部分
+### 5.1 已执行
 
-```bash
-git clone <repo> /tmp/awb-clean
-```
+克隆到 `%TEMP%wb-clean`，在**没有** `.venv`、`vendor/runtime/`、`.runtime/` 的状态下：
 
-克隆自 commit `d77d039`，在**没有** `.venv`、没有 `vendor/runtime/`、没有 `.runtime/`  
-的状态下检查：
+| # | §15 的步骤 | 结果 |
+|---|---|---|
+| 1 | 获取源码 | **是**。`git clone` → `c380f11`（tag `v3.0.0-rc.1`） |
+| — | 是否带入 `.env` / `.runtime` / `.venv` / `vendor/runtime` / 安装包 | **全部否** |
+| — | 文档引用的 22 个文件是否都在 | **全部存在** |
+| 2 | 安装明确版本的依赖 | **是**。`python -m venv .venv` + `pip install -r backend/requirements-dev.txt` → **一条命令**，2 分 53 秒，81 个包 |
+| 3 | 初始化一个新的测试数据库 | **是**。`DROP/CREATE DATABASE aiworkbench_test`（表数 0）与 `aiworkbench_clean`（表数 0） |
+| 4 | 运行迁移 | **是**。`alembic upgrade head` 在空库上跑完 **10 个迁移**，head `a1e5c7b9d204` |
+| 5a | 静态检查 | **是**。`ruff check backend/app backend/tests desktop-native` → All checks passed（ruff **0.17.0**，与开发机的 0.16.10 不同版本） |
+| 5b | 测试 | 见 §5.4 |
+| 6 | 启动原生桌面端 | 见 §5.4 |
+| 7 | 无 Key 场景的清晰提示 | **是**（干净克隆里没有 `.runtime`，即未配置状态） |
+| 8 | 受控的真实模型端到端 | **`NOT RUN`**，见 §5.4 |
+| 9 | 构建 Windows 安装器 | **是**，见 §3 |
+| 10 | 安装、启动、退出、升级 | **`NOT RUN`**，见 §4.2 |
 
-| 检查                                     | 结果                         |
-| -------------------------------------- | -------------------------- |
-| `.env` 是否被带入                           | **否**                      |
-| `.runtime/` 是否被带入                      | **否**                      |
-| `.venv/` 是否被带入                         | **否**                      |
-| `vendor/runtime/` 是否被带入                | **否**                      |
-| `build/installer/`（119 MB 安装包）是否被带入    | **否**                      |
-| 文档引用的 22 个文件是否都在克隆里                    | **是，全部存在**                 |
-| 克隆里的 `tools/check_qml_pages.py`        | **20/20 页面可加载**            |
-| 克隆里的 `tools/check_layout.py`           | **0 问题，0 QML 错误**          |
-| 克隆里的 `scripts/sync_version.py --check` | **6 个文件全部一致（3.0.0）**       |
-| 克隆里的 `tools/scan_for_secrets.py`       | 无真实凭据（48 处赋值形状命中，人工复核为变量名） |
+### 5.2 这一步抓到了三个真实缺陷
 
-**版本二之前，干净克隆里跑不了那三个验收工具** —— 它们在 `build/rc/` 下，而 `build/`  
-被 gitignore 覆盖。所以"按文档可复现"这条当时并不成立。这是版本三修掉的一个 P1。
+**没有一个是开发机上看得到的**，三个都是"本地全绿、换台机器就红"的形态：
 
-**诚实说明**：上面的 Qt 工具是**用开发机的 `.venv`** 解释器跑的，只是工作目录换成了  
-克隆。这证明了"克隆里的文件是完整的、可运行的"，**没有**证明"在一台没有 `.venv` 的  
-机器上从零装依赖也能跑" —— 那需要 §5.2 那一步。
+1. **`desktop-native/verify_projection.py` 在 Python 3.11 上解析不了。** 一处 f-string
+   用了嵌套转义引号（3.12 语法）。项目声明 `requires-python = ">=3.11"`，
+   ruff 报 6 处 `invalid-syntax`。
+2. **CI 的 ruff 命令会失败。** `--config backend/pyproject.toml` 让 `per-file-ignores`
+   的 `tests/**` 不再匹配 —— CI 报 131 个错误，本地 0 个。
+3. **README 让新用户跑不起来测试。** 测试套件里两个模块导入 `awbnative.bridge`
+   （需要 PySide6），而依赖文件里没有它 —— 测试在**收集阶段**就死了，一个都没跑。
 
-### 5.2 未执行的部分（`NOT RUN`）
+详见 `TEST_REPORT.md` §5.2。**这三条是这一轮干净克隆唯一的产出，而它们是这一轮里
+价值最高的产出。**
 
-- **在干净克隆里新建 venv 并 `pip install -r backend/requirements-dev.txt`。**  
-  这一步需要完整的依赖下载，本轮未做 —— 因此"从零开始按 README 能装起来"这件事  
-  **没有被证明**，只是"跟踪的文件集是完整的、且验收工具能跑"被证明了。
-- **在干净克隆里初始化新的测试数据库并跑迁移。**
-- **在干净克隆里启动原生桌面端。**
+### 5.3 一处诚实说明
 
-理由：这三项都需要在独立环境里做完整的依赖安装，耗时以十分钟计。  
-它们**不是**"看起来没问题"，而是**明确未做**。  
-`RELEASE_NOTES.md` 里没有把干净克隆写成已完成。
+Qt 相关的验收工具（`tools/check_qml_pages.py`、`tools/check_layout.py`）在克隆里是用
+**克隆自己的 `.venv`** 跑的（第 2 步装出来的那个），不是开发机的。
+第 1 步之前还额外核对过：`scripts/sync_version.py --check` 在克隆里 6 个文件全部一致，
+`tools/scan_for_secrets.py` 在克隆里未发现真实凭据。
 
----
+### 5.4 未执行的部分（`NOT RUN`）
+
+* **真实模型端到端。** 干净克隆里没有 `.runtime/ai-config.json`，也就没有 Key。
+  第 7 步（无 Key 的清晰提示）是这一条的反面，它做了。
+  真实模型验证在开发机上做过，见 `TEST_REPORT.md` §3。
+* **把安装包装到系统上并启动。** 需要一台干净机器，见 §4.2。
+  这是唯一一条会改变"可发布"判断的缺口。
 
 ## 6. 复现命令汇总
 

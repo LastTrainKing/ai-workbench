@@ -697,6 +697,29 @@ To avoid the spend, deselect them — but do not report their skip as a pass:
 ..\.venv\Scripts\python.exe -m pytest --deselect tests/integration/test_deepseek_live.py
 ```
 
+### What the suite needs beyond the Python packages
+
+Three things are machine-local, and **all three were discovered by running the suite
+from a fresh clone** — on a development machine they are simply already there:
+
+| | Why | Without it |
+|---|---|---|
+| **PostgreSQL, Redis, Qdrant running** | these are integration tests, not mocks | most tests fail; a few skip with a reason |
+| **`pg_dump` on `PATH`** (or `vendor/runtime/pgsql/`) | the schema guard takes a backup before a forward migration, and refuses to migrate without one | `SchemaOutOfDateError`: "找不到 pg_dump" |
+| **Qdrant's API key at `.runtime/qdrant-api-key.txt`**, if your instance requires one | the tests move the runtime directory, so the key moves with it | `401 Unauthorized` from Qdrant → embedding tests fail |
+
+Start the three engines and put Qdrant's key where the tests look for it:
+
+```bat
+scripts\start.bat --infra-only
+:: if your Qdrant was started with an API key, put it here:
+::   .runtime\qdrant-api-key.txt
+```
+
+A clean clone with none of this installed still builds and runs the *application*; it is
+the integration suite that needs the infrastructure. That distinction is real and was
+measured — see `docs/release/BUILD_AND_INSTALL.md` §5.
+
 ### Verification scripts
 
 These are the tests that catch what unit tests cannot: whether the wiring is real, and
