@@ -17,7 +17,7 @@
 # Treat the compose path as "provided and reviewed, not executed". If you run
 # it, verify it yourself — and please report what you find.
 #
-# SECURITY DEFAULTS (changed; see RELEASE-FREEZE-ISSUES.md)
+# SECURITY DEFAULTS (changed; see docs/archive/RELEASE-FREEZE-ISSUES.md)
 #   * PostgreSQL, Redis and Qdrant are no longer published to the host at all —
 #     only api/worker reach them, over the `awb` bridge network.
 #   * Their weak/absent credentials are gone. POSTGRES_PASSWORD, REDIS_PASSWORD

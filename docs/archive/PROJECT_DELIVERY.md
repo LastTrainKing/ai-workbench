@@ -242,7 +242,7 @@ safety limits; and the execution trace that makes AI behaviour auditable.
 
 ## 9. Using this project on a resume
 
-Full text: [`docs/resume-project.md`](docs/resume-project.md).
+Full text: [`docs/resume-project.md`](../resume-project.md).
 
 The short version — lead with architecture and AI engineering, not with "used
 FastAPI":
@@ -262,7 +262,7 @@ or any benchmark you did not run.
 
 ## 10. Interview focus
 
-Full list: [`docs/interview-questions.md`](docs/interview-questions.md) — 40 questions
+Full list: [`docs/interview-questions.md`](../interview-questions.md) — 40 questions
 with intent, implementation, model answer and follow-ups.
 
 The five you will almost certainly be asked, and the honest answers:

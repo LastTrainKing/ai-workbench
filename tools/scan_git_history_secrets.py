@@ -126,7 +126,7 @@ def real_credentials(runtime: pathlib.Path | None) -> list[tuple[str, bytes]]:
     for label, path in credential_files(runtime):
         try:
             config = json.loads(path.read_text(encoding="utf-8"))
-        except Exception:  # noqa: BLE001 - 配置坏了不该让扫描失败
+        except Exception:
             continue
         if isinstance(config, dict):
             for key in ("api_key", "embedding_api_key"):

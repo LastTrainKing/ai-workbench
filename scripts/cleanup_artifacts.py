@@ -1,4 +1,4 @@
-"""Delete the B-class items in CLEANUP_PLAN.md, and record what actually happened.
+"""Delete the B-class items in docs/archive/CLEANUP_PLAN.md, and record what actually happened.
 
 Written as a script rather than a sequence of shell commands for one reason: the plan says
 "record the files that fail", and a shell pipeline that deletes a tree has nowhere to put
@@ -47,7 +47,7 @@ TARGETS: list[tuple[str, pathlib.Path, str]] = [
 ]
 
 #: Loose files under `build/` that are one-off logs or scratch output. Evidence JSONs are
-#: listed in CLEANUP_PLAN.md section A and are deliberately absent here.
+#: listed in docs/archive/CLEANUP_PLAN.md section A and are deliberately absent here.
 LOOSE_BUILD_FILES = [
     "_after_upgrade.txt",
     "_before_upgrade.txt",

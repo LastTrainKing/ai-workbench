@@ -40,11 +40,12 @@ import importlib.util  # noqa: E402
 from PySide6.QtCore import QUrl, qInstallMessageHandler  # noqa: E402
 from PySide6.QtGui import QGuiApplication  # noqa: E402
 from PySide6.QtQml import QQmlApplicationEngine  # noqa: E402
+
 # Before the engine loads: registers QQuickWindow with shiboken so the root object is
 # wrapped as a QQuickWindow, which is where `grabWindow` lives.
 from PySide6.QtQuick import QQuickItem, QQuickWindow  # noqa: E402,F401
 
-app = QGuiApplication(sys.argv[:1] + ["check-layout"])
+app = QGuiApplication([*sys.argv[:1], "check-layout"])
 
 from awbnative import resources  # noqa: E402
 
@@ -148,17 +149,23 @@ def audit(item: QQuickItem, path: str, findings: list[str], scrolling: bool) -> 
         # A child wider than the parent that clips it is scrolling content; wider than a
         # parent that does not clip is a defect, and so is anything with a negative origin
         # unless the parent is a scroller.
-        if not scrolling and not _is_scroll_container(item):
-            if x + w > item.width() + TOL or y + h > item.height() + TOL or x < -TOL or y < -TOL:
-                findings.append(
-                    f"overflow  {here}  子 {x:.0f},{y:.0f} {w:.0f}×{h:.0f} "
-                    f"超出父 {item.width():.0f}×{item.height():.0f}"
-                )
+        if (
+            not scrolling
+            and not _is_scroll_container(item)
+            and (x + w > item.width() + TOL or y + h > item.height() + TOL or x < -TOL or y < -TOL)
+        ):
+            findings.append(
+                f"overflow  {here}  子 {x:.0f},{y:.0f} {w:.0f}×{h:.0f} "
+                f"超出父 {item.width():.0f}×{item.height():.0f}"
+            )
 
         # --- zero size ----------------------------------------------------------
-        if _prop(child, "visible") and (child.width() < 0.5 or child.height() < 0.5):
-            if _prop(child, "text") or _prop(child, "objectName"):
-                findings.append(f"zero      {here}  可见但尺寸 {child.width():.0f}×{child.height():.0f}")
+        if (
+            _prop(child, "visible")
+            and (child.width() < 0.5 or child.height() < 0.5)
+            and (_prop(child, "text") or _prop(child, "objectName"))
+        ):
+            findings.append(f"zero      {here}  可见但尺寸 {child.width():.0f}×{child.height():.0f}")
 
         audit(child, here, findings, scrolling or _is_scroll_container(child))
 

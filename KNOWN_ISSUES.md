@@ -3,7 +3,7 @@
 Things that are **not fixed**. Each is either an external block or a defect this round
 chose not to fix, with the reason stated. Nothing here is a fixable defect renamed as a
 "limitation" — if it could be fixed in this environment, it is fixed and in
-`FULL_REMEDIATION_REPORT.md`.
+`docs/archive/FULL_REMEDIATION_REPORT.md`.
 
 ---
 
@@ -25,9 +25,9 @@ against `ai_runs` and required to report `INCOMPLETE` / `max_steps`. Eight of th
 were carried as blocked are now **closed** — empty response, malformed response, invalid
 JSON, loop detection, step ceiling, mid-run process kill, HTTP 503 and client timeout — all
 against the real transport. They never needed a key, only a controllable endpoint. See
-`ROUND-3-REPORT.md`.
+`docs/archive/ROUND-3-REPORT.md`.
 
-**What would close it.** A key, and the seven-test list in `FINAL-VERDICT.md`. The entry
+**What would close it.** A key, and the seven-test list in `docs/archive/FINAL-VERDICT.md`. The entry
 point is already in place: Settings → AI Provider, or `POST /api/v1/ai-config`. No source
 edit, no rebuild.
 

@@ -16,7 +16,7 @@
  *
  * So it exits **3** — neither 0 nor 1 — and says in words what it skipped and why. A
  * caller that only looks at "non-zero" will notice; a caller that reads the output will
- * understand. `PROGRESS.md` records which scripts were skipped for this reason.
+ * understand. `docs/archive/PROGRESS.md` records which scripts were skipped for this reason.
  *
  *   import { requireModelOrSkip } from './_model_guard.mjs'
  *   await requireModelOrSkip('verify-send-and-details.mjs')

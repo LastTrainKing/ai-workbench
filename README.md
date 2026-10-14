@@ -99,7 +99,7 @@ force-kill cannot leave PostgreSQL, Redis and Qdrant running behind a closed win
 > **Status of the UI.** This build renders its interface with **WebView2** — the window is
 > a native window, but its contents are a web page, not native controls. Moving to a
 > native Qt 6 / QML interface is an open release-blocking work item, tracked as RF-01 in
-> `RELEASE-FREEZE-ISSUES.md`. The earlier wording here ("no browser") overstated it.
+> `docs/archive/RELEASE-FREEZE-ISSUES.md`. The earlier wording here ("no browser") overstated it.
 
 **Its workspace is inside the project, not on your desktop.**
 
@@ -437,19 +437,29 @@ processes; nothing is installed as a Windows service and no system setting is ch
 User data goes to `%LOCALAPPDATA%\AI Workbench Data`, **not** into the program
 directory, so uninstalling the app does not delete your work.
 
-**Run from source** (needs the infrastructure running — see B below):
+**Run from source**:
 
 ```bat
+:: 1. The three engines. ~485 MB of Windows binaries, deliberately NOT in git — this
+::    downloads them into vendor\runtime. Once per clone.
+powershell -ExecutionPolicy Bypass -File scripts\fetch-runtime.ps1
+
+:: 2. Dependencies. `requirements-dev.txt` pulls in `desktop-native\requirements.txt`
+::    (PySide6) too, so this one command is enough.
 python -m venv .venv
 .venv\Scripts\python.exe -m pip install -r backend\requirements-dev.txt
+
+:: 3. Run it. It starts PostgreSQL / Redis / Qdrant itself, in-process.
 .venv\Scripts\python.exe desktop-native\main.py
 ```
 
-`backend\requirements-dev.txt` pulls in `desktop-native\requirements.txt` (PySide6), so
-one command is enough. **The test suite needs it too** — two test modules import the
-bridge, which imports PySide6. That was not true until it was found in a clean clone:
-the README used to send a stranger to `pytest` without it, and the run died on
-collection with `ModuleNotFoundError: No module named 'PySide6'`.
+**Why step 1 exists, and why it is spelled out.** The engine binaries are ~485 MB and are
+kept out of the repository, so a fresh clone does not have them. The desktop client does
+not download them — it looks in `vendor\runtime`, and when they are absent it reports
+`runtime: blocked, missing …` and stops. That message is accurate but tells you nothing
+you can act on, and it is reachable only by following a cross-reference to section B below.
+**The installer path above has no such step**: it bundles the engines. This gap was found
+by walking these three commands in a clone that had never seen this project.
 
 **Build the installer** (PyInstaller + NSIS, ~20 minutes):
 
@@ -869,19 +879,41 @@ ai-workbench/
 │   ├── alembic/            # migrations
 │   ├── tests/              # unit · integration · api
 │   └── requirements*.txt
-├── frontend/               # React + TS + Vite + Tailwind
+├── desktop-native/         # ← the shipping product. Qt 6 / QML, no browser, no HTTP server
+│   ├── main.py             # entry point (also `--self-check` and `--screenshot`)
+│   ├── qml/                # pages and components
+│   ├── awbnative/          # bootstrap · bridge · runtime · window frame
+│   ├── requirements.txt    # PySide6-Essentials
+│   └── build_native.py     # PyInstaller → dist/
+├── frontend/               # React + TS + Vite + Tailwind (the web client)
+├── desktop/                # Tauri shell that hosts `frontend/` in a WebView2 window
 ├── worker/                 # standalone worker launcher + Dockerfile
+├── installer/              # NSIS script
 ├── scripts/                # infra-start/stop/status · dev · fetch-runtime · smoke_test
+├── tools/                  # repo checks: doc links, QML pages, layout, secret scans
 ├── samples/                # sample documents used by the tests and the smoke test
 ├── docs/                   # architecture · database · api · ai · rag · agent ·
-│                           # deployment · testing · security · development
-│   └── thesis/             # 10-chapter graduation thesis support pack (中文)
+│   │                       # deployment · testing · security · development
+│   ├── release/            # release evidence: what was built, installed, and tested
+│   ├── thesis/             # 10-chapter graduation thesis support pack (中文)
+│   └── archive/            # round reports and superseded plans — history, not guidance
 ├── screenshots/
+├── assets/
+├── vendor/                 # engine binaries, downloaded — **not in git** (485 MB)
 ├── docker-compose.yml
 ├── start.bat / stop.bat / start.sh / stop.sh
 ├── .env.example
 └── DELIVERY.md
 ```
+
+**The four documents worth reading first**, in order: this file, then `ARCHITECTURE.md`
+(ten minutes), then `KNOWN_ISSUES.md` (what is *not* fixed, and why), then
+`docs/release/RELEASE_NOTES.md`.
+
+Everything under `docs/archive/` is a **record of how the project got here** — round reports,
+superseded acceptance matrices, fix-round notes. Read it to understand a decision; do not
+read it as instructions, because several of those documents describe a state that no longer
+exists. `docs/archive/README.md` says which is which.
 
 ---
 

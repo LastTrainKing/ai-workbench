@@ -1,0 +1,38 @@
+# Ruff configuration for `tools/`.
+#
+# **Why this file exists.** `tools/` had none, so it was linted with ruff's *default* rule set
+# (`E4, E7, E9, F`) — which does not include `E402`. These scripts insert `sys.path` entries
+# before importing, so they carry `# noqa: E402` on those imports; with `E402` not enabled,
+# `RUF100` reported all fifteen of them as unused directives. Adding a config here does not
+# paper over anything — it enables the rule those directives were written for, and the count
+# drops from 21 to 8, because fifteen of the twenty-one were the checker complaining about
+# directives that were correct all along.
+#
+# Kept in step with `backend/pyproject.toml` on purpose: two rule sets for one repository is
+# how "the linter passes" stops meaning the same thing in two places.
+
+line-length = 100
+target-version = "py311"
+
+[lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort
+    "B",   # flake8-bugbear
+    "UP",  # pyupgrade
+    "C4",  # flake8-comprehensions
+    "SIM", # flake8-simplify
+    "RUF", # ruff-specific
+]
+# `S` (bandit) is deliberately **not** selected: these tools run `git` and read files by
+# design, so it reports the tools' purpose as a finding. If it is ever added, add it in
+# `backend/pyproject.toml` at the same time — the two rule sets must stay identical.
+ignore = [
+    "E501",   # line length is handled by the formatter
+    "SIM108", # ternaries are not always clearer
+    "RUF001", # allow full-width CJK punctuation inside strings
+    "RUF002",
+    "RUF003",
+]

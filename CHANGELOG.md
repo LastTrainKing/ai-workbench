@@ -165,7 +165,7 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Release-freeze round. Every entry below is a defect that was confirmed against the source
 and is covered by a regression test that fails on the previous code. The full table,
-including what is still open, is `RELEASE-FREEZE-ISSUES.md`.
+including what is still open, is `docs/archive/RELEASE-FREEZE-ISSUES.md`.
 
 ### Security
 

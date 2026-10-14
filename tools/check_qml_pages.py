@@ -21,7 +21,7 @@ from PySide6.QtCore import QUrl, qInstallMessageHandler  # noqa: E402
 from PySide6.QtGui import QGuiApplication  # noqa: E402
 from PySide6.QtQml import QQmlApplicationEngine  # noqa: E402
 
-app = QGuiApplication(sys.argv[:1] + ["qml-check"])
+app = QGuiApplication([*sys.argv[:1], "qml-check"])
 from awbnative import resources  # noqa: E402
 
 resources.configure()

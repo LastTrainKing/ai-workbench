@@ -186,9 +186,25 @@ async def test_the_real_test_database_verifies() -> None:
     This is the one case that touches a real connection: if the stamp were missing or the
     head had moved, every API test would fail at startup with a schema error, and it is
     better to find that out here with a message than as a wall of 500s.
+
+    **It skips when the infrastructure is not running.** A clean clone has a fresh venv and
+    no engines; there is nothing there to verify, and failing this test there made
+    `pytest tests/unit` — which the README documents as needing no services — report a red
+    suite on a machine that never had the services. Found by running the unit tests in a
+    clean clone: 807 passed, 1 failed, and the failure was this test dialling a database
+    that did not exist.
+
+    Same shape as `test_embedding_isolation`, which skips on an unreachable Qdrant: three
+    states, not two. **"I could not check" is not "it failed".**
     """
     from app.infrastructure.database import get_engine
 
-    async with get_engine().connect() as conn:
-        outcome = await ensure_schema(conn)
+    try:
+        engine = get_engine()
+        async with engine.connect() as conn:
+            outcome = await ensure_schema(conn)
+    except OSError as exc:
+        # asyncpg maps a refused connection to `ConnectionRefusedError`, an OSError.
+        pytest.skip(f"基础设施没在跑（{type(exc).__name__}）；这一条只在有数据库时才有意义")
+
     assert outcome == "verified"

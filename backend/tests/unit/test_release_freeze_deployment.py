@@ -11,7 +11,7 @@ The confirmed defects, both in files that ship:
 
 These are static assertions on the files, which is what can be verified on a machine with
 no Docker. The runtime checks (does compose actually start, does Qdrant reject an
-unauthenticated request) are marked BLOCKED in ACCEPTANCE_MATRIX.md rather than claimed.
+unauthenticated request) are marked BLOCKED in docs/archive/ACCEPTANCE_MATRIX.md rather than claimed.
 """
 
 from __future__ import annotations

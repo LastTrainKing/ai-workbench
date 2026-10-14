@@ -55,7 +55,7 @@ DEFAULT_PAGES = [
     "settings",
 ]
 
-app = QGuiApplication(sys.argv[:1] + ["shot-real-pages"])
+app = QGuiApplication([*sys.argv[:1], "shot-real-pages"])
 
 from awbnative import resources  # noqa: E402
 
