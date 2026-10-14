@@ -2087,6 +2087,43 @@ class ServiceBridge(QObject):
         self._submit(request_id, work, timeout=300.0)
 
     @Slot(str, str)
+    def loadRunOutcome(self, request_id: str, build_run_id: str) -> None:
+        """What came out of one run, in the shape the run page renders.
+
+        The page used to answer this question itself, from the run list — which meant
+        it could show a run as 「已交付」 and still send the user to another page to find
+        out what was delivered. §8.2 asks for the成果 on the page where the work ended.
+        """
+
+        async def work() -> dict[str, Any]:
+            from app.infrastructure.database import session_scope
+            from app.services.delivery_service import DeliveryService
+
+            owner = await self._owner()
+            async with session_scope() as session:
+                return await DeliveryService(session).outcome_for_run(
+                    owner_id=owner, build_run_id=uuid.UUID(build_run_id)
+                )
+
+        self._submit(request_id, work)
+
+    @Slot(str, str)
+    def readDeliverableText(self, request_id: str, deliverable_id: str) -> None:
+        """A bounded text preview. The refusals carry reasons, not empty strings."""
+
+        async def work() -> dict[str, Any]:
+            from app.infrastructure.database import session_scope
+            from app.services.delivery_service import DeliveryService
+
+            owner = await self._owner()
+            async with session_scope() as session:
+                return await DeliveryService(session).read_text(
+                    owner_id=owner, deliverable_id=uuid.UUID(deliverable_id)
+                )
+
+        self._submit(request_id, work)
+
+    @Slot(str, str)
     def loadBuildRuns(self, request_id: str, limit: str = "50") -> None:
         async def work() -> dict[str, Any]:
             from app.infrastructure.database import session_scope

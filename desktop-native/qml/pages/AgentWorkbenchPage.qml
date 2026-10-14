@@ -44,6 +44,15 @@ Flickable {
     property string buildRunId: ""
     property var buildRun: null
 
+    //: 运行结束后的成果。**这一页自己回答"我拿到了什么"** —— §8.2 明确不要用户再去
+    //: 「交付物」页搜一遍数据库记录。形状由后端 `run_outcome.build_run_outcome` 定义，
+    //: 这里只渲染，不再自己从运行列表里拼。
+    property var outcomeData: null
+
+    //: 预览。文本类的产物在应用内直接读出来；其他格式不假装能读。
+    property var preview: null
+    property bool previewBusy: false
+
     readonly property var plan: detail ? (detail.plan ?? []) : []
     readonly property var calls: detail ? (detail.tool_calls ?? []) : []
     readonly property var unresolved: detail ? (detail.unresolved ?? []) : []
@@ -173,22 +182,9 @@ Flickable {
         return ""
     }
 
-    function buildRunWord(status) {
-        switch (status) {
-        case "DRAFT":     return "还没开始"
-        case "PLANNING":  return "正在制定方案"
-        case "READY":     return "方案就绪"
-        case "EXECUTING": return "正在执行"
-        case "VERIFYING": return "正在验证结果"
-        case "WAITING_USER": return "等你确认"
-        case "COMPLETED": return "已完成"
-        case "PARTIAL":   return "完成了一部分"
-        case "FAILED":    return "失败"
-        case "CANCELLED": return "已取消"
-        case "LIMIT_REACHED": return "到了资源上限"
-        default:          return status || ""
-        }
-    }
+    //: 状态词与颜色统一走 theme.js。原先这一页自带一份 `buildRunWord`，交付物页
+    //: 若也要说同一件事就得再抄一遍 —— 两个副本迟早给出两个答案。
+    function buildRunWord(status) { return Theme.buildWord(status) }
 
     function startWithEmployee(text) {
         running = true
@@ -198,6 +194,8 @@ Flickable {
         errorText = ""
         buildRunId = ""
         buildRun = null
+        outcomeData = null
+        preview = null
 
         var id = "agent-build-" + Date.now()
         shell.request("交给员工", id, function (payload) {
@@ -240,6 +238,11 @@ Flickable {
                 page.progressText = ""
                 shell.toast(found.status === "COMPLETED" ? "info" : "warn",
                             "结束：" + page.buildRunWord(found.status))
+                page.loadOutcome()
+                // 再读一次。运行的状态先写、`run_state` 的戳记后写（`_stamp_run_state`
+                // 在 `set_status` 之后），所以紧接着读到的证据里可能还缺那一格。
+                // 与其在这里猜它什么时候写完，不如让它自己再刷新一次。
+                outcomeRefresh.start()
             }
         })
         bridge.loadBuildRuns(id, "10")
@@ -250,6 +253,117 @@ Flickable {
         interval: 4000
         repeat: true
         onTriggered: page.pollBuildRun()
+    }
+
+    Timer {
+        id: outcomeRefresh
+        interval: 1500
+        repeat: false
+        onTriggered: page.loadOutcome()
+    }
+
+    // --------------------------------------------------------------- 成果 (§8.2) --
+    function loadOutcome() {
+        if (buildRunId === "") return
+        var id = "agent-outcome-" + Date.now()
+        shell.request("本次成果", id, function (payload) { page.outcomeData = payload })
+        bridge.loadRunOutcome(id, buildRunId)
+    }
+
+    //: 一条产物对应的验证证据。后端把 `verification[]` 与 `artifacts[]` 平行返回，
+    //: 按 id 对齐 —— 顺序对齐是巧合，不是契约。
+    function verificationFor(artifactId) {
+        if (!outcomeData) return null
+        var list = outcomeData.verification ?? []
+        for (var i = 0; i < list.length; i++) {
+            if (list[i].artifact_id === artifactId) return list[i]
+        }
+        return null
+    }
+
+    function openPreview(artifact) {
+        previewBusy = true
+        preview = null
+        var id = "agent-preview-" + Date.now()
+        shell.request("预览", id, function (payload) {
+            page.previewBusy = false
+            page.preview = payload
+        }, function (title) {
+            page.previewBusy = false
+            page.preview = { reason: title, text: "" }
+        })
+        bridge.readDeliverableText(id, artifact.id)
+    }
+
+    //: 一个按钮一个动作。**每个都对应一个真实存在的能力** —— 「导出」不在列表里，
+    //: 因为这个构建没有文档转换器，做一个转不了格式的按钮就是做一个假功能。
+    function act(artifact, actionId) {
+        switch (actionId) {
+        case "preview":  page.openPreview(artifact); break
+        case "open":     bridge.openPath("open-" + Date.now(), artifact.path); break
+        case "reveal":   bridge.revealPath("reveal-" + Date.now(), artifact.path); break
+        case "continue":
+            shell.navigate("agent", {
+                goal: "在《" + (artifact.title || artifact.path) + "》的基础上继续修改：",
+                autoStart: false
+            })
+            break
+        case "regenerate": page.regenerate(); break
+        }
+    }
+
+    function regenerate() {
+        var goal = outcomeData ? (outcomeData.goal ?? "") : ""
+        if (!goal) {
+            shell.toast("warn", "找不到当初那次请求，无法原样重跑")
+            return
+        }
+        var id = "agent-regen-" + Date.now()
+        shell.request("重新生成", id, function (payload) {
+            page.buildRunId = (payload && payload.build_run_id) ? payload.build_run_id : ""
+            page.outcomeData = null
+            page.preview = null
+            page.running = true
+            page.progressText = "已交给" + page.employeeName() + "…"
+            pollTimer.start()
+        }, function (title) {
+            shell.toast("error", title)
+        })
+        bridge.startBuildRun(id, goal, employeeId)
+    }
+
+    //: 运行级的后续动作。逐条对应 `next_actions[].id`；不认识的 id 什么都不做，
+    //: 而不是随便挑一个动作执行。
+    function runNextAction(actionId) {
+        switch (actionId) {
+        case "verify":            page.verifyAll(); break
+        case "open_deliverables": page.shell.navigate("deliverables"); break
+        }
+    }
+
+    property int _verifyPending: 0
+
+    //: 「重新验证全部产出」。每条各发一次请求，全部回来后刷新一次成果 —— 一次请求
+    //: 只能带一个产物 id，所以在客户端数数，而不是假装有一个批量接口。
+    function verifyAll() {
+        var list = outcomeData ? (outcomeData.artifacts ?? []) : []
+        if (list.length === 0) return
+        _verifyPending = list.length
+        for (var i = 0; i < list.length; i++) {
+            var id = "agent-verify-" + i + "-" + Date.now()
+            shell.request("重新验证", id, function () {
+                page._verifyPending -= 1
+                if (page._verifyPending <= 0) {
+                    shell.toast("info", "已重新验证")
+                    page.loadOutcome()
+                }
+            }, function (title) {
+                page._verifyPending -= 1
+                shell.toast("error", title)
+                if (page._verifyPending <= 0) page.loadOutcome()
+            })
+            bridge.verifyDeliverable(id, list[i].id)
+        }
     }
 
     function loadDetail(runId) {
@@ -479,18 +593,161 @@ Flickable {
 
             RowLayout {
                 Layout.fillWidth: true
+                // 成果已经在下面那张卡里了，这里就不再指路 —— 指路是给"看不到成果"
+                // 的页面用的。
+                visible: page.outcomeData === null
                 spacing: Theme.space2
                 Text {
                     Layout.fillWidth: true
-                    text: "产出文件在「交付物」里，可以直接打开。"
+                    text: "完成后，产出会直接显示在下面，不用去别的页面找。"
                     color: Theme.textFaint
                     font.pixelSize: Theme.fontTiny
                 }
                 Button {
-                    text: "查看成果"
+                    text: "查看全部交付物"
                     variant: "secondary"
                     onClicked: page.shell.navigate("deliverables")
                 }
+            }
+        }
+
+        // ------------------------------------------------------ 这次的成果（§8.2）--
+        //
+        // 运行结束的那一刻，用户要的东西就在这里 —— 文件名、类型、大小、验证证据、
+        // 以及能真的按下去的按钮。原先这一页只说"产出在交付物页里"，把"我拿到了什么"
+        // 这个问题推给了另一页。
+        Card {
+            Layout.fillWidth: true
+            visible: page.outcomeData !== null
+            title: "这次的成果"
+            subtitle: page.outcomeData ? (page.outcomeData.artifacts ?? []).length + " 个文件" : ""
+
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 10
+                Rectangle {
+                    width: 10; height: 10; radius: 5
+                    color: page.outcomeData
+                           ? Theme.buildTone(page.outcomeData.status) : Theme.textMuted
+                }
+                Text {
+                    text: page.outcomeData ? Theme.buildWord(page.outcomeData.status) : ""
+                    color: Theme.text
+                    font.pixelSize: 15
+                    font.bold: true
+                }
+                Text {
+                    Layout.fillWidth: true
+                    text: page.outcomeData ? (page.outcomeData.summary ?? "") : ""
+                    color: Theme.textMuted
+                    font.pixelSize: 12
+                    wrapMode: Text.WordWrap
+                }
+            }
+
+            // 没有产出时明说。空白卡片看起来像"还在加载"。
+            Text {
+                Layout.fillWidth: true
+                visible: page.outcomeData && (page.outcomeData.artifacts ?? []).length === 0
+                text: "这次运行没有写出文件。如果它本来就该产出一个文件，可以在专家模式里看"
+                      + "它做了什么。"
+                color: Theme.textFaint
+                font.pixelSize: 12
+                wrapMode: Text.WordWrap
+            }
+
+            Repeater {
+                model: page.outcomeData ? (page.outcomeData.artifacts ?? []) : []
+
+                delegate: DeliverableCard {
+                    required property var modelData
+                    artifact: modelData
+                    verification: page.verificationFor(modelData.id)
+                    onActionRequested: function (actionId) {
+                        page.act(modelData, actionId)
+                    }
+                }
+            }
+
+            // ------------------------------------------------------------- 预览 --
+            Rectangle {
+                Layout.fillWidth: true
+                visible: page.preview !== null || page.previewBusy
+                implicitHeight: Math.min(360, previewText.implicitHeight + 40)
+                radius: 8
+                color: Theme.bgInput
+                border.width: 1
+                border.color: Theme.border
+
+                ColumnLayout {
+                    anchors.fill: parent
+                    anchors.margins: 10
+                    spacing: 6
+
+                    Text {
+                        Layout.fillWidth: true
+                        text: page.preview
+                              ? (page.preview.title + "　" + Theme.humanBytes(page.preview.size_bytes))
+                              : "正在读取…"
+                        color: Theme.textMuted
+                        font.pixelSize: 11
+                    }
+
+                    Text {
+                        Layout.fillWidth: true
+                        visible: page.preview !== null
+                                 && (page.preview.reason ?? "") !== ""
+                        text: page.preview ? page.preview.reason : ""
+                        color: Theme.warn
+                        font.pixelSize: 12
+                        wrapMode: Text.WordWrap
+                    }
+
+                    ScrollView {
+                        Layout.fillWidth: true
+                        Layout.fillHeight: true
+                        visible: page.preview !== null && (page.preview.text ?? "") !== ""
+                        clip: true
+
+                        TextArea {
+                            id: previewText
+                            readOnly: true
+                            text: page.preview ? page.preview.text : ""
+                            color: Theme.text
+                            font.pixelSize: 12
+                            font.family: "Consolas, monospace"
+                            wrapMode: TextArea.Wrap
+                            background: null
+                        }
+                    }
+
+                    Text {
+                        Layout.fillWidth: true
+                        visible: page.preview !== null && page.preview.truncated === true
+                        text: "内容较长，只显示前面一部分。完整内容请用系统程序打开。"
+                        color: Theme.textFaint
+                        font.pixelSize: 10
+                    }
+                }
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 8
+                visible: page.outcomeData !== null
+
+                Repeater {
+                    model: page.outcomeData ? (page.outcomeData.next_actions ?? []) : []
+
+                    delegate: Button {
+                        required property var modelData
+                        text: modelData.label
+                        enabled: modelData.enabled
+                        variant: "ghost"
+                        onClicked: page.runNextAction(modelData.id)
+                    }
+                }
+                Item { Layout.fillWidth: true }
             }
         }
 

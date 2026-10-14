@@ -267,6 +267,73 @@ def run_mapping_checks() -> None:
           len(call("declaredSections.map(function (s) { return s.key })") or []) == 3,
           str(call("declaredSections.map(function (s) { return s.key })")))
 
+    # ---- 交付闭环（§8.4 / §10）：状态词、类型名、验证摘要 ----
+    #
+    # 这一组守的是"运行结束后用户看到什么"。状态词原先写在 `AgentWorkbenchPage` 里，
+    # 而交付物页也要说同一件事 —— 两个副本迟早给出两个答案，所以搬进了 theme.js。
+    build_words = {
+        "DRAFT": "还没开始", "PLANNING": "正在理解需求", "READY": "正在整理资料",
+        "EXECUTING": "正在生成文件", "VERIFYING": "正在检查结果",
+        "WAITING_USER": "等你确认", "COMPLETED": "已交付", "PARTIAL": "交付了一部分",
+        "FAILED": "没能完成", "CANCELLED": "已取消", "LIMIT_REACHED": "到了资源上限",
+    }
+    bad_words = [k for k in build_words if call(f"buildWord('{k}')") != build_words[k]]
+    check("delivery", "构建状态 11 个全部有人话", not bad_words, f"未映射 {bad_words}")
+    # 未知状态显示原始值而不是编一个像"已完成"的词。
+    check("delivery", "未知构建状态不伪装成完成",
+          call("buildWord('WEIRD')") == "WEIRD", str(call("buildWord('WEIRD')")))
+
+    tone_done = call("buildTone('COMPLETED')")
+    tone_failed = call("buildTone('FAILED')")
+    tone_running = call("buildTone('EXECUTING')")
+    check("delivery", "完成是绿色，失败是红色",
+          tone_done == call("success") and tone_failed == call("danger"),
+          f"{tone_done} / {tone_failed}")
+    check("delivery", "进行中不是完成色",
+          tone_running != call("success") and tone_running != call("danger"),
+          str(tone_running))
+
+    kinds = {"pptx": "演示文稿", "docx": "Word 文档", "xlsx": "Excel 表格",
+             "pdf": "PDF", "md": "Markdown", "txt": "纯文本", "csv": "CSV 数据",
+             "report": "报告", "code": "代码", "mixed": "多种格式"}
+    bad_kinds = [k for k in kinds if call(f"kindLabel('{k}')") != kinds[k]]
+    check("delivery", "10 种产出格式全部有中文名", not bad_kinds, f"未映射 {bad_kinds}")
+    check("delivery", "未知格式显示原始值",
+          call("kindLabel('xyz')") == "xyz", str(call("kindLabel('xyz')")))
+    # 界面不得出现裸的格式代号 —— 用户看到的是"演示文稿"，不是"pptx"。
+    check("delivery", "格式代号不直接上屏",
+          all(call(f"kindLabel('{k}')") != k for k in kinds), str(kinds))
+
+    check("delivery", "大小只格式化，取不到就给空",
+          call("humanBytes(2048)") == "2.0 KB"
+          and call("humanBytes(undefined)") == ""
+          and call("humanBytes(-1)") == "",
+          f"{call('humanBytes(2048)')} / {call('humanBytes(undefined)')}")
+
+    # 验证摘要：**第三种结果必须说出来**。把"没查"写成"通过"是假话，混进分母里
+    # 又会让它看起来像失败 —— 两种都不行。
+    js.evaluate("var V_OK = {checks: [{outcome: 'pass'}, {outcome: 'pass'}]};")
+    js.evaluate("var V_MIX = {checks: [{outcome: 'pass'}, {outcome: 'fail'},"
+                " {outcome: 'unverified'}]};")
+    js.evaluate("var V_LEGACY = {checks: [{ok: true}, {ok: false}]};")
+    check("delivery", "全部通过时说 N/N 通过",
+          call("verificationSummary(V_OK)") == "2/2 项检查通过",
+          str(call("verificationSummary(V_OK)")))
+    check("delivery", "未通过单独计数",
+          call("verificationSummary(V_MIX)") == "1/3 项检查通过，1 项未通过，1 项无法验证",
+          str(call("verificationSummary(V_MIX)")))
+    check("delivery", "无法验证不与未通过混为一谈",
+          "1 项无法验证" in call("verificationSummary(V_MIX)")
+          and "2 项未通过" not in call("verificationSummary(V_MIX)"),
+          str(call("verificationSummary(V_MIX)")))
+    check("delivery", "旧的布尔式检查仍然能读",
+          call("verificationSummary(V_LEGACY)") == "1/2 项检查通过，1 项未通过",
+          str(call("verificationSummary(V_LEGACY)")))
+    check("delivery", "没有检查记录时不谎称已验证",
+          call("verificationSummary(null)") == "尚未验证"
+          and call("verificationSummary({checks: []})") == "尚未验证",
+          str(call("verificationSummary(null)")))
+
 
 # =========================================================================== #
 # 2. 渲染：无头加载真实界面，读渲染树
@@ -305,6 +372,28 @@ def _find_by_class(root, needle: str):
         if needle in item.metaObject().className():
             return item
     return None
+
+
+def _visible_buttons(root) -> list[tuple[str, bool]]:
+    """渲染树里当前可见的按钮，取 (文案, 是否可点)。
+
+    `enabled` 也要读，因为 §8.2 的要求不只是"按钮在不在"，而是"按钮**能不能按**"：
+    文件不在了还留一个可点的「打开」，比没有这个按钮更糟。
+    """
+    out = []
+    for item in _walk(root):
+        if "Button" not in item.metaObject().className():
+            continue
+        try:
+            if not item.isVisible():
+                continue
+            text = item.property("text")
+            enabled = item.property("enabled")
+        except Exception:  # noqa: BLE001, S112 - 非按钮控件没有这些属性，跳过正是筛选方式
+            continue
+        if isinstance(text, str) and text.strip():
+            out.append((text, bool(enabled)))
+    return out
 
 
 def _as_list(value) -> list:
@@ -473,6 +562,168 @@ def run_render_checks() -> None:
 
 
 # =========================================================================== #
+# 3. 交付卡片：把一份与后端同形的结果注入页面，断言它画出来的东西
+# =========================================================================== #
+#
+# **这里注入的是手写数据，这是有意的。** 后端产出的形状由
+# `backend/tests/integration/test_run_outcome.py` 钉住（真实数据库、真实文件、
+# 真实删除），这一组只回答另一个问题：同一份数据，页面画对了吗？
+#
+# 两边合起来才是完整的契约 —— 少了任何一边，都可能是"数据对、画错了"（两次真实
+# 事故的形态）或者"画得对、数据是假的"。
+_DEMO_OUTCOME = {
+    "build_run_id": "11111111-1111-1111-1111-111111111111",
+    "status": "COMPLETED",
+    "goal": "写一篇文章，输出 md",
+    "summary": "产出 2 个文件，其中 1 个已经不在了：演示稿。",
+    "artifacts": [
+        {
+            "id": "a1", "title": "季度报告", "kind": "md", "path": "C:/x/季度报告.md",
+            "size_bytes": 2048, "version": 2, "verified": True, "accepted": None,
+            "feedback": "",
+            "file_state": {"exists": True, "size_bytes": 2048, "reason": ""},
+            "actions": [
+                {"id": "preview", "label": "预览", "enabled": True, "reason": ""},
+                {"id": "open", "label": "打开", "enabled": True, "reason": ""},
+                {"id": "reveal", "label": "在文件夹中显示", "enabled": True, "reason": ""},
+                {"id": "continue", "label": "继续修改", "enabled": True, "reason": ""},
+                {"id": "regenerate", "label": "重新生成", "enabled": True, "reason": ""},
+            ],
+        },
+        {
+            "id": "a2", "title": "演示稿", "kind": "pptx", "path": "C:/x/演示稿.pptx",
+            "size_bytes": 51200, "version": 1, "verified": False, "accepted": False,
+            "feedback": "图表太少",
+            "file_state": {"exists": False, "size_bytes": 0,
+                           "reason": "文件不在了：FileNotFoundError"},
+            "actions": [
+                {"id": "preview", "label": "预览", "enabled": False,
+                 "reason": "文件不在了：FileNotFoundError"},
+                {"id": "open", "label": "打开", "enabled": False,
+                 "reason": "文件不在了：FileNotFoundError"},
+                {"id": "reveal", "label": "在文件夹中显示", "enabled": False,
+                 "reason": "文件不在了：FileNotFoundError"},
+                {"id": "continue", "label": "继续修改", "enabled": True, "reason": ""},
+                {"id": "regenerate", "label": "重新生成", "enabled": True, "reason": ""},
+            ],
+        },
+    ],
+    "verification": [
+        {"artifact_id": "a1", "artifact_title": "季度报告", "passed": True,
+         "check_count": 3, "failed_count": 0, "unverified_count": 0,
+         "checks": [
+             {"name": "file_exists", "outcome": "pass", "ok": True, "detail": "2.0 KB"},
+             {"name": "encoding", "outcome": "pass", "ok": True, "detail": "UTF-8"},
+             {"name": "content", "outcome": "pass", "ok": True, "detail": "1200 个字符"},
+         ],
+         "run_state": {"state": "COMPLETED", "ok": True, "detail": "这次运行走完了全部步骤。"}},
+        {"artifact_id": "a2", "artifact_title": "演示稿", "passed": False,
+         "check_count": 1, "failed_count": 1, "unverified_count": 0,
+         "checks": [{"name": "file_exists", "outcome": "fail", "ok": False,
+                     "detail": "文件不存在"}],
+         "run_state": {"state": "COMPLETED", "ok": True, "detail": "这次运行走完了全部步骤。"}},
+    ],
+    "next_actions": [
+        {"id": "verify", "label": "重新验证全部产出", "enabled": True, "reason": ""},
+        {"id": "open_deliverables", "label": "查看全部交付物", "enabled": True, "reason": ""},
+    ],
+    "diagnostic_ref": {"build_run_id": "11111111-1111-1111-1111-111111111111",
+                       "ai_run_id": None},
+}
+
+
+def run_delivery_checks() -> None:
+    bridge, window = _load_shell()
+    window.setProperty("width", 1280)
+    window.setProperty("height", 900)
+    _pump(600)
+
+    window.navigate("agent", None)
+    _pump(2500)
+    root = window.contentItem()
+    page = _find_by_class(root, "AgentWorkbenchPage")
+    if page is None:
+        check("delivery", "Agent 工作台可打开", False, "找不到 AgentWorkbenchPage")
+        bridge.shutdown()
+        return
+    check("delivery", "Agent 工作台可打开", True)
+
+    # 注入前：成果区不出现 —— 没有运行过就不该有"这次的成果"。
+    before = _visible_texts(root)
+    check("delivery", "没有运行时不显示成果区", "这次的成果" not in before,
+          str([t for t in before if "成果" in t]))
+
+    page.setProperty("outcomeData", _DEMO_OUTCOME)
+    _pump(900)
+
+    texts = _visible_texts(root)
+    buttons = _visible_buttons(root)
+
+    # ---- 成果区出现，状态与人话一致 ----
+    check("delivery", "成果区出现", "这次的成果" in texts)
+    check("delivery", "状态说「已交付」而不是 COMPLETED",
+          "已交付" in texts and "COMPLETED" not in texts,
+          str([t for t in texts if "COMPLETED" in t][:3]))
+    check("delivery", "摘要是后端给的那句，不是页面自己编的",
+          _DEMO_OUTCOME["summary"] in texts)
+
+    # ---- 两条产物都渲染出真实标题与类型 ----
+    check("delivery", "两个产物标题都渲染", "季度报告" in texts and "演示稿" in texts)
+    check("delivery", "类型显示中文名而不是 pptx/md",
+          any(t.startswith("Markdown") for t in texts)
+          and any(t.startswith("演示文稿") for t in texts)
+          and "pptx" not in texts and "md" not in texts,
+          str([t for t in texts if t.startswith(("Markdown", "演示文稿"))]))
+    check("delivery", "版本号渲染", "第 2 版" in texts and "第 1 版" in texts)
+    check("delivery", "大小渲染成人话", any("2.0 KB" in t for t in texts),
+          str([t for t in texts if "KB" in t or " B" in t]))
+
+    #: 文件不在了就不报大小。"0 B" 会被读成"文件是空的"，而事实是文件不见了。
+    check("delivery", "文件不在时不报大小",
+          not any(t.startswith("演示文稿 · 0 B") for t in texts),
+          str([t for t in texts if t.startswith("演示文稿")]))
+
+    # ---- 验证证据：两个产物的摘要各自对应自己的检查 ----
+    check("delivery", "通过的那条说 3/3",
+          any("3/3 项检查通过" in t for t in texts),
+          str([t for t in texts if "项检查通过" in t]))
+    check("delivery", "失败的那条说未通过，且不与另一条串台",
+          any("0/1 项检查通过，1 项未通过" in t for t in texts),
+          str([t for t in texts if "项检查通过" in t]))
+
+    # ---- 文件不在：必须明说，且按钮必须灰掉 ----
+    check("delivery", "文件不在时显示原因",
+          "文件不在了：FileNotFoundError" in texts)
+    check("delivery", "驳回理由渲染", "驳回理由：图表太少" in texts)
+
+    open_buttons = [enabled for text, enabled in buttons if text == "打开"]
+    check("delivery", "两条产物各有一个「打开」", len(open_buttons) == 2, str(open_buttons))
+    check("delivery", "文件在的那条「打开」可点、不在的那条不可点",
+          open_buttons.count(True) == 1, str(open_buttons))
+
+    preview_buttons = [enabled for text, enabled in buttons if text == "预览"]
+    check("delivery", "「预览」按钮跟着文件状态走",
+          len(preview_buttons) == 2 and preview_buttons.count(True) == 1,
+          str(preview_buttons))
+
+    # ---- 运行级动作 ----
+    check("delivery", "运行级动作渲染",
+          "重新验证全部产出" in texts and "查看全部交付物" in texts)
+    # 运行级动作不得与产物级动作重名 —— 同一个按钮出现在两处迟早会漂移。
+    artifact_labels = {a["label"] for art in _DEMO_OUTCOME["artifacts"] for a in art["actions"]}
+    run_labels = {a["label"] for a in _DEMO_OUTCOME["next_actions"]}
+    check("delivery", "运行级与产物级动作不重名",
+          not (artifact_labels & run_labels), str(artifact_labels & run_labels))
+
+    # ---- 内部字段不得泄漏 ----
+    leaked = [t for t in texts
+              if any(w in t for w in ("[object", "file_state", "artifact_id", "diagnostic_ref"))]
+    check("delivery", "界面不泄漏内部字段名", not leaked, str(leaked[:3]))
+
+    bridge.shutdown()
+
+
+# =========================================================================== #
 def main() -> int:
     only = sys.argv[1] if len(sys.argv) > 1 else ""
     print("投影层回归测试（断言渲染内容与数据一致）", flush=True)
@@ -480,9 +731,12 @@ def main() -> int:
     if not only or only == "mapping":
         print("\n=== 1. 纯映射（theme.js）===", flush=True)
         run_mapping_checks()
-    if not only or only == "contract" or only == "dashboard":
+    if not only or only in ("contract", "dashboard"):
         print("\n=== 2. 渲染（真实界面）===", flush=True)
         run_render_checks()
+    if not only or only == "delivery":
+        print("\n=== 3. 交付卡片（注入同形数据）===", flush=True)
+        run_delivery_checks()
 
     failed = [row for row in RESULTS if not row[2]]
     total = len(RESULTS)

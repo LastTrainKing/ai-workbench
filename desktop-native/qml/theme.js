@@ -554,3 +554,94 @@ function shortcutFor(key) {
     }
     return ""
 }
+
+// ---------------------------------------------------------------- 交付闭环 --
+//
+// §8.2/§8.4：这一节是"运行结束后用户看到什么"。状态词与按钮文案都从真实字段映射，
+// 不按预估时间编进度，也不给不存在的操作留一个位置。
+
+//: 构建运行的状态 → 人话。原先是 `AgentWorkbenchPage` 里的一个局部函数；搬到
+//: theme.js 是因为交付物页也要说同一件事 —— 两处各写一份就是两个答案。
+function buildWord(status) {
+    switch (status) {
+    case "DRAFT":         return "还没开始"
+    case "PLANNING":      return "正在理解需求"
+    case "READY":         return "正在整理资料"
+    case "EXECUTING":     return "正在生成文件"
+    case "VERIFYING":     return "正在检查结果"
+    case "WAITING_USER":  return "等你确认"
+    case "COMPLETED":     return "已交付"
+    case "PARTIAL":       return "交付了一部分"
+    case "FAILED":        return "没能完成"
+    case "CANCELLED":     return "已取消"
+    case "LIMIT_REACHED": return "到了资源上限"
+    default:              return status || "状态未知"
+    }
+}
+
+function buildTone(status) {
+    switch (status) {
+    case "COMPLETED":     return success
+    case "PLANNING":
+    case "READY":
+    case "EXECUTING":
+    case "VERIFYING":     return accent
+    case "WAITING_USER":  return warn
+    case "PARTIAL":       return warn
+    case "LIMIT_REACHED": return warn
+    case "FAILED":        return danger
+    case "CANCELLED":     return textMuted
+    default:              return textMuted
+    }
+}
+
+//: 验证结果 → 一行字。**`unverified` 必须说出来**：把"没查"写成"通过"或"失败"都是假话，
+//: 而"2/3 项通过"这种说法会把没查的那项混进分母里，看起来像失败了。
+function verificationSummary(verification) {
+    var v = verification || {}
+    var checks = v.checks
+    if (!checks || checks.length === undefined || checks.length === 0) {
+        return "尚未验证"
+    }
+    var passed = 0
+    var failed = 0
+    var unknown = 0
+    for (var i = 0; i < checks.length; i++) {
+        var outcome = checks[i].outcome
+        if (outcome === undefined) outcome = checks[i].ok ? "pass" : "fail"
+        if (outcome === "pass") passed++
+        else if (outcome === "unverified") unknown++
+        else failed++
+    }
+    var text = passed + "/" + checks.length + " 项检查通过"
+    if (failed > 0) text += "，" + failed + " 项未通过"
+    if (unknown > 0) text += "，" + unknown + " 项无法验证"
+    return text
+}
+
+//: 文件类型 → 中文。用户看到的是"演示文稿"，不是"pptx"。
+function kindLabel(kind) {
+    switch (kind) {
+    case "pptx":   return "演示文稿"
+    case "docx":   return "Word 文档"
+    case "xlsx":   return "Excel 表格"
+    case "pdf":    return "PDF"
+    case "md":     return "Markdown"
+    case "txt":    return "纯文本"
+    case "csv":    return "CSV 数据"
+    case "report": return "报告"
+    case "code":   return "代码"
+    case "mixed":  return "多种格式"
+    default:       return kind || "未知格式"
+    }
+}
+
+//: 字节数 → 人话。取不到来源时返回空串，由调用方决定不显示 —— 编一个"0 B"是在
+//: 说这个文件是空的。
+function humanBytes(bytes) {
+    var n = Number(bytes)
+    if (isNaN(n) || n < 0) return ""
+    if (n < 1024) return n + " B"
+    if (n < 1048576) return (n / 1024).toFixed(1) + " KB"
+    return (n / 1048576).toFixed(1) + " MB"
+}

@@ -97,6 +97,16 @@ class BuildStatus(StrEnum):
 #: What kind of thing the user asked for. Drives which writer the agent reaches for.
 DELIVERABLE_KINDS = ("pptx", "docx", "xlsx", "pdf", "md", "csv", "report", "code", "mixed")
 
+#: Kinds this application can render as text in its own window. Everything else is
+#: opened with the system's default program — a real action, just a different one.
+#:
+#: Declared here rather than in the UI because two surfaces ask the question (the run
+#: page's artifact cards and the delivery page's list) and a second copy of the list is
+#: how one of them ends up offering a preview the other knows is impossible.
+TEXT_PREVIEWABLE_KINDS = frozenset(
+    {"md", "txt", "report", "csv", "code", "json", "yaml", "log"}
+)
+
 
 class BuildRun(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     """One "build me this" request, from the sentence to the accepted artifact."""
@@ -283,6 +293,9 @@ class Deliverable(Base, UUIDPrimaryKeyMixin, TimestampMixin):
             "accepted": self.accepted,
             "feedback": self.feedback,
             "style": self.style,
+            #: Whether this application can show the file's contents itself. The UI reads
+            #: it instead of keeping its own list of extensions.
+            "previewable": self.kind in TEXT_PREVIEWABLE_KINDS,
             "decided_at": self.decided_at.isoformat() if self.decided_at else None,
             "created_at": self.created_at.isoformat() if self.created_at else None,
         }
@@ -290,6 +303,19 @@ class Deliverable(Base, UUIDPrimaryKeyMixin, TimestampMixin):
             payload["verification"] = self.verification
             payload["applied_preferences"] = self.applied_preferences
         return payload
+
+
+def _outcome_of(check: dict[str, Any]) -> str:
+    """Read a check's verdict, accepting either the three-way field or the boolean.
+
+    Older rows and hand-written checks carry `ok` alone. Deriving `outcome` from it
+    keeps them readable without a migration, and keeps `make_verification` the only
+    place that decides what a check means.
+    """
+    explicit = str(check.get("outcome") or "").strip().lower()
+    if explicit in ("pass", "fail", "unverified"):
+        return explicit
+    return "pass" if check.get("ok") else "fail"
 
 
 def make_verification(
@@ -318,16 +344,25 @@ def make_verification(
     normalised = [
         {
             "name": str(check.get("name") or "unnamed"),
-            "ok": bool(check.get("ok")),
+            #: Three-way, and the third value is the point. `pass` and `fail` are
+            #: answers; `unverified` means the question could not be asked — a
+            #: missing library, a kind with no reader. Reporting that as `fail`
+            #: would call a good file broken; reporting it as `pass` would bless a
+            #: file nobody opened. Callers that only want a boolean read `ok`.
+            "outcome": _outcome_of(check),
+            "ok": _outcome_of(check) == "pass",
             "detail": str(check.get("detail") or ""),
         }
         for check in checks
     ]
     payload: dict[str, Any] = {
         "checks": normalised,
-        "passed": bool(normalised) and all(check["ok"] for check in normalised),
+        #: Only a run of unambiguous passes counts as verified. An unverified check
+        #: leaves this false — "I could not tell" is not a green light.
+        "passed": bool(normalised) and all(check["outcome"] == "pass" for check in normalised),
         "check_count": len(normalised),
-        "failed_count": sum(1 for check in normalised if not check["ok"]),
+        "failed_count": sum(1 for check in normalised if check["outcome"] == "fail"),
+        "unverified_count": sum(1 for check in normalised if check["outcome"] == "unverified"),
     }
     if run_state is not None:
         payload["run_state"] = {
@@ -389,6 +424,7 @@ def describe_run_state(status: str) -> dict[str, Any]:
 
 __all__ = [
     "DELIVERABLE_KINDS",
+    "TEXT_PREVIEWABLE_KINDS",
     "BuildRun",
     "BuildStatus",
     "Deliverable",

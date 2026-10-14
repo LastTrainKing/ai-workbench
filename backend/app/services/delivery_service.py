@@ -37,10 +37,12 @@ from app.models.delivery import (
     Deliverable,
     make_verification,
 )
+from app.services.artifact_checks import checks_for
 
 logger = get_logger(__name__)
 
-#: Extensions the verification step knows how to read back.
+#: Extensions the verification step knows how to read back. Kept as the public name
+#: other modules import; the per-kind rules themselves live in `artifact_checks`.
 READABLE_KINDS = {"pptx", "docx", "xlsx", "pdf", "md", "csv", "txt"}
 
 
@@ -205,66 +207,17 @@ class DeliveryService:
     ) -> dict[str, Any]:
         """Read the file back and check it against what it claims to be.
 
-        "The file was generated" is not verification. This is: the file exists, it can
-        be parsed, and the numbers inside it are what was asked for.
+        "The file was generated" is not verification. This is: the file exists, it
+        opens with the library that writes that format, it contains what it should,
+        and the checks are the ones that format actually has — see
+        `artifact_checks.checks_for`. A missing reader yields `unverified` rather
+        than a pass or a failure, because neither is true.
         """
         item = await self.session.get(Deliverable, deliverable_id)
         if item is None or item.user_id != owner_id:
             raise NotFoundError("产出物不存在")
 
-        checks: list[dict[str, Any]] = []
-        target = Path(item.path)
-
-        checks.append(
-            {
-                "name": "file_exists",
-                "ok": target.is_file(),
-                "detail": f"{target.stat().st_size:,} bytes" if target.is_file() else "not found",
-            }
-        )
-
-        if target.is_file() and item.kind in READABLE_KINDS:
-            try:
-                from app.ai.tools.builtin.documents import (
-                    _read_csv,
-                    _read_docx,
-                    _read_pdf,
-                    _read_pptx,
-                    _read_xlsx,
-                )
-
-                readers = {
-                    "pptx": _read_pptx,
-                    "docx": _read_docx,
-                    "xlsx": _read_xlsx,
-                    "pdf": _read_pdf,
-                    "csv": _read_csv,
-                }
-                if item.kind in readers:
-                    payload = readers[item.kind](target)
-                    detail = {
-                        "pptx": f"{payload.get('slide_count')} slides",
-                        "docx": f"{payload.get('paragraphs')} paragraphs",
-                        "xlsx": f"{payload.get('sheet_count')} sheets, {payload.get('charts')} charts",
-                        "pdf": f"{payload.get('page_count')} pages",
-                        "csv": f"{payload.get('row_count')} rows",
-                    }.get(item.kind, "readable")
-                    checks.append({"name": "readback", "ok": True, "detail": detail})
-                else:
-                    text = target.read_text(encoding="utf-8", errors="replace")
-                    checks.append(
-                        {"name": "readback", "ok": bool(text.strip()), "detail": f"{len(text)} chars"}
-                    )
-            except Exception as exc:
-                checks.append(
-                    {
-                        "name": "readback",
-                        "ok": False,
-                        "detail": f"{type(exc).__name__}: {exc}"[:200],
-                    }
-                )
-        elif target.is_file():
-            checks.append({"name": "readback", "ok": True, "detail": f"{item.kind} (not parsed)"})
+        checks = checks_for(item.kind, Path(item.path))
 
         result = make_verification(checks, run_state=await self._run_state_note(item))
         item.verification = result
@@ -433,6 +386,73 @@ class DeliveryService:
         if item is None or item.user_id != owner_id:
             raise NotFoundError("产出物不存在")
         return item
+
+    async def outcome_for_run(
+        self, *, owner_id: uuid.UUID, build_run_id: uuid.UUID
+    ) -> dict[str, Any]:
+        """The unified result contract for one run — see `run_outcome.build_run_outcome`.
+
+        The deliverables are loaded here, scoped to the owner, rather than through the
+        relationship: a projection that could show another account's file would be a
+        worse bug than the one it fixes.
+        """
+        from app.services.run_outcome import build_run_outcome
+
+        run = await self.get_build_run(owner_id=owner_id, build_run_id=build_run_id)
+        items = await self.list_deliverables(
+            owner_id=owner_id, build_run_id=build_run_id, limit=200
+        )
+        return build_run_outcome(run, items)
+
+    async def read_text(
+        self, *, owner_id: uuid.UUID, deliverable_id: uuid.UUID, max_chars: int = 60_000
+    ) -> dict[str, Any]:
+        """A bounded, honest preview of a text-like deliverable.
+
+        Three refusals matter as much as the success path, and each says which one it
+        is rather than returning an empty string that reads like an empty file:
+
+        * the file is gone → `reason` says so, and the caller stops claiming 「已交付」
+        * the kind is not text → `reason` names the format instead of showing mojibake
+        * the file is mis-encoded → the strict decoder fails and the reason is the
+          encoding, not "empty"
+
+        Truncation is reported with `truncated`, because a preview that silently stops
+        at 60,000 characters is indistinguishable from a file that ends there.
+        """
+        item = await self.get_deliverable(owner_id=owner_id, deliverable_id=deliverable_id)
+        target = Path(item.path)
+        base: dict[str, Any] = {
+            "deliverable_id": str(item.id),
+            "title": item.title or target.name,
+            "kind": item.kind,
+            "path": item.path,
+            "text": "",
+            "truncated": False,
+            "size_bytes": 0,
+            "reason": "",
+        }
+
+        if not target.is_file():
+            base["reason"] = "文件不在了，无法预览。它可能被移动或删除。"
+            return base
+
+        base["size_bytes"] = target.stat().st_size
+        try:
+            text = target.read_text(encoding="utf-8-sig")
+        except UnicodeDecodeError:
+            base["reason"] = "这个文件不是 UTF-8 文本，应用内不预览它，请用系统程序打开。"
+            return base
+        except OSError as exc:
+            base["reason"] = f"读不了这个文件：{type(exc).__name__}"
+            return base
+
+        if len(text) > max_chars:
+            base["text"] = text[:max_chars]
+            base["truncated"] = True
+        else:
+            base["text"] = text
+        return base
 
     async def version_chain(
         self, *, owner_id: uuid.UUID, deliverable_id: uuid.UUID

@@ -160,25 +160,45 @@ Flickable {
         })
     }
 
-    function humanSize(bytes) {
-        var n = Number(bytes ?? 0)
-        if (n < 1024) return n + " B"
-        if (n < 1048576) return (n / 1024).toFixed(1) + " KB"
-        return (n / 1048576).toFixed(1) + " MB"
-    }
+    function humanSize(bytes) { return Theme.humanBytes(bytes) }
 
     //: The verification result, as a readable line rather than a boolean. A verifier that
     //: wrote a reason and a checker that did not are different answers.
-    function verificationText(item) {
-        var v = item.verification ?? {}
-        if (v.checks && v.checks.length !== undefined) {
-            var ok = 0
-            for (var i = 0; i < v.checks.length; i++) if (v.checks[i].ok) ok++
-            return ok + "/" + v.checks.length + " 项检查通过"
+    //:
+    //: 三个结果（通过 / 未通过 / 无法验证）都在这句话里。旧写法只数 `ok` 的个数，
+    //: 于是"这项没查"和"这项失败"长得一模一样 —— 而它们对用户是两件事。
+    function verificationText(item) { return Theme.verificationSummary(item.verification) }
+
+    //: 能不能在应用里读出来，由后端说（`Deliverable.as_dict().previewable`），
+    //: 不由这里按后缀猜。两份清单就是两个答案。
+    function canPreview(item) { return !!(item && item.previewable && item.path) }
+
+    // ---------------------------------------------------------------- 预览 --
+    //
+    // §8.3：Markdown / TXT / 代码在原生界面里直接读出来，不跳外部程序。读不了的时候
+    // 说清为什么（文件没了 / 不是 UTF-8 / 格式不支持），而不是给一个空白框。
+    property var preview: null
+    property bool previewBusy: false
+    property string previewFor: ""
+
+    function openPreview(item) {
+        if (previewFor === item.id) {
+            previewFor = ""
+            preview = null
+            return
         }
-        if (v.reason) return v.reason
-        if (item.verified) return "已验证"
-        return "尚未验证"
+        previewFor = item.id
+        previewBusy = true
+        preview = null
+        var id = "dl-preview-" + Date.now()
+        shell.request("预览", id, function (payload) {
+            page.previewBusy = false
+            page.preview = payload
+        }, function (title) {
+            page.previewBusy = false
+            page.preview = { title: item.title, reason: title, text: "", truncated: false }
+        })
+        bridge.readDeliverableText(id, item.id)
     }
 
     property bool _loaded: false
@@ -273,7 +293,7 @@ Flickable {
                                 Layout.fillWidth: true
                             }
                             Text {
-                                text: (modelData.kind ?? "?") + " · "
+                                text: Theme.kindLabel(modelData.kind) + " · "
                                       + page.humanSize(modelData.size_bytes) + " · 第 "
                                       + (modelData.version ?? 1) + " 版 · "
                                       + page.verificationText(modelData)
@@ -300,19 +320,28 @@ Flickable {
                         // 固定宽度的操作列。按钮的 x 不能随文件名长短浮动 —— 上一轮
                         // 审计抓到的正是这一类错位：一排按钮跟着卡片内容整体平移。
                         RowLayout {
-                            Layout.preferredWidth: 320
+                            Layout.preferredWidth: 372
                             Layout.alignment: Qt.AlignVCenter
                             spacing: 8
 
                             Button {
-                                Layout.preferredWidth: 64
+                                Layout.preferredWidth: 56
                                 text: page.selected === modelData.id ? "收起" : "查看"
                                 onClicked: page.selected === modelData.id
                                            ? page.selected = ""
                                            : page.open(modelData)
                             }
                             Button {
-                                Layout.preferredWidth: 64
+                                Layout.preferredWidth: 56
+                                text: "预览"
+                                // 文本类才有得预览。其余格式给一个按不动的按钮，
+                                // 比给一个点开是空的按钮诚实。
+                                enabled: page.canPreview(modelData)
+                                Accessible.name: "预览 " + (modelData.title || "")
+                                onClicked: page.openPreview(modelData)
+                            }
+                            Button {
+                                Layout.preferredWidth: 56
                                 text: "打开"
                                 enabled: !!modelData.path
                                 Accessible.name: "打开 " + (modelData.title || "")
@@ -390,6 +419,76 @@ Flickable {
                                   : "")
                             color: Theme.textFaint
                             font.pixelSize: 11
+                        }
+
+                        // ---------------------------------------------------- 预览 --
+                        //
+                        // §8.3：能读的格式就地读出来。读不了的时候给出原因，
+                        // 而不是一个空白框 —— 空白框会被当成"文件是空的"。
+                        Rectangle {
+                            Layout.fillWidth: true
+                            visible: page.previewFor === modelData.id
+                                     && (page.preview !== null || page.previewBusy)
+                            Layout.preferredHeight: Math.min(320, previewBody.implicitHeight + 24)
+                            radius: 8
+                            color: Theme.bgInput
+                            border.width: 1
+                            border.color: Theme.border
+
+                            ColumnLayout {
+                                id: previewBody
+                                anchors.left: parent.left
+                                anchors.right: parent.right
+                                anchors.top: parent.top
+                                anchors.margins: 12
+                                spacing: 6
+
+                                Text {
+                                    Layout.fillWidth: true
+                                    text: page.preview
+                                          ? (page.preview.title + "　"
+                                             + Theme.humanBytes(page.preview.size_bytes))
+                                          : "正在读取…"
+                                    color: Theme.textMuted
+                                    font.pixelSize: 11
+                                }
+
+                                Text {
+                                    Layout.fillWidth: true
+                                    visible: page.preview !== null
+                                             && (page.preview.reason ?? "") !== ""
+                                    text: page.preview ? page.preview.reason : ""
+                                    color: Theme.warn
+                                    font.pixelSize: 12
+                                    wrapMode: Text.WordWrap
+                                }
+
+                                ScrollView {
+                                    Layout.fillWidth: true
+                                    Layout.preferredHeight: 240
+                                    visible: page.preview !== null
+                                             && (page.preview.text ?? "") !== ""
+                                    clip: true
+
+                                    TextArea {
+                                        readOnly: true
+                                        text: page.preview ? page.preview.text : ""
+                                        color: Theme.text
+                                        font.pixelSize: 12
+                                        font.family: "Consolas, monospace"
+                                        wrapMode: TextArea.Wrap
+                                        background: null
+                                    }
+                                }
+
+                                Text {
+                                    Layout.fillWidth: true
+                                    visible: page.preview !== null && page.preview.truncated === true
+                                    text: "内容较长，只显示前面一部分。完整内容请用系统程序打开。"
+                                    color: Theme.textFaint
+                                    font.pixelSize: 10
+                                }
+                            }
                         }
 
                         RowLayout {
