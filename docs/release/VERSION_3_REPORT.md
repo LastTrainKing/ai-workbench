@@ -106,10 +106,10 @@
 | 项 | 值 |
 |---|---|
 | 安装包 | `build/installer/AI-Workbench-Native-Setup.exe` |
-| 大小 | **125,005,709 字节** |
-| SHA-256 | `56e9812f4dc5bf25b7c30a9511204854f957209e05f9f12764004b86d78c374e` |
+| 大小 | **125,013,327 字节** |
+| SHA-256 | `b6cce9b90535194b0bb6bc2fa77a64ec8e525a7846390b9e916b3e5c9d6703c0` |
 | 版本资源 | `3.0.0` |
-| 对应 commit | `d77d039` |
+| 对应 commit | `b7fddd2` |
 | 原生应用包 | `desktop-native/dist/AI-Workbench-Native/`，256 MB，包内自检 10/10 |
 
 ---

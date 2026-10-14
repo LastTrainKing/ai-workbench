@@ -94,10 +94,10 @@
 | ----------- | ------------------------------------------------------------------ |
 | 路径          | `build/installer/AI-Workbench-Native-Setup.exe`                    |
 | 版本（文件资源）    | `3.0.0`                                                            |
-| 大小          | **125,005,709 字节**（119.2 MB）                                       |
-| SHA-256     | `56e9812f4dc5bf25b7c30a9511204854f957209e05f9f12764004b86d78c374e` |
-| 构建时间        | 2026-10-14 10:36                                                   |
-| 对应源码 commit | **`d77d039`**（tag `v3.0.0-rc.1` → `2a420a9`，两者之间**只有文档变化**）        |
+| 大小          | **125,013,327 字节**（119.2 MB）                                       |
+| SHA-256     | `b6cce9b90535194b0bb6bc2fa77a64ec8e525a7846390b9e916b3e5c9d6703c0` |
+| 构建时间        | 2026-10-14 11:48                                                   |
+| 对应源码 commit | **`b7fddd2`**（= tag `v3.0.0-rc.1`）        |
 | payload     | 485.3 MB / 3949 个文件（含 `vendor/runtime` 三个引擎）                       |
 | 原生应用包       | `desktop-native/dist/AI-Workbench-Native/`，256 MB                  |
 
@@ -117,12 +117,16 @@ git diff --stat HEAD -- README.md VERSION LICENSE scripts desktop-native/dist
 (Get-Item build\installer\AI-Workbench-Native-Setup.exe).VersionInfo.FileVersion
                                          :: 3.0.0
 
-:: 4. tag 与安装包构建的那个 commit 之间，payload 文件没有变过
-git diff --stat d77d039 v3.0.0-rc.1 -- README.md VERSION LICENSE scripts desktop-native/dist
-                                         :: 空（只改了 docs/）
+:: 4. 安装包构建之后，payload 里那些文件没有被再改过
+git log --oneline -1 -- README.md VERSION LICENSE scripts desktop-native/dist
+                                         :: 最后改动它们的那个提交，就是安装包对应的提交
 ```
 
-payload 的显式清单是 `scripts/build_native_installer.py` 里的 `PAYLOAD` 常量：  
+**这一次真的触发了。** 干净克隆那一轮改了 `README.md`（补上原生桌面一节与测试前提），
+而 `README.md` **在 payload 清单里** —— 于是第一次构建的安装包立刻过期。
+第 4 步检查抓到了它，安装包已重建（`b7fddd2`），不是"反正差不多"地发出去。
+
+payload 的显式清单是 `scripts/build_native_installer.py` 里的 `INCLUDE` 列表：  
 `desktop-native/dist/`、`vendor/runtime/{pgsql,redis,qdrant}`、五个 `scripts/*.ps1`、  
 `VERSION`、`README.md`、`LICENSE`。**清单之外的东西一律不进包** —— 陈旧 payload 会发布  
 上一个版本的产品，而没有任何东西会说。
