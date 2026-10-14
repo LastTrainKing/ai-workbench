@@ -80,7 +80,7 @@
 | 真模型端到端 | 真实执行一次且产物可见 | 脱敏验收记录 | **6 条 live 测试 6 passed（5 次调用 / 1275 tokens）**；`verify_live_acceptance.py` 10/11 |
 | 干净克隆 | 按文档可复现 | 命令与结果 | **是**（见 `BUILD_AND_INSTALL.md` §5）：新建 venv + **一条命令**装依赖 + 新建空库 + 从零跑完 10 个迁移 + lint + 全量测试 1526/0/11 + **原生桌面端启动成功**。**真实模型端到端 11/11 通过**（62 秒，真模型真文件，见 `BUILD_AND_INSTALL.md` §5.6） |
 | 数据库迁移 | 新库与升级库分别验证 | 迁移测试报告 | **空库从零跑完 10 个迁移**（head `a1e5c7b9d204`）；**安装版启动时报告 `schema already set up`**，即它认出并复用了既有库；升级路径由 `test_schema_forward_upgrade.py` 覆盖 |
-| Windows 安装器 | 新构建、安装、启动成功 | 文件、SHA-256 | **全部执行**：125,004,453 字节，SHA-256 `2a273ff0…1978`，`FileVersion 3.0.0`，包内自检 10/10；**卸载 2.5.0 → 装 3.0.0 → 启动 → 退出 → 卸载 → 重装** 八步全部通过，数据 2179 个文件自始至终完好 |
+| Windows 安装器 | 新构建、安装、启动成功 | 文件、SHA-256 | **全部执行**：125,002,324 字节，SHA-256 `0d8a56f6…7c6`，`FileVersion 3.0.0`，包内自检 10/10；**卸载 2.5.0 → 装 3.0.0 → 启动 → 退出 → 卸载 → 重装** 八步全部通过，数据 2179 个文件自始至终完好 |
 | 许可证 | 本项目与分发依赖核实 | License / notices | **MIT（仓库既有）**；捆绑组件 PostgreSQL License / BSD-3-Clause / Apache-2.0 / LGPLv3，均已核实可再分发 |
 | 文档 | 安装、使用、测试、限制齐全 | 文档路径 | **齐全**，见 §5 |
 | Git tag | 指向最终发布 commit | tag SHA | **`v3.0.0`**（annotated） |
@@ -125,10 +125,10 @@
 | 项 | 值 |
 |---|---|
 | 安装包 | `build/installer/AI-Workbench-Native-Setup.exe` |
-| 大小 | **125,004,453 字节** |
-| SHA-256 | `2a273ff0c35b85de39835bd2ec2632df3eba9ae7ef067d2417712f1d65301978` |
+| 大小 | **125,002,324 字节** |
+| SHA-256 | `0d8a56f662ba67931650ff7b94c96fc5e357d390072825b932ec51e4d427d7c6` |
 | 版本资源 | `3.0.0` |
-| 对应 commit | `30ba77f`（payload 内容最后变化的提交；tag 指向的是发布 commit，两者不同是正常的） |
+| 对应 commit | `7d1c38b`（payload 内容最后变化的提交；tag 指向的是发布 commit，两者不同是正常的） |
 | 原生应用包 | `desktop-native/dist/AI-Workbench-Native/`，256 MB，包内自检 10/10 |
 
 ---

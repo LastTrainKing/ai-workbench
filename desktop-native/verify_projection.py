@@ -661,6 +661,28 @@ def run_render_checks() -> None:
             check("dashboard", "未配置 Key 时说「未配置」",
                   "未配置" in service_line, service_line)
 
+        # 离线引擎的能力边界必须写在状态栏上，而不是只写在文档里。
+        #
+        # 内置引擎的 agent 工具序列里**没有 `file_write`**
+        # （`backend/app/ai/providers/heuristic.py` 的 `_agent_step`），所以"让员工产出一个
+        # 文件"在没配 Key 时**不可能达成**。状态栏原来说的是"功能可用"，一个没配 Key 的
+        # 新用户会照它试一次，然后拿到一条笔记、和一个指向空处的"产出在下面"。
+        #
+        # **这里强制注入未配置状态**：这台机器上配了 Key，不注入就永远走不到这个分支 ——
+        # 而它恰恰是新用户唯一会看到的那一支。断言的是**渲染出来的那句话**，不是源码里写了什么。
+        offline = {"providers": {"llm": {"api_key_set": False, "model": ""}}}
+        dash.setProperty("summary", offline)
+        _pump(600)
+        offline_line = next(
+            (t for t in _visible_texts(root) if t.startswith("AI 服务")), ""
+        )
+        check("dashboard", "未配置时不宣称「功能可用」",
+              "功能可用" not in offline_line, offline_line)
+        check("dashboard", "未配置时说清写不出交付文件",
+              "写不出交付文件" in offline_line, offline_line)
+        dash.setProperty("summary", summary)
+        _pump(300)
+
     bridge.shutdown()
 
 
