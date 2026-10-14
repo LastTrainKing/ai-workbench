@@ -128,7 +128,7 @@
 | 大小 | **125,004,453 字节** |
 | SHA-256 | `2a273ff0c35b85de39835bd2ec2632df3eba9ae7ef067d2417712f1d65301978` |
 | 版本资源 | `3.0.0` |
-| 对应 commit | `30ba77f` |
+| 对应 commit | `e633ee2` |
 | 原生应用包 | `desktop-native/dist/AI-Workbench-Native/`，256 MB，包内自检 10/10 |
 
 ---

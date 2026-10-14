@@ -97,53 +97,73 @@
 | 大小 | **125,004,453 字节**（119.2 MB） |
 | SHA-256 | `2a273ff0c35b85de39835bd2ec2632df3eba9ae7ef067d2417712f1d65301978` |
 | 构建时间 | 2026-10-14 19:31 |
-| 对应源码 commit | **`30ba77f`** |
+| 对应源码 commit | **`e633ee2`**（= tag `v3.0.0`） |
 | payload | 485.3 MB / 3949 个文件（含 `vendor/runtime` 三个引擎） |
 | 原生应用包 | `desktop-native/dist/AI-Workbench-Native/` |
 | 包内自检 | **10/10**（对**组装后的 payload** 跑，不是对 `dist/`） |
 
 ### 3.1 版本对应关系怎么核
 
-§16 明列"安装包与源码 commit 对不上"是发布闸门。核法：
+§16 明列"安装包与源码 commit 对不上"是发布闸门。核法分两半：**git 能证明的**，
+和**git 证明不了的**。
+
+**git 能证明的那一半**（payload 里的受跟踪文件）：
 
 ```bat
 :: 1. 工作区干净
 git status --short                       :: 空
 
-:: 2. 应用树自己的版本号 —— 这是 git 看不到的那一半
-type desktop-native\dist\AI-Workbench-Native\_internal\VERSION
-                                         :: 3.0.0，必须等于仓库根的 VERSION
+:: 2. 安装包对应的 commit 与 HEAD 之间，payload 里的受跟踪文件没有变过
+git diff --stat e633ee2 HEAD -- README.md VERSION LICENSE scripts
+                                         :: 空
 
 :: 3. 安装包内嵌的版本号
 (Get-Item build\installer\AI-Workbench-Native-Setup.exe).VersionInfo.FileVersion
                                          :: 3.0.0
-
-:: 4. 对组装后的 payload 跑包内自检 —— 第 5 项做的就是第 2 步的比较
-python desktop-nativeerify_native_package.py --app build
-ative-installer-payload
-                                         :: 10/10
 ```
 
-**第 2 步不是可有可无的，而且 `git diff` 代替不了它。**
-`desktop-native/dist/` 被 `.gitignore` 的 `dist/` 规则覆盖（`.gitignore:38`），
-对它做 `git diff` 只会输出空 —— 看起来"一致"，其实是**什么都没比**。
+**git 证明不了的那一半：应用树本身。**
 
-这不是假设。2026-10-14 构建的 3.0.0 安装包里就装着一个这样的树：
-`desktop-native/dist/` 构建于 **10:14**，而把版本号改成 3.0.0 的提交在 **10:37**。
-`desktop-native/dist/AI-Workbench-Native/_internal/VERSION` 里写的是 **2.5.0**，
+payload 里最大的东西是 `desktop-native/dist/AI-Workbench-Native/` —— PyInstaller 的产物，
+里面装着 exe 与整个后端。它被 `.gitignore` 的 `dist/` 规则覆盖（`.gitignore:38`），
+**不在版本控制里**，所以对它做 `git diff` 只会输出空：看起来"一致"，其实什么都没比。
+
+这不是假设。2026-10-14 构建的一个 3.0.0 安装包里就装着这样的树：`dist/` 构建于 **10:14**，
+而把版本号改成 3.0.0 的提交在 **10:37**。`_internal/VERSION` 里写的是 **2.5.0**，
 而应用读版本号读的正是这个文件（`awbnative/resources.py::version()` 先找
 `bundle_root()/VERSION`）。于是同一个安装包里有三个版本号：exe 资源 `3.0.0`、
 安装根目录 `VERSION` `3.0.0`、**应用自己显示 `2.5.0`**。
-抓到它的是包内自检的**第 5 项**（"VERSION 与仓库一致"），不是上面那条 `git diff` ——
-后者对 `dist/` 永远是空的。
+抓到它的是包内自检的**第 5 项**，不是 `git diff`。
 
-**一条能覆盖它的机械检查**（比 diff 可靠，因为它看的是构建产物的时间）：
+对这一半，用下面两条 —— 它们至少能证伪：
 
 ```bat
-:: 应用树的构建时间，必须晚于最后一次改动已打包源码的提交时间
-dir /T:W desktop-native\dist\AI-Workbench-Native\_internal\VERSION
-git log -1 --format=%cd --date=iso -- backend desktop-native/awbnative desktop-native/qml desktop-native/main.py
+:: 4. 应用树里的版本号必须等于仓库根的 VERSION
+type desktop-native\dist\AI-Workbench-Native\_internal\VERSION
+                                         :: 3.0.0
+
+:: 5. 对组装后的 payload 跑包内自检 —— 第 5 项做的就是第 4 步的比较
+python desktop-native\verify_native_package.py --app build\native-installer-payload
+                                         :: 10/10
 ```
+
+### 3.2 已知缺口：应用树的出处无法机械证明
+
+**这一条不是"检查通过"，是"检查不了"。**
+
+`dist/` 的产物里**没有记录它是从哪个 commit 构建的**，所以"这个 exe 是从当前源码构建的吗"
+这个问题**目前无法机械回答**。能说的只有三件事：构建时工作区是干净的、版本号对得上、
+自检 10/10。三者都能被绕过，只是绕过它们需要刻意为之。
+
+**更早一版的这一节给过一条"应用树构建时间必须晚于最后一次提交时间"的检查。那条规则是错的，
+已删除。** 先构建、后提交是正常节奏 —— 2026-10-14 就是这样：`dist` 19:26 构建、19:37 提交。
+那条规则会对一个**正确**的产物报 FAIL，然后教会读者"这条检查不用管"，
+而那比没有检查更糟。
+
+**要真正关掉它**，需要在构建时把 commit 写进产物（例如
+`dist/AI-Workbench-Native/_internal/BUILD_COMMIT`，内容为 `git rev-parse HEAD`，
+工作区脏时加 `-dirty` 后缀）。**本版没有做**，所以它留在这里作为一个已知缺口，
+而不是一条看起来在检查的规则。
 
 payload 的显式清单是 `scripts/build_native_installer.py` 里的 `INCLUDE` 列表：  
 `desktop-native/dist/`、`vendor/runtime/{pgsql,redis,qdrant}`、五个 `scripts/*.ps1`、  
@@ -189,6 +209,16 @@ Python、无开发机的 `.runtime`），完成 10 项 UI 自检并以 0 退出�
 **为什么"卸载后只剩 `.env`"是对的**：它保存着这次安装的 `SECRET_KEY`，删掉它会让用户
 重装后读不出自己的数据。安装脚本里对此有明确注释，静默模式下也是这么做的。
 
+**但这个说法有一个前提，2026-10-14 在干净机器上被指出来了**：`.env` **不在安装包
+payload 里**（见 §2.2），干净安装时它从来没被创建过 —— 它只出现在**覆盖安装/升级**
+场景（旧版安装器留下的）。所以：
+
+- 干净安装后卸载 → 程序目录被**整个移除**，什么都不剩（这比剩一个孤零零的 `.env` 更干净）；
+- 覆盖安装后卸载 → 程序目录只剩 `.env`。
+
+本节的第 7 步属于后者（本机原装过 2.5.0）。**把"目录被删干净"当成缺陷是错的**，
+反过来把"只剩 `.env`"当成普遍现象也是错的。
+
 **这一步抓到的缺陷**：卸载脚本的删除清单里没有 `cache`（157 个文件的 QML 编译缓存，
 由应用在首次运行时创建，安装器从不写它 —— 正因为如此才没人想到要列它）。
 更糟的是，因为它没被删掉，最后那句 `RMDir "$INSTDIR"` 也静默地什么都没做，
@@ -219,7 +249,7 @@ Python、无开发机的 `.runtime`），完成 10 项 UI 自检并以 0 退出�
 |---|---|---|
 | 1 | 从 `AI-Workbench-3.0.0-交付包.zip` 取出 `installer/AI-Workbench-Native-Setup.exe` | 125,004,453 字节，SHA-256 `2a273ff0…1978` —— 与 §3 记录的一致 |
 | 2 | 停掉开发栈（腾出 5432 / 6379 / 6333） | 三个端口全部释放 |
-| 3 | **卸载旧的 3.0.0**（`/S`） | 退出码 0；**安装目录只剩 `.env` 一个文件**（`cache` 那个修复生效）；数据目录 **2180 个文件完好** |
+| 3 | **卸载旧的 3.0.0**（`/S`） | 退出码 0；**安装目录只剩 `.env` 一个文件**（`cache` 那个修复生效；`.env` 来自更早的覆盖安装，见 §4.2 的说明）；数据目录 **2180 个文件完好** |
 | 4 | **安装新构建**（`/S`） | 退出码 0，27.7 秒。**四处版本号第一次全部一致**：根 `VERSION` `3.0.0`、**应用树 `_internal/VERSION` `3.0.0`**（旧安装这里是 `2.5.0`）、`exe` 文件版本 `3.0.0`、注册表 `DisplayVersion` `3.0.0` |
 | 5 | **启动** | 主进程起来，**自己拉起捆绑的三个引擎**；启动日志 `Infrastructure READY (14.2s total)`，其中 PostgreSQL 一行是 `schema 0.2s (already set up)` |
 | 6 | **看窗口** | **没有「降级 / 部分功能不可用」横幅**（那正是系统代理缺陷的症状）；底部显示 `AI 服务: deepseek-flash，可以调用云端模型。` |
