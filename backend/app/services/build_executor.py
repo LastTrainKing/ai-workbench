@@ -168,6 +168,67 @@ async def execute_build_run(
     return {"build_run_id": str(run.id), "run_id": started["run_id"], "state": started["state"]}
 
 
+#: The agent's terminal states, as the executor spells them.
+_AGENT_STATE_TO_BUILD_STATUS = {
+    "COMPLETED": BuildStatus.COMPLETED,
+    "FAILED": BuildStatus.FAILED,
+    "CANCELLED": BuildStatus.CANCELLED,
+    "LIMIT_REACHED": BuildStatus.LIMIT_REACHED,
+    "WAITING_CONFIRMATION": BuildStatus.WAITING_USER,
+}
+
+
+def decide_final_status(
+    state: str,
+    *,
+    unsettled: bool,
+    collected: int,
+    grace_seconds: int = SETTLE_GRACE_SECONDS,
+) -> tuple[BuildStatus, str]:
+    """What this run's terminal status is, and the sentence that goes with it.
+
+    **Pulled out of `_watch` so it can be tested without running an agent.** This
+    decision is where the product's most expensive mistakes have lived — a run that
+    declared success and kept writing was reported COMPLETED, and a run that produced
+    nothing was reported COMPLETED too — and a decision table that can only be exercised
+    by driving a real model is a decision table that is only ever tested by accident.
+
+    The rules, in order:
+
+    * `unsettled` — the agent set a terminal state and never stopped. Files it wrote are
+      real; the run did not close out. Saying COMPLETED would read a verdict off a state
+      the run had already moved past.
+    * COMPLETED with `collected == 0` — a run whose whole point was a file finished
+      without one. Not a completed delivery, and not a failure either.
+    * WAITING_USER — every step ran, but nothing objective was proven. Deliberately not
+      folded into PARTIAL: that would put a failure in the record that never happened.
+    * not COMPLETED but files exist — PARTIAL. The files are real and the run did not
+      finish, and both statements are true at once.
+    """
+    final = _AGENT_STATE_TO_BUILD_STATUS.get(state.upper(), BuildStatus.FAILED)
+
+    if unsettled and final is BuildStatus.COMPLETED:
+        return BuildStatus.WAITING_USER, (
+            f"运行报告了 {state}，但收尾没有在 {int(grace_seconds)} 秒内完成，"
+            "所以这次运行没有得出可确认的结论。已经产出的文件不受影响，可以正常查看。"
+        )
+    if final is BuildStatus.COMPLETED and collected == 0:
+        return BuildStatus.WAITING_USER, (
+            "运行结束，但没有检测到产出文件。可能它只是回答了问题，或写到了别的位置。"
+        )
+    if final is BuildStatus.WAITING_USER:
+        return BuildStatus.WAITING_USER, (
+            "步骤全部完成，但最终核验没能取得客观证据，所以这次运行没有得出"
+            "可验证的结论。产出文件都在，需要你自己看一眼。"
+        )
+    if final is not BuildStatus.COMPLETED and collected:
+        return BuildStatus.PARTIAL, (
+            f"运行终态是 {state}，但已产出 {collected} 个文件。"
+            "这些文件真实存在、也能读回；没有走完的是这次运行。"
+        )
+    return final, (f"产出 {collected} 个文件" if collected else "")
+
+
 async def _watch(
     build_run_id: uuid.UUID,
     owner_id: uuid.UUID,
@@ -271,83 +332,12 @@ async def _watch(
             if run is None:
                 return
 
-            mapping = {
-                "COMPLETED": BuildStatus.COMPLETED,
-                "FAILED": BuildStatus.FAILED,
-                "CANCELLED": BuildStatus.CANCELLED,
-                "LIMIT_REACHED": BuildStatus.LIMIT_REACHED,
-                "WAITING_CONFIRMATION": BuildStatus.WAITING_USER,
-            }
-            final = mapping.get(state.upper(), BuildStatus.FAILED)
-
-            if unsettled and final is BuildStatus.COMPLETED:
-                # The agent declared success and then never stopped. Reporting COMPLETED
-                # here would be the same lie in a new place: the verdict would be read
-                # off a state the run had already moved past. The files, if any, are
-                # real — so say that, and say the run did not close out.
-                final = BuildStatus.WAITING_USER
-                await service.set_status(
-                    run,
-                    final,
-                    summary=(
-                        f"运行报告了 {state}，但收尾没有在 "
-                        f"{int(SETTLE_GRACE_SECONDS)} 秒内完成，所以这次运行没有得出"
-                        "可确认的结论。已经产出的文件不受影响，可以正常查看。"
-                    ),
-                )
-            elif final is BuildStatus.COMPLETED and collected == 0:
-                # Finishing without producing a file is not a completed delivery for a
-                # run that asked for one. Saying so is more useful than reporting success
-                # for a task whose whole point was the artifact.
-                final = BuildStatus.WAITING_USER
-                await service.set_status(
-                    run,
-                    final,
-                    summary="运行结束，但没有检测到产出文件。可能它只是回答了问题，或写到了别的位置。",
-                )
-            elif final is BuildStatus.WAITING_USER:
-                # The agent finished every step but could not establish that the
-                # success criteria hold. Deliberately **not** folded into PARTIAL:
-                # PARTIAL means "a step failed and files came out anyway", and saying
-                # that here would put a failure in the record that never happened.
-                #
-                # Not COMPLETED either — nothing was proven. This state says the one
-                # true thing: the work is done, the verdict is not, and a person
-                # should look. Reporting FAILED instead is what turned a five-step run
-                # that had produced the right 11-slide deck into a failed run.
-                await service.set_status(
-                    run,
-                    BuildStatus.WAITING_USER,
-                    summary=(
-                        "步骤全部完成，但最终核验没能取得客观证据，所以这次运行没有得出"
-                        "可验证的结论。产出文件都在，需要你自己看一眼。"
-                    ),
-                )
-            elif final is not BuildStatus.COMPLETED and collected:
-                # Files exist but the run did not succeed. Neither "failed" nor
-                # "completed" is true on its own, and the previous version picked
-                # one and left the deliverables marked `verified=True` — so the
-                # record said the run failed and its output was fine, at the same
-                # time. PARTIAL is that middle case, stated.
-                #
-                # The summary no longer claims the files are unverified. They are
-                # verified on their own terms; what did not finish is the run. The
-                # two statements used to be one, and the one the user read was the
-                # wrong one.
-                await service.set_status(
-                    run,
-                    BuildStatus.PARTIAL,
-                    summary=(
-                        f"运行终态是 {state}，但已产出 {collected} 个文件。"
-                        "这些文件真实存在、也能读回；没有走完的是这次运行。"
-                    ),
-                )
-            else:
-                await service.set_status(
-                    run,
-                    final,
-                    summary=f"产出 {collected} 个文件" if collected else "",
-                )
+            # 决定这次运行的终态。规则表在 `decide_final_status` —— 它能被单独测试，
+            # 而这一段以前只能靠真的跑一个模型来验证。
+            final, summary = decide_final_status(
+                state, unsettled=unsettled, collected=collected
+            )
+            await service.set_status(run, final, summary=summary)
 
             # Now that the run has its final status, attach it to each deliverable
             # beside — never inside — the file's own verdict.

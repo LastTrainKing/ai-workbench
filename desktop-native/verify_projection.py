@@ -334,6 +334,46 @@ def run_mapping_checks() -> None:
           and call("verificationSummary({checks: []})") == "尚未验证",
           str(call("verificationSummary(null)")))
 
+    # ---- 普通 / 专家模式的导航（§7）----
+    #
+    # §7 要求普通模式的一级入口保持克制。这一组钉住两件事：**少的是哪些**，
+    # 以及**主路径一个都不能少**。第二条比第一条重要 —— 把 `agent` 一起藏起来
+    # 会让首页的「交给员工执行」跳到一个导航栏里没有的页面。
+    normal_keys = call("pagesFor(false).map(function (p) { return p.key })") or []
+    expert_keys = call("pagesFor(true).map(function (p) { return p.key })") or []
+    hidden = ["runs", "graph", "planner", "permissions", "search", "ask"]
+
+    check("nav", "专家模式包含全部 19 个页面", len(expert_keys) == 19, f"{len(expert_keys)} 个")
+    check("nav", "普通模式更短", 0 < len(normal_keys) < len(expert_keys),
+          f"{len(normal_keys)} vs {len(expert_keys)}")
+    check("nav", "普通模式不含开发细节页",
+          not [k for k in hidden if k in normal_keys], str([k for k in hidden if k in normal_keys]))
+    check("nav", "专家模式仍然含这些页（是收起不是删掉）",
+          all(k in expert_keys for k in hidden), str(hidden))
+    # 主路径：首页发起 → Agent 执行 → 员工 → 交付物。少一个就断链。
+    for required in ("dashboard", "agent", "employees", "deliverables", "settings"):
+        check("nav", f"普通模式保留主路径 {required}", required in normal_keys)
+    check("nav", "普通模式不出现空分组",
+          all(n > 0 for n in (call("navGroupsFor(false).map(function (g) { return g.entries.length })") or [])),
+          str(call("navGroupsFor(false).map(function (g) { return g.entries.length })")))
+    # 普通模式的顺序必须是专家模式的子序列 —— 否则同一件事在两处顺序不同。
+    positions = [expert_keys.index(k) for k in normal_keys if k in expert_keys]
+    check("nav", "普通模式是专家模式的子序列", positions == sorted(positions), str(positions))
+
+    # 快捷键提示跟随模式：提示一个跳到看不见的页面的键，比不给提示更糟。
+    check("nav", "可见页的快捷键在两模式下一致",
+          call("shortcutFor('employees', false)") == call("shortcutFor('employees', true)")
+          and call("shortcutFor('employees', false)") != "",
+          f"{call('shortcutFor(\"employees\", false)')} / {call('shortcutFor(\"employees\", true)')}")
+    check("nav", "没有快捷键的页面返回空串",
+          call("shortcutFor('settings', false)") == ""
+          and call("shortcutFor('runs', true)") == "")
+    check("nav", "快捷键数量不超过可见页面数",
+          call("shortcutCountFor(false)") <= len(normal_keys)
+          and call("shortcutCountFor(true)") <= len(expert_keys)
+          and call("shortcutCountFor(true)") == 9,
+          f"{call('shortcutCountFor(false)')} / {call('shortcutCountFor(true)')}")
+
 
 # =========================================================================== #
 # 2. 渲染：无头加载真实界面，读渲染树
@@ -453,6 +493,27 @@ def run_render_checks() -> None:
     window.setProperty("width", 1280)
     window.setProperty("height", 900)
     _pump(600)
+
+    # ------------------------------------------------------- 普通 / 专家模式 --
+    #
+    # 断言的是**导航栏当下渲染出来的条目**，不是 `theme.js` 里那张表 —— 表对了而
+    # 绑定没接上，正是这个工具存在的理由。
+    normal_keys = [str(e["key"]) for e in _as_list(window.property("railEntries"))]
+    check("nav", "普通模式导航不含开发细节页",
+          bool(normal_keys) and "runs" not in normal_keys and "graph" not in normal_keys,
+          str(normal_keys))
+
+    window.setProperty("expertMode", True)
+    _pump(700)
+    expert_keys = [str(e["key"]) for e in _as_list(window.property("railEntries"))]
+    check("nav", "专家模式导航更长且含开发细节页",
+          len(expert_keys) > len(normal_keys) and "runs" in expert_keys,
+          f"{len(normal_keys)} -> {len(expert_keys)}")
+
+    window.setProperty("expertMode", False)
+    _pump(700)
+    back_keys = [str(e["key"]) for e in _as_list(window.property("railEntries"))]
+    check("nav", "切回普通模式后导航恢复", back_keys == normal_keys, str(back_keys))
 
     # ------------------------------------------------------------ 员工合同 --
     window.navigate("employees", None)

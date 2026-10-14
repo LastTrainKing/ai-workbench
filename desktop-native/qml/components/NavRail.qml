@@ -32,7 +32,7 @@ Rectangle {
 
     //: The flat order, which is what the arrow keys move through. A different list from
     //: `navGroups` only in shape — it is derived from it in `theme.js`.
-    readonly property var entries: Theme.pages
+    readonly property var entries: Theme.pagesFor(rail.expertMode)
 
     // Moving focus is what makes the rail usable without a mouse. Activating is a
     // separate key, so arrowing past an entry does not navigate to it — which is the
@@ -136,7 +136,8 @@ Rectangle {
 
             // ------------------------------------------------------------ groups --
             Repeater {
-                model: Theme.navGroups
+                //: 普通模式只列日常入口；开发细节在专家模式里，仍在同一个导航栏。
+                model: Theme.navGroupsFor(rail.expertMode)
 
                 delegate: ColumnLayout {
                     id: group
@@ -196,11 +197,11 @@ Rectangle {
                             readonly property string a11yName: modelData.label
                             readonly property string a11yRole: "PageTab"
                             readonly property string a11yDescription: active
-                                ? (Theme.shortcutFor(modelData.key)
-                                   ? Theme.shortcutFor(modelData.key) + "，当前页面"
+                                ? (Theme.shortcutFor(modelData.key, rail.expertMode)
+                                   ? Theme.shortcutFor(modelData.key, rail.expertMode) + "，当前页面"
                                    : "当前页面")
-                                : (Theme.shortcutFor(modelData.key)
-                                   ? "切换到" + modelData.label + "，" + Theme.shortcutFor(modelData.key)
+                                : (Theme.shortcutFor(modelData.key, rail.expertMode)
+                                   ? "切换到" + modelData.label + "，" + Theme.shortcutFor(modelData.key, rail.expertMode)
                                    : "切换到" + modelData.label)
 
                             Rectangle {
@@ -252,7 +253,7 @@ Rectangle {
                                     Accessible.ignored: true
                                 }
                                 Text {
-                                    text: Theme.shortcutFor(entry.modelData.key)
+                                    text: Theme.shortcutFor(entry.modelData.key, rail.expertMode)
                                     color: Theme.textFaint
                                     font.pixelSize: Theme.fontTiny
                                     Layout.alignment: Qt.AlignVCenter

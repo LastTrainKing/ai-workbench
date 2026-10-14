@@ -541,18 +541,72 @@ var pages = (function () {
     return flat
 })()
 
+// ------------------------------------------------------------ 普通 / 专家模式 --
+//
+// 任务书 §7：普通模式的一级入口要保持克制，trace、图谱、Planner、权限这类东西属于
+// 专家模式。**这不是"藏起来"** —— 它们仍在专家模式的导航栏里，一步可达，只是不再
+// 和"我的员工""交付物"并列出现在每个人面前。
+//
+// 这份清单是**唯一**一处定义"什么算开发细节"的地方：导航栏、Ctrl+N 快捷键提示、
+// 快捷键本身都从它推导。分成三份就是三个答案。
+//
+// `agent` 不在清单里，尽管它是个技术名词：首页的「交给员工执行」直接跳到它，
+// 把它藏起来等于把主路径藏起来。
+var EXPERT_ONLY_PAGES = ["runs", "graph", "planner", "permissions", "search", "ask"]
+
+function pageVisibleInMode(key, expertMode) {
+    if (expertMode) return true
+    return EXPERT_ONLY_PAGES.indexOf(key) < 0
+}
+
+//: 导航栏在某个模式下显示的分组。**空分组被丢掉** —— 一个只有标题的组是纯噪声。
+function navGroupsFor(expertMode) {
+    var out = []
+    for (var g = 0; g < navGroups.length; g++) {
+        var entries = []
+        for (var e = 0; e < navGroups[g].entries.length; e++) {
+            var entry = navGroups[g].entries[e]
+            if (pageVisibleInMode(entry.key, expertMode)) entries.push(entry)
+        }
+        if (entries.length > 0) out.push({ title: navGroups[g].title, entries: entries })
+    }
+    return out
+}
+
+//: 该模式下的页面清单，顺序即 Ctrl+N 的顺序。
+function pagesFor(expertMode) {
+    var flat = []
+    var groups = navGroupsFor(expertMode)
+    for (var g = 0; g < groups.length; g++) {
+        for (var e = 0; e < groups[g].entries.length; e++) {
+            flat.push(groups[g].entries[e])
+        }
+    }
+    return flat
+}
+
 //: How many pages have a keyboard shortcut. **Nine, and not `pages.length`.**
 //:
 //: Qt has `Key_1`..`Key_9` and no `Key_10`, so a `Shortcut` past the ninth can never
 //: fire. Four destinations used to carry a hint for a key that did nothing.
 var shortcutCount = 9
 
-//: "Ctrl+3" for a page that has one, "" for a page that does not.
-function shortcutFor(key) {
-    for (var i = 0; i < pages.length && i < shortcutCount; i++) {
-        if (pages[i].key === key) return "Ctrl+" + (i + 1)
+//: "Ctrl+3" for a page that has one in this mode, "" for one that does not.
+//:
+//: 模式相关：普通模式下 `runs` 不在列表里，它的 Ctrl+N 也就没有意义 —— 提示一个
+//: 会跳到用户看不见的页面的键，比不给提示更糟。
+function shortcutFor(key, expertMode) {
+    var list = pagesFor(expertMode === undefined ? true : expertMode)
+    for (var i = 0; i < list.length && i < shortcutCount; i++) {
+        if (list[i].key === key) return "Ctrl+" + (i + 1)
     }
     return ""
+}
+
+//: 这个模式下实际生效的快捷键数量。Qt 只有 Ctrl+1..9，且可见页面可能更少。
+function shortcutCountFor(expertMode) {
+    var list = pagesFor(expertMode === undefined ? true : expertMode)
+    return Math.min(shortcutCount, list.length)
 }
 
 // ---------------------------------------------------------------- 交付闭环 --

@@ -57,10 +57,14 @@ ApplicationWindow {
     //: The numbered pages, in shortcut order, exposed so a keyboard test can ask the
     //: running shell which page each `Ctrl+N` should open instead of keeping its own copy
     //: of the list. A copy in the test would pass while the application was wrong.
-    readonly property var pages: Theme.pages
+    //:
+    //: **Mode-dependent.** §7 keeps the normal rail restrained, and a `Ctrl+5` that
+    //: jumps to a page the rail is not showing is a shortcut to somewhere the user
+    //: cannot see. `theme.js` owns both lists so they cannot disagree.
+    readonly property var pages: Theme.pagesFor(expertMode)
     //: How many of them have a `Ctrl+N`. Exposed so a keyboard test asks the shell
     //: instead of assuming every page does.
-    readonly property int shortcutCount: Theme.shortcutCount
+    readonly property int shortcutCount: Theme.shortcutCountFor(expertMode)
     //: The rail's entries, in the order the arrow keys move through them. **A different
     //: list from `pages`**: the rail also carries `documents` and `ask`, which are reached
     //: from a knowledge base and have no shortcut. A test that walked `pages` would stop
@@ -464,12 +468,12 @@ ApplicationWindow {
     Instantiator {
         // `shortcutCount`, not `pages.length`: Qt has no `Key_10`, so a
         // `Shortcut` past the ninth can never fire. See `theme.js`.
-        model: Math.min(Theme.pages.length, Theme.shortcutCount)
+        model: shellRoot.shortcutCount
 
         delegate: Shortcut {
             required property int index
             sequence: "Ctrl+" + (index + 1)
-            onActivated: shellRoot.navigate(Theme.pages[index].key)
+            onActivated: shellRoot.navigate(shellRoot.pages[index].key)
         }
     }
 }
