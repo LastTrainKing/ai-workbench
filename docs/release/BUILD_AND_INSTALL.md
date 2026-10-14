@@ -97,7 +97,7 @@
 | 大小 | **125,004,453 字节**（119.2 MB） |
 | SHA-256 | `2a273ff0c35b85de39835bd2ec2632df3eba9ae7ef067d2417712f1d65301978` |
 | 构建时间 | 2026-10-14 19:31 |
-| 对应源码 commit | **`e633ee2`**（= tag `v3.0.0`） |
+| 对应源码 commit | **`30ba77f`** —— payload 内容最后变化的提交。**它不是 tag 指向的那个提交**，两者不同是正常的（见 §3.1） |
 | payload | 485.3 MB / 3949 个文件（含 `vendor/runtime` 三个引擎） |
 | 原生应用包 | `desktop-native/dist/AI-Workbench-Native/` |
 | 包内自检 | **10/10**（对**组装后的 payload** 跑，不是对 `dist/`） |
@@ -107,6 +107,17 @@
 §16 明列"安装包与源码 commit 对不上"是发布闸门。核法分两半：**git 能证明的**，
 和**git 证明不了的**。
 
+**先分清两个"提交"，混起来会得出错误结论：**
+
+| | 是哪个 | 什么时候变 |
+|---|---|---|
+| **安装包对应的提交** | `30ba77f` | 只在**会进包的内容**变化时变 —— 应用源码、`README.md`、`VERSION`、`LICENSE`、五个 `scripts/*.ps1` |
+| **tag `v3.0.0` 指向的提交** | 发布时的 HEAD | 每次为发布改文档都会变 |
+
+安装包构建于 `30ba77f` 的树；此后每个提交只动了 `docs/`、`RELEASE_NOTES.md`、
+`CHANGELOG.md`、`tools/` —— **没有一样进 payload**，所以安装包仍然对应 `30ba77f`，
+而 tag 跟着发布往前走。**这两个值不同不代表"对不上"。**
+
 **git 能证明的那一半**（payload 里的受跟踪文件）：
 
 ```bat
@@ -114,7 +125,7 @@
 git status --short                       :: 空
 
 :: 2. 安装包对应的 commit 与 HEAD 之间，payload 里的受跟踪文件没有变过
-git diff --stat e633ee2 HEAD -- README.md VERSION LICENSE scripts
+git diff --stat 30ba77f HEAD -- README.md VERSION LICENSE scripts
                                          :: 空
 
 :: 3. 安装包内嵌的版本号
