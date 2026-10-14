@@ -346,7 +346,27 @@ All checks passed!
 且依赖是**一条命令**装完的。需要基础设施的是**集成测试套件**。这两件事不一样，
 而上面三组数字是量出来的。
 
-### 5.4 `requirements` 是范围不是锁
+### 5.4 干净克隆里的真实模型端到端 —— **11/11 通过**
+
+§15 第 8 步。在克隆里跑了 `verify_employee_delivery.py`，**Key 只从环境变量进来**
+（`DEEPSEEK_API_KEY`），克隆里没有 `ai-config.json`；数据库也是克隆自己建的
+（新建空库 → 10 个迁移）。
+
+```
+终态: COMPLETED（62 秒）   状态序列: EXECUTING → COMPLETED
+新增交付物: 1 个（原有 0 个）
+  report-local-first.md   1011 字节   verified=True
+  开头: # 本地优先（local-first）软件为什么对个人用户重要
+  验证证据: file_exists=pass, encoding=pass(UTF-8), content=pass
+员工状态: idle（不是卡在「工作中」）
+结果：11/11 通过
+```
+
+**这一条同时证明三件事**：干净克隆能真的跑完一次交付；**版本二做的按类型验证在真实
+链路上生效**（证据里出现了 `encoding` 与 `content`，不再是只有 `file_exists`）；
+退出后员工被正确释放回 `idle`。
+
+### 5.5 `requirements` 是范围不是锁
 
 | 环境 | ruff | PySide6 |
 |---|---|---|

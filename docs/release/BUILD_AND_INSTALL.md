@@ -209,7 +209,7 @@ Python、无开发机的 `.runtime`），完成 10 项 UI 自检并以 0 退出�
 | 5b | 测试 | **是**。补齐 §5.4 那三样后：**1526 passed / 0 failed / 11 skipped**（13:26） |
 | 6 | 启动原生桌面端 | **是**。`desktop-native/main.py` 在无头模式下启动并持续运行 45 秒被超时终止，无 QML 错误 |
 | 7 | 无 Key 场景的清晰提示 | **是**（干净克隆里没有 `.runtime/ai-config.json`，即未配置状态） |
-| 8 | 受控的真实模型端到端 | **`NOT RUN`**，见 §5.5 |
+| 8 | 受控的真实模型端到端 | **是**。真模型、真文件，**11/11 通过**（62 秒），见 §5.6 |
 | 9 | 构建 Windows 安装器 | **是**，见 §3 |
 | 10 | 安装、启动、退出、升级 | **`NOT RUN`**，见 §4.2 |
 
@@ -255,11 +255,45 @@ Qt 相关的验收工具（`tools/check_qml_pages.py`、`tools/check_layout.py`�
 
 ### 5.5 未执行的部分（`NOT RUN`）
 
-* **真实模型端到端。** 干净克隆里没有 `.runtime/ai-config.json`，也就没有 Key。
-  第 7 步（无 Key 的清晰提示）是这一条的反面，它做了。
-  真实模型验证在开发机上做过，见 `TEST_REPORT.md` §3。
+* **真实模型端到端** —— 见 §5.6，已执行。
 * **把安装包装到系统上并启动。** 需要一台干净机器，见 §4.2。
   这是唯一一条会改变"可发布"判断的缺口。
+
+### 5.6 第 8 步：干净克隆里的真实模型端到端 —— **11/11 通过**
+
+§15 第 8 步要求"配置测试 Key 后，仅运行一次受控的真实模型端到端：创建 Markdown 文件、
+登记产物、校验、显示、打开/预览"。在克隆里做了，**Key 只从环境变量进来**
+（`DEEPSEEK_API_KEY`，解析顺序的第三层），克隆里**没有** `ai-config.json`：
+
+```bash
+cd <clone>
+export DEEPSEEK_API_KEY=<测试 Key>          # 不落盘、不进任何文件
+export AI_WORKBENCH_DATA_DIR=<clone>/.runtime
+export DATABASE_URL=...aiworkbench_clean_e2e
+./.venv/Scripts/python.exe desktop-native/verify_employee_delivery.py
+```
+
+数据库也是克隆自己建的：新建空库 → `alembic upgrade head` 跑完 10 个迁移 → 库内 0 张表起步。
+
+结果：
+
+```
+终态: COMPLETED（62 秒）      状态序列: EXECUTING → COMPLETED
+新增交付物: 1 个（原有 0 个）
+  --- report-local-first ---
+      路径: <clone>/.runtime/workspace/report-local-first.md
+      类型: md   大小: 1011 字节   验证: True   版本: 1
+      验证证据: {"checks": [{"name": "file_exists", "outcome": "pass", ...},
+                            {"name": "encoding",   "outcome": "pass", "detail": "UTF-8"},
+                            {"name": "content",    "outcome": "pass", ...}]}
+      开头: # 本地优先（local-first）软件为什么对个人用户重要
+员工状态: idle（不是卡在「工作中」）
+结果：11/11 通过
+```
+
+**这一条同时证明了三件只有合起来才成立的事**：干净克隆能真的跑完一次交付；
+**版本二做的按类型验证在真实链路上生效**（`encoding` / `content` 两条新检查出现在证据里，
+不是 `file_exists` 一条了）；以及退出后员工被正确释放回 `idle`。
 
 ## 6. 复现命令汇总
 
