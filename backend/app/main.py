@@ -47,6 +47,13 @@ Key capabilities
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    # First, before anything builds an HTTP client. The vector store, the cache and the
+    # schema guard all talk to loopback, and on a Windows machine with a system proxy
+    # configured those requests would be sent to the proxy — see `app.core.local_net`.
+    from app.core.local_net import exempt_loopback_from_proxy
+
+    exempt_loopback_from_proxy()
+
     configure_logging("api")
     settings.ensure_dirs()
     logger.info(

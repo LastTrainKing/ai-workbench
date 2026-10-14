@@ -245,10 +245,18 @@ def check_no_secrets(app: Path) -> tuple[str, str]:
                 problems.append(f"{label} in {path.relative_to(app)}")
 
     for directory in app.rglob("*"):
-        if directory.is_dir() and directory.name in {".runtime", "runtime"}:
-            problems.append(
-                f"a data directory was bundled: {directory.relative_to(app)}"
-            )
+        if not directory.is_dir():
+            continue
+        if directory.name not in {".runtime", "runtime"}:
+            continue
+        # `vendor/runtime` is the three bundled engines, and the payload assembly puts it
+        # there on purpose. The directory this check is about is the *user's* data
+        # directory — `.runtime`, beside the executable, and never inside `vendor/`.
+        if "vendor" in directory.relative_to(app).parts[:-1]:
+            continue
+        problems.append(
+            f"a data directory was bundled: {directory.relative_to(app)}"
+        )
 
     if problems:
         return FAIL, "; ".join(problems[:5])
