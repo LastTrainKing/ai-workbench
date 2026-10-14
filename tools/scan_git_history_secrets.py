@@ -27,11 +27,15 @@
 
 from __future__ import annotations
 
+import argparse
 import json
+import pathlib
 import re
 import subprocess
 import sys
 from pathlib import Path
+
+from _runtime_dir import credential_files, runtime_dir
 
 REPO = Path(__file__).resolve().parents[1]
 
@@ -90,13 +94,17 @@ SECRET_KEY_NAMES = re.compile(rb"^[ \t]*([A-Z0-9_]*(?:KEY|SECRET|TOKEN|PASSWORD|
 MIN_CREDENTIAL_LENGTH = 16
 
 
-def real_credentials() -> list[tuple[str, bytes]]:
+def real_credentials(runtime: pathlib.Path | None) -> list[tuple[str, bytes]]:
     """本机真实凭据，用于逐字比对。**值只在这里出现，不进入任何输出。**
 
-    两处来源，各自按"这是什么"取值，而不是按"它长什么样"：
+    来源按"这是什么"取值，而不是按"它长什么样"：
 
-    * `.env` —— 只取键名像密钥的那些键的值，空值跳过
-    * `.runtime/ai-config.json` —— 只取 `api_key` / `embedding_api_key`
+    * `<repo>/.env` —— 只取键名像密钥的那些键的值，空值跳过
+    * 本机运行时目录里的每一个 `ai-config*.json` —— 只取 `api_key` / `embedding_api_key`
+
+    **运行时目录由 `_runtime_dir` 解析，与当前树那个扫描器共用同一份实现。**
+    这里原先只认 `<repo>/.runtime`，于是在安装版机器上比对样本是空的，而它照样打印一个
+    读起来像"干净"的零 —— 和第一个扫描器当初的毛病一模一样。
     """
     found: list[tuple[str, bytes]] = []
 
@@ -115,17 +123,16 @@ def real_credentials() -> list[tuple[str, bytes]]:
                 continue
             found.append((".env", value))
 
-    config_path = REPO / ".runtime" / "ai-config.json"
-    if config_path.is_file():
+    for label, path in credential_files(runtime):
         try:
-            config = json.loads(config_path.read_text(encoding="utf-8"))
+            config = json.loads(path.read_text(encoding="utf-8"))
         except Exception:  # noqa: BLE001 - 配置坏了不该让扫描失败
-            config = {}
+            continue
         if isinstance(config, dict):
             for key in ("api_key", "embedding_api_key"):
                 value = config.get(key)
                 if isinstance(value, str) and len(value) >= MIN_CREDENTIAL_LENGTH:
-                    found.append(("ai-config.json", value.encode()))
+                    found.append((label, value.encode()))
 
     # 去重：同一个值从两个地方读到只报一次。
     unique: dict[bytes, str] = {}
@@ -182,7 +189,11 @@ def read_blobs(ids: list[str]) -> dict[str, bytes]:
     return contents
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(prog="scan_git_history_secrets.py")
+    parser.add_argument("--runtime-dir", default="",
+                        help="本机运行时目录（放 ai-config 的地方）；不给就自己找")
+    args = parser.parse_args(argv)
     print("=== 全部 Git 历史秘密扫描 ===")
     print(f"  仓库: {REPO}")
     head = _run(["git", "rev-parse", "HEAD"]).strip()
@@ -203,8 +214,17 @@ def main() -> int:
         print("         结果不可信 —— 这是扫描器自身的问题，不是仓库的问题。")
         return 2
 
-    credentials = real_credentials()
-    print(f"  本机凭据比对样本: {len(credentials)} 个（值不打印）")
+    runtime = runtime_dir(args.runtime_dir or None, repo=REPO)
+    credentials = real_credentials(runtime)
+    if runtime is None:
+        print("  本机运行时目录: 没找到")
+        print("    **第二遍（逐字比对本机凭据）本次没有跑。** 下面的结论只来自形状匹配。")
+    else:
+        print(f"  本机运行时目录: {runtime}")
+        if credentials:
+            print(f"  本机凭据比对样本: {len(credentials)} 个（值不打印）")
+        else:
+            print("  本机凭据比对样本: 0 个 —— 这个目录里没有存凭据的配置，第二遍空跑")
 
     # ---- 第一遍：真实凭据逐字比对 ----
     real_hits: list[str] = []

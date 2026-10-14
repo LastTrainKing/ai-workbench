@@ -185,3 +185,73 @@ def test_submit_hands_the_runner_a_callable(
     assert float(captured["timeout"]) > 120.0, (
         "the timeout must cover the wait for the environment as well as the call itself"
     )
+
+
+def test_the_reverify_slot_calls_verify_deliverable_by_keyword(
+    bridge: ServiceBridge, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The 「重新验证」 button was the one call site that passed it positionally, and it always failed.
+
+    `DeliveryService.verify_deliverable` is declared `(*, owner_id, deliverable_id)` —
+    keyword-only. The bridge passed the deliverable object positionally, so every press
+    raised `TypeError: verify_deliverable() takes 1 positional argument but 2 were given`,
+    the toast said only 「操作没有完成」, and the verdict on screen never moved.
+
+    It mattered more than a dead button. `RELEASE_NOTES.md` known issue 10 says a
+    deliverable's verification is a snapshot with no timestamp, and the documented
+    workaround was *this button*. With it broken, a verdict was frozen permanently.
+
+    The spy accepts anything, so what this catches is not an exception but the **call
+    convention** — which is the defect. Against the old code the first assertion fails.
+    """
+    seen: dict[str, object] = {}
+
+    @asynccontextmanager
+    async def fake_scope():
+        yield object()
+
+    class Item:
+        id = uuid.uuid4()
+
+        def as_dict(self) -> dict[str, object]:
+            return {"id": str(self.id)}
+
+    item = Item()
+
+    class SpyDeliveryService:
+        def __init__(self, session: object) -> None:
+            seen["session"] = session
+
+        async def get_deliverable(self, *, owner_id: uuid.UUID, deliverable_id: uuid.UUID):
+            return item
+
+        async def verify_deliverable(self, *args: object, **kwargs: object) -> dict[str, object]:
+            seen["args"] = args
+            seen["kwargs"] = kwargs
+            return {"checks": []}
+
+    monkeypatch.setattr("app.infrastructure.database.session_scope", fake_scope)
+    monkeypatch.setattr("app.services.delivery_service.DeliveryService", SpyDeliveryService)
+
+    owner = uuid.uuid4()
+
+    async def fake_owner(self: ServiceBridge) -> uuid.UUID:
+        return owner
+
+    monkeypatch.setattr(ServiceBridge, "_owner", fake_owner)
+
+    # Capture the failure the slot would report, so a broken call says *why* rather than
+    # only "the slot never finished".
+    failures: list[tuple[str, str, str]] = []
+    bridge.failed.connect(lambda *args: failures.append(args))
+
+    bridge.verifyDeliverable("reverify-test", str(item.id))
+    assert _wait_until_idle(bridge), f"the slot never finished; failures={failures}"
+
+    assert seen.get("args") == (), (
+        "verify_deliverable was called with a positional argument; its signature is "
+        f"keyword-only, so this raises TypeError and the button does nothing. failures={failures}"
+    )
+    kwargs = seen.get("kwargs") or {}
+    assert kwargs.get("owner_id") == owner, "the account was not passed"
+    assert kwargs.get("deliverable_id") == item.id, "the wrong deliverable was passed"

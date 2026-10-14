@@ -2004,7 +2004,16 @@ class ServiceBridge(QObject):
                 item = await service.get_deliverable(
                     owner_id=owner, deliverable_id=uuid.UUID(deliverable_id)
                 )
-                result = await service.verify_deliverable(item)
+                # **按关键字传，不是按位置。** `verify_deliverable` 的签名是
+                # `(*, owner_id, deliverable_id)` —— 这里原先传的是 `(item)`，
+                # 每次抛 `TypeError: takes 1 positional argument but 2 were given`，
+                # 于是「重新验证」这个按钮**永远失败**，界面只弹一句「操作没有完成」。
+                # 而它正是已知问题第 10 条给的唯一规避方法。
+                # 全仓另外七处调用都是对的，错的只有这一处 —— 见
+                # `backend/tests/unit/test_native_bridge_session.py` 里那条断言。
+                result = await service.verify_deliverable(
+                    owner_id=owner, deliverable_id=item.id
+                )
                 return {"deliverable": item.as_dict(), "verification": result}
 
         # Verification re-opens the file and can re-run a checker; 120s is the default and

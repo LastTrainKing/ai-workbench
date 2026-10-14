@@ -683,6 +683,21 @@ def run_render_checks() -> None:
         dash.setProperty("summary", summary)
         _pump(300)
 
+    # -------------------------------------------------- 失败提示里带不带原因 --
+    #
+    # 一条桥接失败走 `Main.qml::fail()` → `Errors.human()` → toast。兜底那一档的 `title`
+    # 是「操作没有完成」，本身不含信息；**真正的原因在 `hint` 里**（`async_runner` 送的是
+    # `f"{type(exc).__name__}: {exc}"`），而 `fail()` 会把 hint 接在标题后面。
+    #
+    # 这一条是被人质疑之后加的。一份验收报告说"toast 只显示 title，原因对用户不可见"，
+    # 并建议把 hint 一并显示 —— **实测它已经显示了**，所以没有改代码，改成把"显示了"
+    # 钉住：否则下一次有人删掉那一行，就真的会变成报告说的样子，而没有任何断言拦着。
+    bridge.failed.emit("projection-toast", "TypeError: boom-marker-7f3a", "error")
+    _pump(600)
+    toast = window.property("toastText") or ""
+    check("errors", "失败 toast 带上 hint（原因不是只剩标题）",
+          "boom-marker-7f3a" in toast, toast)
+
     bridge.shutdown()
 
 

@@ -21,42 +21,9 @@ import re
 import subprocess
 import sys
 
+from _runtime_dir import runtime_dir
+
 REPO = pathlib.Path(__file__).resolve().parents[1]
-
-
-def runtime_dir(explicit: str | None = None) -> pathlib.Path | None:
-    """Where this machine keeps its runtime directory, or `None` if there is not one.
-
-    **This used to be a literal path** — `C:\\Users\\user\\AppData\\Local\\AI Workbench Data\\.runtime`,
-    the directory on the machine that built the package. On any other machine it does not
-    exist, so `real_credentials()` returned an empty dict, and the run printed
-    `本机真实凭据: 0 项` — which reads exactly like a clean result while the second pass was
-    comparing against nothing.
-
-    That is the third time this repository has had a scanner report "nothing found" for
-    "nothing looked at", so the fix is deliberately in two parts: find the directory the way
-    the application does, **and say out loud when there is nothing to compare**. The second
-    half is the one that matters; the first half only makes the second half rare.
-
-    Resolution order, matching `app.core.config`:
-
-    1. `--runtime-dir DIR` — taken as the runtime directory itself.
-    2. `AI_WORKBENCH_DATA_DIR` — taken as the *data* directory, so `.runtime` is appended.
-    3. `%LOCALAPPDATA%\\AI Workbench Data\\.runtime` — the installed application's location.
-    4. `<repo>/.runtime` — a development checkout.
-    """
-    if explicit:
-        return pathlib.Path(explicit)
-    data = os.environ.get("AI_WORKBENCH_DATA_DIR", "").strip()
-    if data:
-        return pathlib.Path(data) / ".runtime"
-    local = os.environ.get("LOCALAPPDATA", "").strip()
-    if local:
-        candidate = pathlib.Path(local) / "AI Workbench Data" / ".runtime"
-        if candidate.is_dir():
-            return candidate
-    dev = REPO / ".runtime"
-    return dev if dev.is_dir() else None
 
 
 PATTERNS = [
@@ -170,7 +137,7 @@ def main(argv: list[str] | None = None) -> int:
             return 2
         files = [REPO / name for name in listing.split("\0") if name]
 
-    data_dir = runtime_dir(explicit_runtime)
+    data_dir = runtime_dir(explicit_runtime, repo=REPO)
     credentials = real_credentials(data_dir)
     print(f"  待打包文件: {len(files)}")
     if data_dir is None:
