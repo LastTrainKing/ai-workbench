@@ -506,6 +506,12 @@ def _run_self_check(
             f"startupState={bridge.startupState}",
         )
     )
+    # **放在 `record_startup` 之后。** 放在 `_self_check` 里会踩到一个真实的顺序问题：
+    # 自检期间 `startup_state` 还是 `idle`，而 `_after_environment` 会为一个没说就绪的环境
+    # 空等 `READY_WAIT_SECONDS`（240 秒）—— 那不是"槽坏了"，是"环境还没说就绪"。
+    # 放在这里，跑的就是用户按按钮时那个状态。
+    checks.append(_reverify_check(bridge))
+
     bridge.shutdown()
     # The environment checks are reported with the same three states the bootstrap uses.
     # `blocked` is not a failure of this build, and calling it one would make the
@@ -551,6 +557,115 @@ def _run_self_check(
     if report:
         _write_report(report, payload)
     return 0 if payload["passed"] else 1
+
+
+async def _seed_deliverable(bridge: ServiceBridge) -> dict[str, str]:
+    """A real file and a real row, owned by this install's account.
+
+    Seeded rather than produced by a model run: this check is about the button, not about
+    the model, and a check that needs a paid key is a check that stops running on the
+    machines where it matters.
+    """
+    from app.core.config import settings
+    from app.infrastructure.database import session_scope
+    from app.models.delivery import BuildRun, BuildStatus, Deliverable
+
+    owner = await bridge._owner()
+    storage = Path(settings.storage_dir) / "self-check-reverify"
+    storage.mkdir(parents=True, exist_ok=True)
+    target = storage / "self-check.md"
+    target.write_text("# 自检\n\n这一行是为了让「重新验证」有东西可读。\n", encoding="utf-8")
+
+    async with session_scope() as session:
+        run = BuildRun(
+            user_id=owner,
+            goal="[self-check] 重新验证",
+            title="self-check",
+            deliverable_kind="md",
+            status=BuildStatus.COMPLETED.value,
+        )
+        session.add(run)
+        await session.flush()
+        item = Deliverable(
+            user_id=owner,
+            build_run_id=run.id,
+            path=str(target),
+            kind="md",
+            title="self-check",
+            size_bytes=target.stat().st_size,
+        )
+        session.add(item)
+        await session.flush()
+        return {"deliverable_id": str(item.id), "path": str(target)}
+
+
+def _reverify_check(bridge: ServiceBridge) -> tuple[str, bool, str]:
+    """Drive the 「重新验证」 path exactly as the button does, inside the packaged app.
+
+    **Why this is here and not only in the test suite.** The button was broken by a
+    positional call to a keyword-only service method, and every other call site in the
+    repository passed keywords — so the suite stayed green while the one path a user can
+    reach raised `TypeError` on every press. A test that drives the slot covers the
+    convention; this covers the **shipped binary**, which is the thing that was wrong.
+
+    It runs the real bridge slot against a real file and a real row, and it reads back what
+    the slot produced. On the broken code the failure path fires with the `TypeError` in it.
+    """
+    from PySide6.QtCore import QCoreApplication
+
+    label = "「重新验证」这条路径能跑通"
+    try:
+        seeded = bridge._runner.call_blocking(lambda: _seed_deliverable(bridge), timeout=60.0)
+    except Exception as exc:  # noqa: BLE001
+        return (label, False, f"造交付物失败 {type(exc).__name__}: {exc}")
+
+    request_id = "self-check-reverify"
+    outcome: dict[str, str] = {}
+
+    def on_completed(rid: str, payload: str) -> None:
+        if rid == request_id:
+            outcome["payload"] = payload
+
+    def on_failed(rid: str, message: str, code: str) -> None:
+        if rid == request_id:
+            outcome["failure"] = f"{code}: {message}"
+
+    bridge.completed.connect(on_completed)
+    bridge.failed.connect(on_failed)
+    try:
+        bridge.verifyDeliverable(request_id, seeded["deliverable_id"])
+        deadline = time.monotonic() + 60.0
+        while not outcome and time.monotonic() < deadline:
+            QCoreApplication.processEvents()
+            time.sleep(0.05)
+    finally:
+        bridge.completed.disconnect(on_completed)
+        bridge.failed.disconnect(on_failed)
+
+    if not outcome:
+        return (label, False, "60 秒内既没有成功也没有失败 —— 这个槽没有回话")
+    if "failure" in outcome:
+        # **这一行就是缺陷的样子。** 按位置传参时它是
+        # `TypeError: verify_deliverable() takes 1 positional argument but 2 were given`。
+        return (label, False, outcome["failure"])
+
+    import json as _json
+
+    try:
+        parsed = _json.loads(outcome["payload"])
+    except ValueError as exc:
+        return (label, False, f"回话不是 JSON：{exc}")
+
+    verification = (parsed or {}).get("verification") or {}
+    checks = verification.get("checks") or []
+    if not checks:
+        return (label, False, f"拿到了回话，但里面没有验证证据：{outcome['payload'][:160]}")
+    outcomes = [str(c.get("outcome")) for c in checks]
+    return (
+        label,
+        True,
+        f"{len(checks)} 项检查（{', '.join(outcomes)}），passed={verification.get('passed')}",
+    )
 
 
 def _self_check(window: object, bridge: ServiceBridge) -> list[tuple[str, bool, str]]:

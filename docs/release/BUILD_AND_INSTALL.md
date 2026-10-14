@@ -43,7 +43,7 @@
   [PASS   ]  4. Alembic 迁移已打包 — 10 migrations
   [PASS   ]  5. VERSION 与仓库一致 — 3.0.0
   [PASS   ]  6. 包内没有密钥与用户数据 — 742 text files and the executable scanned, nothing found
-  [PASS   ]  7. 打包后的应用能启动并自检通过 — 10 UI checks passed in 4.5s (exit 0)
+  [PASS   ]  7. 打包后的应用能启动并自检通过 — 11 UI checks passed in 17.8s (exit 0)
   [PASS   ]  8. 首次运行会创建用户数据目录 — created AI Workbench Data and used it
   [PASS   ]  9. 运行不会写入安装目录 — 2297 files unchanged
   [PASS   ] 10. 不依赖宿主机 Python — ran as AI-Workbench-Native.exe with a sanitized environment
@@ -191,8 +191,15 @@ Release 资产（§18）。
 ### 4.1 包内自检（自动，已执行）
 
 见 §2.1 的第 7–10 项：打包后的应用**真的被启动过**，在净化过的环境里（无宿主机  
-Python、无开发机的 `.runtime`），完成 10 项 UI 自检并以 0 退出；首次运行创建了用户数据  
-目录；**2297 个安装目录文件在运行后逐字节未变**。
+Python、无开发机的 `.runtime`），完成 **11 项** UI 自检并以 0 退出；首次运行创建了用户数据  
+目录；**3949 个 payload 文件在运行后逐字节未变**。
+
+**第 11 项是 2026-10-15 加的，它回答的是这个自检以前答不了的问题。** 前面十项看的是
+"窗口起来了、QML 没错、服务能连上" —— 而「重新验证」按钮坏着的时候，这十项**全是绿的**，
+因为它坏在一条只有用户会走到的路径上（见 `TEST_REPORT.md` §6.3）。第 11 项
+（`main.py::_reverify_check`）在**应用自己内部**造一个真实交付物、走那个按钮调的同一个桥接槽、
+读回验证证据 —— 所以**每一个安装包在构建时都会自己证明这条路是通的**，
+不需要模型、不需要人按按钮、不需要另一台机器。
 
 ### 4.2 安装、启动、退出、卸载 —— **已执行**（2026-10-14 12:02–12:15）
 
