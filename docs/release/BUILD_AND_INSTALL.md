@@ -91,10 +91,35 @@
 | 项 | 值 |
 |---|---|
 | 路径 | `build/installer/AI-Workbench-Native-Setup.exe` |
-| 版本 | 3.0.0 |
-| 大小 | 见 §5 |
-| SHA-256 | 见 §5 |
-| 源码 commit | 见 §5 |
+| 版本（文件资源） | `3.0.0` |
+| 大小 | **125,005,709 字节**（119.2 MB） |
+| SHA-256 | `56e9812f4dc5bf25b7c30a9511204854f957209e05f9f12764004b86d78c374e` |
+| 构建时间 | 2026-10-14 10:36 |
+| 对应源码 commit | **`d77d039`** |
+| payload | 485.3 MB / 3949 个文件（含 `vendor/runtime` 三个引擎） |
+| 原生应用包 | `desktop-native/dist/AI-Workbench-Native/`，256 MB |
+
+### 3.1 版本对应关系怎么核
+
+§16 明列"安装包与源码 commit 对不上"是发布闸门。核法：
+
+```bat
+:: 1. 工作区干净
+git status --short                       :: 空
+
+:: 2. 安装包 payload 里那些文件，与 HEAD 逐字节一致
+git diff --stat HEAD -- README.md VERSION LICENSE scripts desktop-native/dist
+                                         :: 空
+
+:: 3. 安装包内嵌的版本号
+(Get-Item build\installer\AI-Workbench-Native-Setup.exe).VersionInfo.FileVersion
+                                         :: 3.0.0
+```
+
+payload 的显式清单是 `scripts/build_native_installer.py` 里的 `PAYLOAD` 常量：
+`desktop-native/dist/`、`vendor/runtime/{pgsql,redis,qdrant}`、五个 `scripts/*.ps1`、
+`VERSION`、`README.md`、`LICENSE`。**清单之外的东西一律不进包** —— 陈旧 payload 会发布
+上一个版本的产品，而没有任何东西会说。
 
 **安装包不进 Git 历史。** 119 MB 的二进制进历史会让 clone 失去意义；它是 GitHub
 Release 资产（§18）。
@@ -149,6 +174,9 @@ AI-Workbench-Native-Setup.exe
 git clone <repo> /tmp/awb-clean
 ```
 
+克隆自 commit `d77d039`，在**没有** `.venv`、没有 `vendor/runtime/`、没有 `.runtime/`
+的状态下检查：
+
 | 检查 | 结果 |
 |---|---|
 | `.env` 是否被带入 | **否** |
@@ -156,23 +184,30 @@ git clone <repo> /tmp/awb-clean
 | `.venv/` 是否被带入 | **否** |
 | `vendor/runtime/` 是否被带入 | **否** |
 | `build/installer/`（119 MB 安装包）是否被带入 | **否** |
-| 文档引用的每个工具是否都在克隆里 | **是**（版本二之前**不是** —— 三个验收工具在 `build/rc/` 下，而 `build/` 被 gitignore 覆盖；已移入受版本控制的 `tools/`） |
-| 干净克隆里的 `tools/check_qml_pages.py` 能否运行 | **是** —— 20/20 页面可加载 |
-| 干净克隆里的 `tools/scan_for_secrets.py` 能否运行 | **是** |
+| 文档引用的 22 个文件是否都在克隆里 | **是，全部存在** |
+| 克隆里的 `tools/check_qml_pages.py` | **20/20 页面可加载** |
+| 克隆里的 `tools/check_layout.py` | **0 问题，0 QML 错误** |
+| 克隆里的 `scripts/sync_version.py --check` | **6 个文件全部一致（3.0.0）** |
+| 克隆里的 `tools/scan_for_secrets.py` | 无真实凭据（48 处赋值形状命中，人工复核为变量名） |
 
-**版本二之前，干净克隆里跑不了那三个验收工具**，所以"按文档可复现"这条并不成立。
-这是版本三修掉的一个 P1。
+**版本二之前，干净克隆里跑不了那三个验收工具** —— 它们在 `build/rc/` 下，而 `build/`
+被 gitignore 覆盖。所以"按文档可复现"这条当时并不成立。这是版本三修掉的一个 P1。
+
+**诚实说明**：上面的 Qt 工具是**用开发机的 `.venv`** 解释器跑的，只是工作目录换成了
+克隆。这证明了"克隆里的文件是完整的、可运行的"，**没有**证明"在一台没有 `.venv` 的
+机器上从零装依赖也能跑" —— 那需要 §5.2 那一步。
 
 ### 5.2 未执行的部分（`NOT RUN`）
 
 * **在干净克隆里新建 venv 并 `pip install -r backend/requirements-dev.txt`。**
   这一步需要完整的依赖下载，本轮未做 —— 因此"从零开始按 README 能装起来"这件事
-  **没有被证明**，只是"跟踪的文件集是完整的"被证明了。
-* **在干净克隆里初始化新的测试数据库并跑迁移。** 同上。
-* **在干净克隆里启动原生桌面端。** 同上。
+  **没有被证明**，只是"跟踪的文件集是完整的、且验收工具能跑"被证明了。
+* **在干净克隆里初始化新的测试数据库并跑迁移。**
+* **在干净克隆里启动原生桌面端。**
 
-理由与影响：这三项都需要在独立环境里做完整的依赖安装，耗时以十分钟计。它们**不是**
-"看起来没问题"，而是**明确未做**。`RELEASE_NOTES.md` 里没有把干净克隆写成已完成。
+理由：这三项都需要在独立环境里做完整的依赖安装，耗时以十分钟计。
+它们**不是**"看起来没问题"，而是**明确未做**。
+`RELEASE_NOTES.md` 里没有把干净克隆写成已完成。
 
 ---
 
