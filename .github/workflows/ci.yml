@@ -37,11 +37,20 @@ jobs:
       - name: 安装依赖
         run: pip install -r backend/requirements-dev.txt
 
-      # `--config` 是必须的：ruff 的规则集写在 `backend/pyproject.toml` 里，
-      # 而从仓库根目录调用时它不会被自动发现 —— 那样 CI 会用默认规则集通过，
-      # 而本地用项目规则集失败，两边给出不同的答案。
+      # **不要加 `--config backend/pyproject.toml`。**
+      #
+      # 加了它，`per-file-ignores` 里的 `tests/**` 就不再匹配 —— 那些 glob 是相对
+      # *配置文件所在目录* 解析的，而 `--config` 会让 ruff 以调用目录为基准。
+      # 结果：`tests/**` 的 E402/F401 豁免全部失效，CI 报 131 个错误而本地报 0。
+      #
+      # 这个错是**在干净克隆里用全新 venv 跑一遍 CI 的命令**才发现的。所以这一行
+      # 现在没有 `--config`：让 ruff 自己按文件就近发现配置。
+      #
+      # 已知的范围事实：`backend/**` 用 `backend/pyproject.toml` 的规则集，
+      # 而 `desktop-native/**` 没有自己的配置，走 ruff 的默认规则集（E4/E7/E9/F）。
+      # 这是项目既有范围，本轮未扩大；见 docs/release/TEST_REPORT.md §5。
       - name: ruff
-        run: ruff check --config backend/pyproject.toml backend/app backend/tests desktop-native
+        run: ruff check backend/app backend/tests desktop-native
 
   test:
     name: 后端测试

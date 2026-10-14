@@ -361,10 +361,16 @@ def run_mapping_checks() -> None:
     check("nav", "普通模式是专家模式的子序列", positions == sorted(positions), str(positions))
 
     # 快捷键提示跟随模式：提示一个跳到看不见的页面的键，比不给提示更糟。
+    #
+    # 值先算出来再拼进消息。**不是为了好看**：`f"{call('a', \"b\")}"` 这种嵌套引号
+    # 要 Python 3.12 才合法，而本项目的 `target-version` 是 py311 —— ruff 直接报
+    # `invalid-syntax`，也就是说这个文件在 3.11 上**根本解析不了**。
+    # 是在干净克隆里用全新 venv 跑一遍才发现的。
+    shortcut_normal = call("shortcutFor('employees', false)")
+    shortcut_expert = call("shortcutFor('employees', true)")
     check("nav", "可见页的快捷键在两模式下一致",
-          call("shortcutFor('employees', false)") == call("shortcutFor('employees', true)")
-          and call("shortcutFor('employees', false)") != "",
-          f"{call('shortcutFor(\"employees\", false)')} / {call('shortcutFor(\"employees\", true)')}")
+          shortcut_normal == shortcut_expert and shortcut_normal != "",
+          f"{shortcut_normal} / {shortcut_expert}")
     check("nav", "没有快捷键的页面返回空串",
           call("shortcutFor('settings', false)") == ""
           and call("shortcutFor('runs', true)") == "")
