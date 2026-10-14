@@ -15,6 +15,8 @@ from typing import Literal
 from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from app.core.local_net import exempt_loopback_from_proxy
+
 # ---------------------------------------------------------------------------
 # Path resolution
 # ---------------------------------------------------------------------------
@@ -487,6 +489,22 @@ def get_settings() -> Settings:
 
 
 settings = get_settings()
+
+# Loopback must not go through the machine's HTTP proxy, and this is the one line every
+# process passes through — the desktop app, the API, and the verification scripts alike.
+# See `app.core.local_net` for the measurement.
+#
+# **Why here and not at the process entry points.** It used to be called from
+# `app.main.lifespan` and `awbnative.bootstrap.ensure_ready`. That covered the product and
+# nothing else: `scripts/verify_qdrant_key.py` builds a `VectorStore` directly and goes
+# through neither, so its own probe was sent to the proxy — 12/12 where the proxy forwards
+# loopback, **7/12 on a machine whose configured proxy is not running**. The tool the task
+# book tells a reader to use for judging semantic retrieval was itself the false negative.
+#
+# Doing it here is not a convenience, it is implied by the data dependency: a client cannot
+# be pointed at a local service without first asking `settings` where that service is. So
+# anything that could construct a loopback client has already imported this module.
+exempt_loopback_from_proxy()
 
 # Convenience for scripts that only need the root
 __all__ = ["BACKEND_DIR", "PROJECT_ROOT", "Settings", "get_settings", "settings"]

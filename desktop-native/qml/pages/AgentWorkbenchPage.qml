@@ -785,9 +785,19 @@ Flickable {
                 Text {
                     Layout.fillWidth: true
                     visible: !page.expertMode
-                    text: page.outcome && page.outcome.status === "SUCCEEDED"
-                          ? "它把这件事做完了。产出在下面的「产物」里。"
-                          : ""
+                    // 指向的是「这次的成果」那张卡 —— 文件名、大小、验证证据都在那里。
+                    // **没有文件时不要指任何地方**：这一页上确实另有一张卡叫「产物」，
+                    // 但它列的是工作区位置，不是这次写出来的东西。原先那句话在有产物和
+                    // 没产物两种情况下都指着「产物」，于是"跑完但没写出文件"的用户会去
+                    // 找一个不存在的东西 —— 而这时卡片里那句"这次运行没有写出文件"才是对的。
+                    text: {
+                        if (!page.outcome || page.outcome.status !== "SUCCEEDED")
+                            return ""
+                        var files = page.outcomeData ? (page.outcomeData.artifacts ?? []).length : 0
+                        return files > 0
+                            ? "它把这件事做完了。产出在下面的「这次的成果」里。"
+                            : "它把这件事做完了，这次没有写出文件。"
+                    }
                     color: Theme.textMuted
                     font.pixelSize: 12
                 }

@@ -260,14 +260,6 @@ async def ensure_ready() -> dict[str, Any]:
     exist yet — an application that assumes otherwise fails on exactly the machines that
     have never run it.
     """
-    # Before any client exists. The three probes below talk to loopback, and on a Windows
-    # machine with a system proxy configured they would be sent to the proxy instead — see
-    # `app.core.local_net` for the measurement. Doing it here, rather than in each client,
-    # is what makes it apply to `qdrant_client`'s own httpx client as well.
-    from app.core.local_net import exempt_loopback_from_proxy
-
-    exempt_loopback_from_proxy()
-
     report: dict[str, Any] = {
         "paths": {
             "frozen": resources.is_frozen(),

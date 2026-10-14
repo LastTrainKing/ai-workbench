@@ -593,7 +593,7 @@ Flickable {
                       ? "AI 服务状态未知：" + page.dashError
                     : (page.llm.api_key_set
                        ? "AI 服务：" + (page.llm.model || "已配置") + "，可以调用云端模型。"
-                       : "AI 服务：未配置 API Key，当前用内置离线引擎。功能可用，回答质量不如云端模型。")
+                       : "AI 服务：未配置 API Key，当前用内置离线引擎。可以对话与整理，但它写不出交付文件，回答质量也不如云端模型。")
                 color: page.dashState === "error" ? Theme.warn
                      : (page.summary && page.llm.api_key_set ? Theme.textFaint : Theme.warn)
                 font.pixelSize: Theme.fontTiny

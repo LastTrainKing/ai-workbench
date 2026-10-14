@@ -9,6 +9,9 @@ from __future__ import annotations
 
 import http.server
 import os
+import pathlib
+import subprocess
+import sys
 import threading
 from collections.abc import Iterator
 
@@ -80,6 +83,46 @@ def test_the_exemption_is_visible_under_both_spellings(windows_style_proxy: None
         value = os.environ.get(name, "")
         for host in LOOPBACK_HOSTS:
             assert host in value.split(","), f"{name} is missing {host}"
+
+
+def test_importing_the_settings_module_is_enough(local_server: str, tmp_path: pathlib.Path) -> None:
+    """The exemption is not something each caller has to remember to invoke.
+
+    This is what the second clean-machine run found. The call used to sit at the two process
+    entry points — `app.main.lifespan` and `awbnative.bootstrap.ensure_ready` — and
+    `scripts/verify_qdrant_key.py`, the tool the task book tells a reader to use for judging
+    semantic retrieval, builds a `VectorStore` directly and goes through neither. Its own
+    probe was sent to the proxy, so its verdict flipped with the proxy's behaviour: 12/12
+    where the proxy forwards loopback, 9/12 where it refuses. **The tool that decides
+    whether the defect regressed was the thing producing the false negative.**
+
+    It now lives in `app.core.config`, which is not a convenience but a data dependency: a
+    client cannot be pointed at a local service without first asking `settings` where that
+    service is.
+
+    Run in a child process on purpose — the variable is read when a client is constructed,
+    and by the time this suite runs, `app.core.config` is long since imported.
+    """
+    backend = pathlib.Path(__file__).resolve().parents[2]
+    env = os.environ.copy()
+    env["http_proxy"] = "http://127.0.0.1:1"  # nothing listens there
+    env["HTTP_PROXY"] = "http://127.0.0.1:1"
+    env.pop("no_proxy", None)
+    env.pop("NO_PROXY", None)
+    env["AI_WORKBENCH_DATA_DIR"] = str(tmp_path)  # keep `ensure_dirs` out of the repo
+    code = (
+        f"import sys; sys.path.insert(0, {str(backend)!r});"
+        "import app.core.config;"  # the only line under test
+        "import httpx;"
+        f"print(httpx.get({local_server!r}, timeout=5).status_code)"
+    )
+
+    result = subprocess.run(
+        [sys.executable, "-c", code], env=env, capture_output=True, text=True, check=False
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "200", result.stdout + result.stderr
 
 
 def test_the_users_own_bypass_list_is_kept(monkeypatch: pytest.MonkeyPatch) -> None:

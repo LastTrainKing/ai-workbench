@@ -39,7 +39,7 @@ Flickable {
     readonly property var ladder: ({
         offline: {
             word: "离线模式",
-            hint: "当前用内置离线引擎，不需要 API Key，功能可用但回答质量不如云端模型。想换成云端模型：在上面填好 Provider、模型和 API Key，保存后点「测试连接」。",
+            hint: "当前用内置离线引擎，不需要 API Key。可以对话与整理，但它写不出交付文件，回答质量也不如云端模型。想换成云端模型：在上面填好 Provider、模型和 API Key，保存后点「测试连接」。",
             tone: Theme.textMuted
         },
         not_configured: {
