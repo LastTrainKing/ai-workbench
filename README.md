@@ -430,10 +430,15 @@ directory, so uninstalling the app does not delete your work.
 
 ```bat
 python -m venv .venv
-.venv\Scripts\python.exe -m pip install -r backend\requirements.txt
-.venv\Scripts\python.exe -m pip install PySide6
+.venv\Scripts\python.exe -m pip install -r backend\requirements-dev.txt
 .venv\Scripts\python.exe desktop-native\main.py
 ```
+
+`backend\requirements-dev.txt` pulls in `desktop-native\requirements.txt` (PySide6), so
+one command is enough. **The test suite needs it too** — two test modules import the
+bridge, which imports PySide6. That was not true until it was found in a clean clone:
+the README used to send a stranger to `pytest` without it, and the run died on
+collection with `ModuleNotFoundError: No module named 'PySide6'`.
 
 **Build the installer** (PyInstaller + NSIS, ~20 minutes):
 
@@ -665,6 +670,10 @@ python -m app.cli create-user --username alice --email a@b.dev --password secret
 ## Tests
 
 ```bash
+# one-time: everything the tests and the desktop client need
+python -m venv .venv
+.venv\Scripts\python.exe -m pip install -r backend\requirements-dev.txt
+
 # backend — unit + integration + API (needs the infrastructure running)
 cd backend
 ..\.venv\Scripts\python.exe -m pytest                      # everything
@@ -677,6 +686,15 @@ npm run test          # Vitest — 114 assertions
 npm run typecheck     # tsc --noEmit
 npm run lint          # ESLint
 npm run build         # production build
+```
+
+**A full `pytest` run calls the model six times.** The six live tests in
+`tests/integration/test_deepseek_live.py` read the key through the application's own
+config resolver, so on a machine with a provider configured they run rather than skip.
+To avoid the spend, deselect them — but do not report their skip as a pass:
+
+```bash
+..\.venv\Scripts\python.exe -m pytest --deselect tests/integration/test_deepseek_live.py
 ```
 
 ### Verification scripts

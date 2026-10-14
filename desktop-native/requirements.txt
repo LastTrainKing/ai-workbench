@@ -1,0 +1,19 @@
+# AI Workbench — native desktop client dependencies
+#
+# **This file exists because its absence was a real defect.** The README told a
+# stranger to run `cd backend && pytest`, and two test modules in that suite import
+# `awbnative.bridge`, which imports PySide6. So a fresh clone followed the README,
+# installed `backend/requirements-dev.txt`, ran the tests, and got two collection
+# errors: `ModuleNotFoundError: No module named 'PySide6'`.
+#
+# Found by doing exactly that in a clean clone with a new venv. It is invisible on a
+# development machine, where PySide6 has been installed since the desktop client was
+# written.
+#
+# `Essentials`, not the full `PySide6` metapackage: this is the subset the client
+# actually uses (QtCore / QtGui / QtQml / QtQuick / QtQuickControls2), it is what the
+# development environment has been building and testing against, and it is ~150 MB
+# lighter. PyInstaller's spec collects from whatever is installed.
+#
+#   pip install -r desktop-native/requirements.txt
+PySide6-Essentials>=6.6,<7.0

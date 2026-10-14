@@ -212,8 +212,45 @@ cd backend && ../.venv/Scripts/python.exe -m pytest tests/integration/test_deeps
 All checks passed!
 ```
 
-规则集来自 `backend/pyproject.toml`（`line-length = 100`）。
-`tools/` 与 `scripts/` 不在这个范围里 —— 这是项目一贯的范围，本轮未扩大。
+### 5.1 两件必须说清楚的事
+
+**一、规则集覆盖的范围比命令看起来小。**
+
+| 路径 | 用哪套规则 |
+|---|---|
+| `backend/**` | `backend/pyproject.toml`（`line-length = 100`，`E/W/F/I/B/UP/C4/SIM/RUF`） |
+| `desktop-native/**` | **没有自己的配置**，走 ruff 的默认规则集（`E4/E7/E9/F`） |
+
+把项目规则集套到 `desktop-native/` 上会报 **100 个问题**（30 E402、25 RUF100、
+24 I001、9 RUF005、4 SIM105、2 SIM112，加 6 处语法）。**本轮没有修它们。**
+理由：任务书 §4.4 说"项目已有的工具，不要临时换标准"，而现有标准就是上面这张表。
+但这**是一个真实的质量缺口**，写在这里而不是让命令看起来覆盖得更多。
+
+**二、ruff 版本会改变结论，而 `requirements-dev.txt` 是范围不是锁。**
+
+| 环境 | ruff |
+|---|---|
+| 开发机 `.venv` | 0.16.10 |
+| **干净克隆新建的 venv** | **0.17.0**（`ruff>=0.5,<1.0` 取到的最新） |
+
+0.17.0 对当前工作区同样报 `All checks passed!`，两边一致 —— 但这是**验证过的巧合**，
+不是保证。要它成为保证，需要把 `requirements-dev.txt` 钉到具体版本。
+
+### 5.2 干净克隆发现的两个真实缺陷
+
+§15 的干净克隆跑出来的，都不是开发机上看得到的：
+
+1. **`desktop-native/verify_projection.py` 在 Python 3.11 上根本解析不了。**
+   一处 f-string 用了嵌套转义引号（`f"{call('a', \"b\")}"`），那是 3.12 语法。
+   项目声明 `requires-python = ">=3.11"`、`target-version = "py311"`，
+   ruff 报 6 处 `invalid-syntax`。已修（值先算出来再插值）。
+2. **CI 的 ruff 命令会失败。** 我原先写的是
+   `ruff check --config backend/pyproject.toml …`，还配了一句"这个 flag 是必须的"。
+   恰恰相反：`per-file-ignores` 的 glob 相对**配置文件所在目录**解析，从仓库根传
+   `--config` 会让 `tests/**` 不再匹配 —— CI 报 131 个错误，本地 0 个。
+   已删除该 flag 并就地写明原因。
+
+**这两个都是"本地全绿、换台机器就红"的形态**，而 §15 要求的正是换台机器跑一遍。
 
 ---
 
