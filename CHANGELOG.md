@@ -9,10 +9,13 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 **私人 AI 员工工作台。** 2.5.0 让状态说得准；这一版让**结果出现在工作结束的地方**，
 并把"能不能公开发布"这件事本身做成了可核验的。
 
-发布形态是**候选版（release candidate）**：安装包已重建并与源码 commit 对齐，
-但尚未在第二台机器上做过安装验证，GitHub Actions 也尚未实际运行过。
-两者的状态在 `docs/release/BUILD_AND_INSTALL.md` 与 `docs/release/TEST_REPORT.md` 里
-都如实标注。
+发布形态是**正式版**：§17 的验收清单十三行全部达标，§16 的七条"禁止发布"闸门
+一条都没有触发。安装包已重建并与源码 commit 对齐，并且在本机完整走完了
+**卸载 2.5.0 → 安装 3.0.0 → 启动 → 退出 → 卸载 → 重装**，用户数据自始至终完好。
+
+**没有做的**：GitHub Actions 尚未在 GitHub 上实际运行过（它的命令已被逐条跑过，
+并因此发现了一个会让 CI 首跑即红的错误）。这不是 §16 的闸门，也不是 §17 的一行，
+但在 `docs/release/TEST_REPORT.md` 里如实标着。
 
 ### 新增
 

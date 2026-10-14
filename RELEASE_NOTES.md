@@ -1,10 +1,14 @@
 # AI Workbench 3.0.0 — 发布说明
 
-**这是一个发布候选版（release candidate），不是最终版。**
+**这是 3.0.0 正式版。** §17 的验收清单十三行全部达标，§16 的七条"禁止发布"闸门
+一条都没有触发。判断依据与每一条的证据在 `docs/release/VERSION_3_REPORT.md`。
 
 仓库里已完成的部分：源码、测试、文档、安装包、本地 tag。
-尚未完成的两件事写在第 6 节，它们不影响"能不能装、能不能用"，影响的是"能不能宣称
-已经过完整验证"。
+**未完成的是"发布"本身** —— 这个仓库没有被推送过，也没有公开 Release；
+推送命令在第 8 节，需要你执行。
+
+第 6 节列了 10 条已知问题。它们都不影响"能不能装、能不能用"，
+影响的是"哪些话现在还不能说"。
 
 ---
 
@@ -136,7 +140,7 @@ git remote add origin https://github.com/<your-org>/ai-workbench.git
 
 # 3. 推送分支与 tag
 git push -u origin feat/private-ai-employee
-git push origin v3.0.0-rc.1
+git push origin v3.0.0
 
 # 4. 在 GitHub 上创建 Release，把安装包作为 asset 上传
 #    （不要 git add 安装包 —— 119 MB 的二进制属于 Release，不属于历史）
