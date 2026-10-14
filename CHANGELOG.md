@@ -39,6 +39,12 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### 修复
 
+- **卸载不干净，整个程序目录留在磁盘上。** 静默卸载 2.5.0 之后，
+  `%LOCALAPPDATA%\AI Workbench` 里还剩 158 个文件 / 3.75 MB。其中 `.env` 是**故意**
+  保留的（它保存 SECRET_KEY，删了用户重装后读不出自己的数据），而 `cache/`（157 个
+  文件的 QML 编译缓存）是**漏的** —— 它由应用在首次运行时创建，安装器从不写它，
+  正因为如此才没人想到要列进卸载清单。更糟的是，因为它没被删掉，最后那句
+  `RMDir "$INSTDIR"` 也静默地什么都没做。已修，卸载后只剩 `.env` 一个文件。
 - **干净克隆跑不通。** 在一个全新目录里 `git clone` → 建 venv → 按 README 装依赖 →
   跑测试，得到 4 个"换台机器就红"的缺陷。**四个都不是开发机上看得到的**：
   - `desktop-native/verify_projection.py` 用了 Python 3.12 的 f-string 语法，而项目
