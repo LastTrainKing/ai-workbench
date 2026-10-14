@@ -414,6 +414,11 @@ Section "Uninstall"
   RMDir /r "$INSTDIR\_internal"
   RMDir /r "$INSTDIR\vendor"
   RMDir /r "$INSTDIR\scripts"
+  ; The QML compile cache, which the application creates on first run — the installer
+  ; never writes it, which is exactly why it was missed. Found by actually uninstalling:
+  ; 157 files / 3.75 MB survived, and because they survived, the `RMDir "$INSTDIR"` two
+  ; lines down silently did nothing either, so the program directory itself stayed behind.
+  RMDir /r "$INSTDIR\cache"
   Delete "$INSTDIR\${APP_EXE}"
   Delete "$INSTDIR\data-dir.txt"
   Delete "$INSTDIR\VERSION"
