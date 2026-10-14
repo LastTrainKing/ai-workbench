@@ -14,6 +14,7 @@ about behaviour.
 from __future__ import annotations
 
 import uuid
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -110,7 +111,7 @@ async def test_the_change_takes_effect_on_the_next_call_not_the_next_restart(
 # What cannot be lifted
 # --------------------------------------------------------------------------- #
 @pytest.fixture
-def project_env_file() -> "Iterator[Path]":
+def project_env_file() -> Iterator[Path]:
     """The project's own `.env`, present for the duration of the test.
 
     **This fixture exists because the test used to require a file the repository
