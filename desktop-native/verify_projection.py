@@ -494,6 +494,29 @@ def _pump(ms: int) -> None:
         time.sleep(0.02)
 
 
+def _pump_until(predicate, timeout_ms: int, slice_ms: int = 250) -> bool:
+    """Pump events until `predicate()` is true, or the deadline passes.
+
+    **A fixed `_pump(4500)` is a guess about how long a database query takes**, and it
+    is a guess that failed once: run immediately after a 15-minute suite, the employee
+    list had not arrived within 4.5 s and the whole render group reported "员工列表为空,
+    无法验证投影" — fourteen assertions skipped because a machine was busy.
+
+    A flaky acceptance test is worse than a slow one: it teaches the reader to re-run
+    instead of to look. Waiting for the condition removes the guess without hiding a
+    real failure — if the list never arrives, the deadline still expires and the check
+    still fails.
+    """
+    end = time.monotonic() + timeout_ms / 1000
+    while time.monotonic() < end:
+        app.processEvents()
+        if predicate():
+            return True
+        time.sleep(slice_ms / 1000)
+    app.processEvents()
+    return bool(predicate())
+
+
 def run_render_checks() -> None:
     bridge, window = _load_shell()
     window.setProperty("width", 1280)
@@ -523,19 +546,25 @@ def run_render_checks() -> None:
 
     # ------------------------------------------------------------ 员工合同 --
     window.navigate("employees", None)
-    _pump(4500)
     root = window.contentItem()
     page = _find_by_class(root, "EmployeesPage")
+    if page is None:
+        _pump(1500)
+        root = window.contentItem()
+        page = _find_by_class(root, "EmployeesPage")
     if page is None:
         check("contract", "员工页可打开", False, "找不到 EmployeesPage")
         bridge.shutdown()
         return
     check("contract", "员工页可打开", True)
 
+    # 等名册真的到，而不是猜它多久到。见 `_pump_until`。
+    _pump_until(lambda: bool(_as_list(page.property("employees"))), timeout_ms=20000)
+
     employees = _as_list(page.property("employees"))
     templates = _as_list(page.property("templates"))
     if not employees:
-        check("contract", "有员工可用于渲染", False, "员工列表为空，无法验证投影")
+        check("contract", "有员工可用于渲染", False, "员工列表为空（等了 20 秒），无法验证投影")
         bridge.shutdown()
         return
     check("contract", "有员工可用于渲染", True, f"{len(employees)} 个")
@@ -594,12 +623,19 @@ def run_render_checks() -> None:
 
     # ------------------------------------------------------------ 首页服务状态 --
     window.navigate("dashboard", None)
-    _pump(4000)
     root = window.contentItem()
     dash = _find_by_class(root, "DashboardPage")
     if dash is None:
+        _pump(1500)
+        root = window.contentItem()
+        dash = _find_by_class(root, "DashboardPage")
+    if dash is None:
         check("dashboard", "首页可打开", False, "找不到 DashboardPage")
     else:
+        # 等 summary 真的到。同一个理由：固定的 4000 ms 是对数据库延迟的猜测。
+        _pump_until(
+            lambda: bool(_as_list_or_dict(dash.property("summary"))), timeout_ms=20000
+        )
         # 页面上的属性可能是 QJSValue 也可能是 Python 值，取决于它当前绑到了什么。
         # 两种都要能读 —— 这正是"绑定求值后的值"而不是"源码里写了什么"。
         summary = _as_list_or_dict(dash.property("summary"))
