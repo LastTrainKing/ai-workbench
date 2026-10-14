@@ -187,16 +187,16 @@ AI-Workbench-Native-Setup.exe
 | 3 | 初始化一个新的测试数据库 | **是**。`DROP/CREATE DATABASE aiworkbench_test`（表数 0）与 `aiworkbench_clean`（表数 0） |
 | 4 | 运行迁移 | **是**。`alembic upgrade head` 在空库上跑完 **10 个迁移**，head `a1e5c7b9d204` |
 | 5a | 静态检查 | **是**。`ruff check backend/app backend/tests desktop-native` → All checks passed（ruff **0.17.0**，与开发机的 0.16.10 不同版本） |
-| 5b | 测试 | 见 §5.4 |
-| 6 | 启动原生桌面端 | 见 §5.4 |
-| 7 | 无 Key 场景的清晰提示 | **是**（干净克隆里没有 `.runtime`，即未配置状态） |
-| 8 | 受控的真实模型端到端 | **`NOT RUN`**，见 §5.4 |
+| 5b | 测试 | **是**。补齐 §5.4 那三样后：**1526 passed / 0 failed / 11 skipped**（13:26） |
+| 6 | 启动原生桌面端 | **是**。`desktop-native/main.py` 在无头模式下启动并持续运行 45 秒被超时终止，无 QML 错误 |
+| 7 | 无 Key 场景的清晰提示 | **是**（干净克隆里没有 `.runtime/ai-config.json`，即未配置状态） |
+| 8 | 受控的真实模型端到端 | **`NOT RUN`**，见 §5.5 |
 | 9 | 构建 Windows 安装器 | **是**，见 §3 |
 | 10 | 安装、启动、退出、升级 | **`NOT RUN`**，见 §4.2 |
 
-### 5.2 这一步抓到了三个真实缺陷
+### 5.2 这一步抓到了四个真实缺陷
 
-**没有一个是开发机上看得到的**，三个都是"本地全绿、换台机器就红"的形态：
+**没有一个是开发机上看得到的**，四个都是"本地全绿、换台机器就红"的形态：
 
 1. **`desktop-native/verify_projection.py` 在 Python 3.11 上解析不了。** 一处 f-string
    用了嵌套转义引号（3.12 语法）。项目声明 `requires-python = ">=3.11"`，
@@ -205,9 +205,11 @@ AI-Workbench-Native-Setup.exe
    的 `tests/**` 不再匹配 —— CI 报 131 个错误，本地 0 个。
 3. **README 让新用户跑不起来测试。** 测试套件里两个模块导入 `awbnative.bridge`
    （需要 PySide6），而依赖文件里没有它 —— 测试在**收集阶段**就死了，一个都没跑。
+4. **测试套件依赖三个 README 没写的机器本地前提**（Qdrant 的 key、`pg_dump`、
+   项目自己的 `.env`），缺一个就是 29 条失败。
 
-详见 `TEST_REPORT.md` §5.2。**这三条是这一轮干净克隆唯一的产出，而它们是这一轮里
-价值最高的产出。**
+详见 `TEST_REPORT.md` §5.2。**这四条是这一轮干净克隆唯一的产出，而它们是这一轮里
+价值最高的产出** —— 前三条各自会让一个新用户在第一分钟就放弃。
 
 ### 5.3 一处诚实说明
 
@@ -216,7 +218,23 @@ Qt 相关的验收工具（`tools/check_qml_pages.py`、`tools/check_layout.py`�
 第 1 步之前还额外核对过：`scripts/sync_version.py --check` 在克隆里 6 个文件全部一致，
 `tools/scan_for_secrets.py` 在克隆里未发现真实凭据。
 
-### 5.4 未执行的部分（`NOT RUN`）
+### 5.4 补齐前提之后
+
+第一次跑是在**什么都没补**的状态下，结果 **29 failed / 1493 passed / 13 skipped**。
+29 条逐条追溯到三个机器本地前提（Qdrant 的 key、`pg_dump`、项目自己的 `.env`），
+其中只有一个是真的测试缺陷 —— 见 `TEST_REPORT.md` §5.2。
+
+按 README 新增的那一节补齐三样之后：
+
+| | 通过 | 失败 | 跳过 | 耗时 |
+|---|---|---|---|---|
+| 开发机 `.venv` | 1532 | 0 | 5 | 15:05 |
+| **干净克隆（补齐后）** | **1526** | **0** | **11** | 13:26 |
+
+**数字对得上**：1532 + 5 = 1537，1526 + 11 = 1537。差的 6 条正是真实模型 live 测试 ——
+干净克隆里没有 Key，它们按设计跳过（每条 skip 都带着原因）。**没有一条失败被藏进跳过。**
+
+### 5.5 未执行的部分（`NOT RUN`）
 
 * **真实模型端到端。** 干净克隆里没有 `.runtime/ai-config.json`，也就没有 Key。
   第 7 步（无 Key 的清晰提示）是这一条的反面，它做了。

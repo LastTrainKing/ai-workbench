@@ -39,6 +39,19 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### 修复
 
+- **干净克隆跑不通。** 在一个全新目录里 `git clone` → 建 venv → 按 README 装依赖 →
+  跑测试，得到 4 个"换台机器就红"的缺陷。**四个都不是开发机上看得到的**：
+  - `desktop-native/verify_projection.py` 用了 Python 3.12 的 f-string 语法，而项目
+    声明 `requires-python = ">=3.11"` —— 该文件在 3.11 上**根本解析不了**。
+  - CI 的 `ruff --config backend/pyproject.toml` 让 `per-file-ignores` 失效：
+    CI 报 131 个错误，本地 0 个。
+  - README 让新用户跑 `pytest`，但依赖里没有 PySide6（两个测试模块导入桥接层）——
+    测试在**收集阶段**就死了，一个都没跑。
+  - 测试套件依赖三个 README 没写的机器本地前提（Qdrant 的 key、`pg_dump`、
+    项目自己的 `.env`），缺一个就是 29 条失败。
+  - `test_permissions_effective.py` 断言项目自己的 `.env` 必须存在，而 `.env` 被
+    gitignore（这是对的）—— 于是它在干净克隆里**失败**而不是跳过。
+    改为测试期间创建、结束后删除。
 - **`_persist_run` 从来没有执行过。** 提交 `591fa2e` 里读的是 `run.started_at`，而
   `AIRun` 没有这一列（它属于 `ToolCall`）。`AttributeError` 被 `try/except` 吞掉，
   整个函数跳过 —— 运行照样 COMPLETED，交付物照样登记，唯一痕迹是一行日志。

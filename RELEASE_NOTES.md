@@ -85,10 +85,12 @@ Qdrant 的 Windows 二进制，以项目作用域的进程启动 —— **不装
 
 ```bat
 python -m venv .venv
-.venv\Scripts\python.exe -m pip install -r backend\requirements.txt
-.venv\Scripts\python.exe -m pip install PySide6
+.venv\Scripts\python.exe -m pip install -r backend\requirements-dev.txt
 .venv\Scripts\python.exe desktop-native\main.py
 ```
+
+`backend\requirements-dev.txt` 会带上 `desktop-native\requirements.txt`（PySide6），
+所以一条命令就够 —— **测试套件也需要它**，有两个测试模块导入桥接层。
 
 ---
 
@@ -105,6 +107,7 @@ python -m venv .venv
 | 5 | 没有「导出」 | 这个构建没有文档转换器。做一个转不了格式的按钮就是做一个假功能 | 用系统程序另存为 |
 | 6 | `ai_runs.total_tokens` 对自主运行不写入 | 运行记录里的 token 数会低估 agent 运行。**不影响**真实模型测试的计量（那些从 API 的 `usage` 字段读） | — |
 | 7 | 仅 Windows | 安装包、捆绑运行时、全部验收都在 Windows 上。Qt/QML 本身跨平台，但**没有跨平台声明，也没有对应验证** | — |
+| 8 | 集成测试需要机器本地的基础设施 | 三个引擎要跑起来、`pg_dump` 要在 `PATH` 上、Qdrant 若设了 key 则要放在 `.runtime/qdrant-api-key.txt`。README 的 Tests 一节列了这三样 | 按 README 补齐；**应用本身不需要这些就能构建和运行** |
 
 **未纳入的候选功能**（不是缺陷，是没做）：多智能体协作、插件市场、远程服务、
 浏览器自动化、WebView、第二套运行时。

@@ -95,10 +95,6 @@ resolver，于是它们**真的运行了** —— 见 §3。
 代价：一次全量会消耗少量额度。若不想花，用 `--deselect` 或只跑分组 ——
 但**不要**把它们的 skip 说成通过。
 
-### 2.6 版本二新增测试
-
----
-
 ## 3. 真实模型测试
 
 ### 3.1 六条 live 测试
@@ -236,14 +232,13 @@ All checks passed!
 0.17.0 对当前工作区同样报 `All checks passed!`，两边一致 —— 但这是**验证过的巧合**，
 不是保证。要它成为保证，需要把 `requirements-dev.txt` 钉到具体版本。
 
-### 5.2 干净克隆发现的三个真实缺陷
+### 5.2 干净克隆发现的四个真实缺陷
 
 §15 的干净克隆跑出来的，**没有一个是开发机上看得到的**：
 
 1. **`desktop-native/verify_projection.py` 在 Python 3.11 上根本解析不了。**
-   一处 f-string 用了嵌套转义引号（`f"{call('a', \"b\")}"`），那是 3.12 语法。
-   项目声明 `requires-python = ">=3.11"`、`target-version = "py311"`，
-   ruff 报 6 处 `invalid-syntax`。已修（值先算出来再插值）。
+   一处 f-string 用了嵌套转义引号（3.12 语法）。项目声明 `requires-python = ">=3.11"`、
+   `target-version = "py311"`，ruff 报 6 处 `invalid-syntax`。已修（值先算出来再插值）。
 2. **CI 的 ruff 命令会失败。** 我原先写的是
    `ruff check --config backend/pyproject.toml …`，还配了一句"这个 flag 是必须的"。
    恰恰相反：`per-file-ignores` 的 glob 相对**配置文件所在目录**解析，从仓库根传
@@ -252,25 +247,57 @@ All checks passed!
 3. **`README` 让新用户跑不起来测试。** README 说：建 venv、装
    `backend/requirements-dev.txt`、跑 `pytest`。而 `tests/unit/test_ai_config_status.py`
    与 `tests/unit/test_native_bridge_session.py` 导入 `awbnative.bridge`，后者导入
-   PySide6 —— **测试在收集阶段就死了**，一个测试都没跑，报
+   PySide6 —— **测试在收集阶段就死了**，一个都没跑，报
    `ModuleNotFoundError: No module named 'PySide6'`。
    修法：新增 `desktop-native/requirements.txt`（`PySide6-Essentials>=6.6,<7.0`），
    由 `backend/requirements-dev.txt` 以 `-r` 引入，一条命令覆盖测试与客户端。
+4. **测试套件依赖三个"机器本地"的前提，README 一个都没写。** 干净克隆里
+   `pytest tests` 的结果是 **29 failed / 1493 passed / 13 skipped**，
+   29 条**逐条**追溯到下面三个之一：
 
-**三个都是"本地全绿、换台机器就红"的形态**，而 §15 要求的正是换台机器跑一遍。
-第 3 个尤其说明问题：它是新用户做的**第一件事**，而它一直是坏的。
+| 数量 | 现象 | 根因 | 性质 |
+|---|---|---|---|
+| 21 | `embedding_error: 所有分块都未能生成向量` | 测试把 runtime 目录搬进克隆，Qdrant 的 key 没跟过来 → `401 Unauthorized` | **环境**，不是产品缺陷 |
+| 4 | `SchemaOutOfDateError: 找不到 pg_dump` | schema guard 在前进迁移前要先备份，没有 `pg_dump` 就拒绝。**这个拒绝是对的** | **环境**，文档缺失 |
+| 4 | `assert secrets.is_file()` —— "the fixture expects the project's own .env to exist" | `.env` 被 gitignore（这是对的），而测试断言它必须存在 —— 于是**失败**而不是跳过 | **测试缺陷**，已改代码 |
 
-### 5.3 `requirements` 是范围不是锁
+第 4 组是真正的缺陷，**改的是代码不是文档**：新增 `project_env_file` 夹具，在测试期间
+创建该文件、结束后删除。跳过的写法会让"没有 `.env` 的机器"少掉四条真断言；改成在临时
+目录里断言，测的就不再是实际存在的那条规则（`{PROJECT}\.env` 是**具体路径**不是模式）。
+已存在的 `.env` 一律不动。
+
+**四个都是"本地全绿、换台机器就红"的形态**，而 §15 要求的正是换台机器跑一遍。
+第 3、4 个尤其说明问题：它们分别是新用户做的**第一件事**和跑测试的**第一个障碍**。
+
+### 5.3 干净克隆的三组数字
+
+| 场景 | 通过 | 失败 | 跳过 | 耗时 |
+|---|---|---|---|---|
+| 开发机 `.venv` | 1532 | 0 | 5 | 15:05 |
+| 克隆 + 一条命令装依赖，**不给任何机器本地配置** | 1493 | **29** | 13 | 15:20 |
+| 克隆 + 装依赖 + **按 README 新增的那一节补齐前提** | **1526** | **0** | 11 | 13:26 |
+
+第三组验证的是"README 的步骤到底能不能照做"。补齐的三样是：`pg_dump` 在 `PATH` 上、
+`.runtime/qdrant-api-key.txt` 就位、三个引擎在跑。
+
+**数字对得上**：1532 + 5 = 1537；1526 + 11 = 1537。差的 6 条正是真实模型 live 测试 ——
+干净克隆里没有 Key，它们按设计跳过，每条 skip 都带着原因。
+**没有一条失败被藏进跳过。**
+
+**关键区分**：一个什么都不装的干净克隆，**仍然能构建并运行应用本身** ——
+干净克隆里 `desktop-native/main.py` 无头启动并持续运行 45 秒被超时终止，无 QML 错误，
+且依赖是**一条命令**装完的。需要基础设施的是**集成测试套件**。这两件事不一样，
+而上面三组数字是量出来的。
+
+### 5.4 `requirements` 是范围不是锁
 
 | 环境 | ruff | PySide6 |
 |---|---|---|
 | 开发机 `.venv` | 0.16.10 | 6.12.0 |
-| 干净克隆新建的 venv | **0.17.0** | 最新匹配版 |
+| 干净克隆新建的 venv | **0.17.0** | 6.12.0 |
 
 `ruff>=0.5,<1.0` 与 `PySide6-Essentials>=6.6,<7.0` 都是范围。这次两边结论一致，
 但那是**验证过的巧合**，不是保证。要它成为保证，需要钉到具体版本。
-
----
 
 ## 6. 安全扫描
 
