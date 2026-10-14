@@ -1,0 +1,49 @@
+# Line endings, so that a contributor on Linux and a contributor on Windows see the same
+# bytes in a diff.
+#
+# **Why this file exists.** The repository held 457 files with LF endings and 186 with CRLF —
+# 97 Python files, 22 Markdown, 19 `.mjs`, 30 `.ts`/`.tsx` among them. Nothing broke, because
+# every tool here tolerates both. What broke was review: a one-line change to a CRLF file
+# arrived as a whole-file diff on a machine that checked out LF, and a whole-file diff is a
+# diff nobody reads. Found by counting, not by noticing.
+#
+# `text=auto` normalises to LF **in the repository** and lets each platform check out what it
+# asks for (`core.eol` / `core.autocrlf`). It does not force LF into anyone's working tree,
+# which is why it is used here instead of `eol=lf`: this is a Windows-first product and a
+# Windows checkout is entitled to CRLF.
+* text=auto
+
+# **These keep CRLF on every platform.** `cmd.exe` reads a batch file as it goes and treats
+# labels as positions, so an LF-only `.bat` can jump somewhere unexpected; PowerShell's parser
+# has its own rules about line breaks. All of these run on Windows and nowhere else, so there
+# is no platform to be neutral towards.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+
+# Binary. `text=auto` would usually detect these, but a PNG that happens to contain the bytes
+# `\r\n` is exactly the case where "usually" is not good enough — and that happened here.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.pdf binary
+*.zip binary
+*.gz binary
+*.7z binary
+*.exe binary
+*.dll binary
+*.pyd binary
+*.so binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.otf binary
+*.xlsx binary
+*.docx binary
+*.pptx binary
+
+# Generated, and a diff on it is noise — but it must still be reviewed when it changes,
+# because that is what pins the dependency tree.
+package-lock.json -diff linguist-generated
