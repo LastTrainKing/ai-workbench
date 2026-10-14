@@ -95,7 +95,7 @@
 | 大小 | **125,005,709 字节**（119.2 MB） |
 | SHA-256 | `56e9812f4dc5bf25b7c30a9511204854f957209e05f9f12764004b86d78c374e` |
 | 构建时间 | 2026-10-14 10:36 |
-| 对应源码 commit | **`d77d039`** |
+| 对应源码 commit | **`d77d039`**（tag `v3.0.0-rc.1` → `2a420a9`，两者之间**只有文档变化**） |
 | payload | 485.3 MB / 3949 个文件（含 `vendor/runtime` 三个引擎） |
 | 原生应用包 | `desktop-native/dist/AI-Workbench-Native/`，256 MB |
 
@@ -114,6 +114,10 @@ git diff --stat HEAD -- README.md VERSION LICENSE scripts desktop-native/dist
 :: 3. 安装包内嵌的版本号
 (Get-Item build\installer\AI-Workbench-Native-Setup.exe).VersionInfo.FileVersion
                                          :: 3.0.0
+
+:: 4. tag 与安装包构建的那个 commit 之间，payload 文件没有变过
+git diff --stat d77d039 v3.0.0-rc.1 -- README.md VERSION LICENSE scripts desktop-native/dist
+                                         :: 空（只改了 docs/）
 ```
 
 payload 的显式清单是 `scripts/build_native_installer.py` 里的 `PAYLOAD` 常量：
