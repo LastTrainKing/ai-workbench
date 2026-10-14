@@ -109,13 +109,24 @@ It now lives at `<project>/.runtime/workspace` with a fixed layout
 (`deliverables/ notes/ sources/ .tmp/`). See [WORKSPACE.md](WORKSPACE.md).
 
 <p align="center">
-  <img src="screenshots/ui-verification/51-home-grid.png" alt="Home: keyboard-navigable launch grid" width="49%">
-  <img src="screenshots/ui-verification/05-agent-result.png" alt="Agent: plan, live execution, verified result" width="49%">
+  <img src="screenshots/native/dashboard.png" alt="Home: say what you want done, and what came out of the last five runs" width="49%">
+  <img src="screenshots/native/employees.png" alt="My employees: six role templates, and the roster with its contracts" width="49%">
 </p>
 <p align="center">
-  <img src="screenshots/ui-verification/10-my-ai-memory.png" alt="My AI: profile, memory and preferences" width="49%">
-  <img src="screenshots/ui-verification/13-my-ai-context.png" alt="Context preview: exactly what is sent" width="49%">
+  <img src="screenshots/native/deliverables.png" alt="Deliverables: every file with its verification evidence and the operations it actually supports" width="49%">
+  <img src="screenshots/native/memory.png" alt="Memory: what is waiting for approval, what is in force, and exactly what the model will be told" width="49%">
 </p>
+<p align="center"><sub>The native Windows client — the thing the installer ships. Captured on a real
+display at 1280×860; the rest of the pages are in <a href="screenshots/native/"><code>screenshots/native/</code></a>.
+The older web client's screenshots are still in <a href="screenshots/ui-verification/"><code>screenshots/ui-verification/</code></a>,
+and they show the <em>other</em> client, not this one.</sub></p>
+
+**Why the screenshots are regenerable, not just committed.** They come from
+`tools/shot_real_pages.py`, which drives the real window on a real display — the headless
+harness reports *zero font families* on this machine, so it cannot show a glyph, and a
+missing font fallback is exactly the defect it would therefore miss. This project has
+already shipped one: an avatar initial was changed to an emoji, the offscreen harness
+rendered it clean, and the real window drew a tofu block.
 
 ---
 

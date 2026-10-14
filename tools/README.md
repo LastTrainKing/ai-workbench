@@ -30,15 +30,24 @@ python tools/scan_git_history_secrets.py
 |---|---|
 | `check_qml_pages.py` | 20 个页面逐个无头加载，打印引擎自己的报错。**语法与加载**这一层 |
 | `check_layout.py` | 19 页 × 3 档分辨率（1920×1080 / 1280×800 / 960×640）遍历控件树，报四类几何问题：文字被硬切、子元素越界、文字重叠、可见但尺寸为零 |
+| `shot_real_pages.py` | **真实显示器**上逐页截图。用真实窗口、真实字体栈，产出人能看的 PNG |
 
 ```bash
 python tools/check_qml_pages.py
 python tools/check_layout.py
+python tools/shot_real_pages.py                    # 需要真实显示器
+python tools/shot_real_pages.py employees memory   # 只截这几页
 ```
 
-**这两个答不了"页面渲染的内容与数据是否一致"。** 那是
+**`shot_real_pages.py` 与另外两个不是同一件事，而且它补的正是另外两个补不了的。**
+`check_layout.py` 答的是"几何对不对"，`check_qml_pages.py` 答的是"能不能加载"，
+**两个都不答"字形画出来了吗"** —— 它们跑在 offscreen 平台上，而该平台在本机报告
+*零个字体族*。这个项目已经因此漏过一次：员工头像首字改成 emoji，offscreen 报告渲染
+干净，真实窗口画的是豆腐块。
+
+**这三个答不了"页面渲染的内容与数据是否一致"。** 那是
 `desktop-native/verify_projection.py` 的事，它读的是真实 QML 对象的 `isVisible()` 与
-`text`。分工是刻意的：几何 / 加载 / 内容，三层各自有工具，因为它们各自出过错。
+`text`。分工是刻意的：几何 / 加载 / 字形 / 内容，四层各自有工具，因为它们各自出过错。
 
 ## 需要真实基础设施的验收（不在本目录）
 
