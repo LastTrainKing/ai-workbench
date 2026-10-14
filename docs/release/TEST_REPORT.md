@@ -35,12 +35,23 @@ cd backend && ../.venv/Scripts/python.exe -m pytest tests -q -p no:randomly --tb
 ```
 
 ```
-1532 passed, 5 skipped, 5 warnings in 905.32s (0:15:05)
+1537 passed, 5 skipped, 5 warnings in 887.50s (0:14:47)
 ```
 
 **0 failed。** 命令与版本一完全相同（`--tb=line -rs`，无 `-x`，未跳过任何文件）。
-skipped 从 11 降到 5，因为**那 6 条真实模型 live 测试不再跳过** —— 它们的 Key 读取方式
-改为走应用自己的 resolver（见 §3）。
+比上一轮多 4 条 —— 新增的 `backend/tests/unit/test_local_net.py`，即 §6 那个系统代理
+修复的测试。skipped 从 11 降到 5，因为**那 6 条真实模型 live 测试不再跳过** —— 它们的
+Key 读取方式改为走应用自己的 resolver（见 §3）。
+
+**这一次是用 `no_proxy` 直连跑的，原因值得记下来。** 本机注册表里配着系统代理
+（`ProxyEnable=1`，`ProxyServer=127.0.0.1:7890`）而代理客户端当时没开，于是**出网完全
+不通**。同一条命令在那种状态下是 **5 failed**，全部是依赖出网的测试。把出网恢复之后
+它们全绿 —— **判断"是不是回归"之前，先确认出网是通的**：
+
+```bash
+# 出网通不通，两行就能看出来
+python -c "import httpx; print(httpx.get('https://api.deepseek.com/', timeout=8).status_code)"
+```
 
 版本一（提交 `0f9468f`）的同一条命令是 **1489 passed, 0 failed, 11 skipped（10:19）**。
 两次之间的差异 = 6 条 live 测试 + 34 条本轮新增测试 + 版本一致性测试的若干参数用例。
@@ -330,7 +341,7 @@ All checks passed!
 
 | 场景 | 通过 | 失败 | 跳过 | 耗时 |
 |---|---|---|---|---|
-| 开发机 `.venv` | 1532 | 0 | 5 | 15:05 |
+| 开发机 `.venv`（干净克隆那次对照用） | 1532 | 0 | 5 | 15:05 |
 | 克隆 + 一条命令装依赖，**不给任何机器本地配置** | 1493 | **29** | 13 | 15:20 |
 | 克隆 + 装依赖 + **按 README 新增的那一节补齐前提** | **1526** | **0** | 11 | 13:26 |
 
@@ -340,6 +351,10 @@ All checks passed!
 **数字对得上**：1532 + 5 = 1537；1526 + 11 = 1537。差的 6 条正是真实模型 live 测试 ——
 干净克隆里没有 Key，它们按设计跳过，每条 skip 都带着原因。
 **没有一条失败被藏进跳过。**
+
+表里那两次说的是同一时刻的运行（所以总数相等）。**后来新增了 4 条
+`test_local_net.py`**，所以最新一次开发机全量是 **1537 passed / 0 failed / 5 skipped**
+（14:47，见 §2.1），比表中那一行多 4 条。
 
 **关键区分**：一个什么都不装的干净克隆，**仍然能构建并运行应用本身** ——
 干净克隆里 `desktop-native/main.py` 无头启动并持续运行 45 秒被超时终止，无 QML 错误，
@@ -376,7 +391,62 @@ All checks passed!
 `ruff>=0.5,<1.0` 与 `PySide6-Essentials>=6.6,<7.0` 都是范围。这次两边结论一致，
 但那是**验证过的巧合**，不是保证。要它成为保证，需要钉到具体版本。
 
-## 6. 安全扫描
+## 6. 系统代理：本地服务被发给了代理（版本三发现并修复）
+
+**症状。** 装完之后窗口顶部一直挂着「降级 / 部分功能不可用：向量检索」，
+而 Qdrant 正在运行。
+
+**根因。** Windows 把系统代理存在注册表里，`urllib.request.getproxies()`（httpx 读它）
+返回 `ProxyServer` 却**不读 `ProxyOverride`** —— 那个字段正是其它所有 Windows 程序
+用来跳过 `127.0.0.1` 的。于是 `http://127.0.0.1:6333` 被发给了代理：
+
+| 代理状态 | 应用看到的 | 界面说的 |
+|---|---|---|
+| 在跑 | `HTTP 401` | 「Qdrant 在运行，但本次请求被拒绝（未配置 API key 或 key 不匹配）」 |
+| 没跑 | `ConnectError` | 「Qdrant 不可达」 |
+
+**两个答案都不是 Qdrant 给的。** Qdrant 两次都健康 —— 而第二种说法会让用户去启动一个
+已经在运行的服务。
+
+**不止是横幅。** 对同一个健康的 Qdrant：
+
+```
+AsyncQdrantClient.get_collections()  ->  ResponseHandlingException:
+                                         All connection attempts failed
+```
+
+也就是**语义检索是死的**，产品静默退回了关键词检索。
+
+**范围。** 本机留下的 **92 份包内自检报告，每一份**都报 Qdrant 被阻塞
+（76 份是 401 形态，其余是连接形态）。不是偶发，不是竞态。
+
+**为什么开发机看不见。** 开发机上代理装了但常常没开，失败只是换个形状 ——
+从 401 变成 `ConnectError`，两者都长得像「服务没起来」。
+
+**修法。** `app.core.local_net.exempt_loopback_from_proxy()`，在两个进程入口
+（桌面端 `awbnative.bootstrap.ensure_ready` 与 API 的 `app.main.lifespan`）
+里、**在任何客户端被构造之前**调用。它把 loopback 追加进 `no_proxy`，而 `no_proxy`
+是 httpx 自己读的 —— 所以它同时覆盖就绪探测、向量库客户端，以及 `qdrant_client`
+内部自建的那个 `httpx.AsyncClient`（后者只能靠透传参数才能设 `trust_env=False`）。
+**只豁免 loopback**，出本机的流量照走代理。
+
+**验证。** 对**组装后的 payload** 跑 `verify_native_package.py`：
+
+| | 结果 |
+|---|---|
+| 修复前 | `qdrant: BLOCKED — Qdrant 不可达（ConnectError）`，**9/10** |
+| 修复后 | `qdrant: PASS — http://127.0.0.1:6333`，**10/10** |
+
+新增 4 条测试在 `backend/tests/unit/test_local_net.py`。行为测试起一个真实的 loopback
+HTTP 服务、按 Windows 的方式设一个不可能工作的代理，然后断言请求真的到达 ——
+去掉豁免它就以 `ConnectError` 失败。
+
+**同一次还修了**：`verify_native_package.py` 第 6 项把**任何**名叫 `runtime` 的目录
+都判成「打包了数据目录」，包括 `vendor/runtime` —— 那是三个引擎，是 payload 故意带的。
+它要找的是用户数据目录 `.runtime`：在可执行文件旁边，不在 `vendor/` 里。
+这个假阳性让自检**无法对真正发布出去的那个产物运行**。
+
+## 7. 安全扫描
 
 | 项 | 命令 | 结果 |
 |---|---|---|
@@ -402,7 +472,7 @@ All checks passed!
 
 ---
 
-## 7. CI
+## 8. CI
 
 `.github/workflows/ci.yml` 已提供：`ruff` + `pytest`，PostgreSQL / Redis / Qdrant
 作为 service container（与 `docker-compose.yml` 同版本）。
@@ -416,11 +486,11 @@ runner、~485 MB 运行时和 NSIS。它**不会伪装成"已自动验证"**：C
 
 ---
 
-## 8. 未执行项汇总
+## 9. 未执行项汇总
 
 | 项 | 原因 |
 |---|---|
-| 真实桌面截图 | 环境无头；`offscreen` 报告零个字体族，结论会失真 |
+| ~~真实桌面截图~~ | **已执行**：`tools/shot_real_pages.py`，真实显示器 7/7 页，见 §4.5 |
 | GitHub Actions 实际执行 | 本机没有 GitHub runner；workflow 文件已提供但未验证 |
 | macOS / Linux 验证 | 未在这些平台上测试过，因此不宣称支持 |
 | 版本二之后重跑真实模型 E2E | 改动不涉及模型调用路径；避免重复花费 |

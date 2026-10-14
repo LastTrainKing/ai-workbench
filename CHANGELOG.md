@@ -42,6 +42,13 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### 修复
 
+- **本地服务被发给了系统代理。** `getproxies()` 在 Windows 上不读 `ProxyOverride`，
+  所以 `127.0.0.1:6333` 被送进了代理 —— 代理开着是 `401`，关着是 `ConnectError`。
+  横幅说「向量检索降级」，而 Qdrant 一直是健康的；`AsyncQdrantClient` 同样被拦，
+  于是语义检索静默退化成关键词检索。已修（只豁免 loopback）。
+- **安装包里的应用自称 2.5.0。** 打包用的 PyInstaller 树比版本号提交早 23 分钟，
+  而应用读的正是树里的 `_internal/VERSION`。已重建，并把核对方法写成命令。
+
 - **卸载不干净，整个程序目录留在磁盘上。** 静默卸载 2.5.0 之后，
   `%LOCALAPPDATA%\AI Workbench` 里还剩 158 个文件 / 3.75 MB。其中 `.env` 是**故意**
   保留的（它保存 SECRET_KEY，删了用户重装后读不出自己的数据），而 `cache/`（157 个

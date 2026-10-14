@@ -90,16 +90,17 @@
 
 ## 3. 构建物
 
-| 项           | 值                                                                  |
-| ----------- | ------------------------------------------------------------------ |
-| 路径          | `build/installer/AI-Workbench-Native-Setup.exe`                    |
-| 版本（文件资源）    | `3.0.0`                                                            |
-| 大小          | **125,012,100 字节**（119.2 MB）                                       |
-| SHA-256     | `031e21ed5e68ac2d4ec4d27930c2006696e70777ba200b9f98c4e8e50b10503e` |
-| 构建时间        | 2026-10-14 12:33                                                   |
-| 对应源码 commit | **`071513c`**（tag `v3.0.0-rc.1`）        |
-| payload     | 485.3 MB / 3949 个文件（含 `vendor/runtime` 三个引擎）                       |
-| 原生应用包       | `desktop-native/dist/AI-Workbench-Native/`，256 MB                  |
+| 项 | 值 |
+|---|---|
+| 路径 | `build/installer/AI-Workbench-Native-Setup.exe` |
+| 版本（文件资源） | `3.0.0` |
+| 大小 | **125,004,453 字节**（119.2 MB） |
+| SHA-256 | `2a273ff0c35b85de39835bd2ec2632df3eba9ae7ef067d2417712f1d65301978` |
+| 构建时间 | 2026-10-14 19:31 |
+| 对应源码 commit | **`30ba77f`** |
+| payload | 485.3 MB / 3949 个文件（含 `vendor/runtime` 三个引擎） |
+| 原生应用包 | `desktop-native/dist/AI-Workbench-Native/` |
+| 包内自检 | **10/10**（对**组装后的 payload** 跑，不是对 `dist/`） |
 
 ### 3.1 版本对应关系怎么核
 
@@ -109,22 +110,40 @@
 :: 1. 工作区干净
 git status --short                       :: 空
 
-:: 2. 安装包 payload 里那些文件，与 HEAD 逐字节一致
-git diff --stat HEAD -- README.md VERSION LICENSE scripts desktop-native/dist
-                                         :: 空
+:: 2. 应用树自己的版本号 —— 这是 git 看不到的那一半
+type desktop-native\dist\AI-Workbench-Native\_internal\VERSION
+                                         :: 3.0.0，必须等于仓库根的 VERSION
 
 :: 3. 安装包内嵌的版本号
 (Get-Item build\installer\AI-Workbench-Native-Setup.exe).VersionInfo.FileVersion
                                          :: 3.0.0
 
-:: 4. 安装包构建之后，payload 里那些文件没有被再改过
-git log --oneline -1 -- README.md VERSION LICENSE scripts desktop-native/dist
-                                         :: 最后改动它们的那个提交，就是安装包对应的提交
+:: 4. 对组装后的 payload 跑包内自检 —— 第 5 项做的就是第 2 步的比较
+python desktop-nativeerify_native_package.py --app build
+ative-installer-payload
+                                         :: 10/10
 ```
 
-**这一次真的触发了。** 干净克隆那一轮改了 `README.md`（补上原生桌面一节与测试前提），
-而 `README.md` **在 payload 清单里** —— 于是第一次构建的安装包立刻过期。
-第 4 步检查抓到了它，安装包已重建（`b7fddd2`），不是"反正差不多"地发出去。
+**第 2 步不是可有可无的，而且 `git diff` 代替不了它。**
+`desktop-native/dist/` 被 `.gitignore` 的 `dist/` 规则覆盖（`.gitignore:38`），
+对它做 `git diff` 只会输出空 —— 看起来"一致"，其实是**什么都没比**。
+
+这不是假设。2026-10-14 构建的 3.0.0 安装包里就装着一个这样的树：
+`desktop-native/dist/` 构建于 **10:14**，而把版本号改成 3.0.0 的提交在 **10:37**。
+`desktop-native/dist/AI-Workbench-Native/_internal/VERSION` 里写的是 **2.5.0**，
+而应用读版本号读的正是这个文件（`awbnative/resources.py::version()` 先找
+`bundle_root()/VERSION`）。于是同一个安装包里有三个版本号：exe 资源 `3.0.0`、
+安装根目录 `VERSION` `3.0.0`、**应用自己显示 `2.5.0`**。
+抓到它的是包内自检的**第 5 项**（"VERSION 与仓库一致"），不是上面那条 `git diff` ——
+后者对 `dist/` 永远是空的。
+
+**一条能覆盖它的机械检查**（比 diff 可靠，因为它看的是构建产物的时间）：
+
+```bat
+:: 应用树的构建时间，必须晚于最后一次改动已打包源码的提交时间
+dir /T:W desktop-native\dist\AI-Workbench-Native\_internal\VERSION
+git log -1 --format=%cd --date=iso -- backend desktop-native/awbnative desktop-native/qml desktop-native/main.py
+```
 
 payload 的显式清单是 `scripts/build_native_installer.py` 里的 `INCLUDE` 列表：  
 `desktop-native/dist/`、`vendor/runtime/{pgsql,redis,qdrant}`、五个 `scripts/*.ps1`、  
@@ -247,10 +266,13 @@ Qt 相关的验收工具（`tools/check_qml_pages.py`、`tools/check_layout.py`�
 
 | | 通过 | 失败 | 跳过 | 耗时 |
 |---|---|---|---|---|
-| 开发机 `.venv` | 1532 | 0 | 5 | 15:05 |
+| 开发机 `.venv`（那次对照用的运行） | 1532 | 0 | 5 | 15:05 |
+| 开发机 `.venv`（**最新**，含新增 4 条 `test_local_net.py`） | **1537** | **0** | **5** | 14:47 |
 | **干净克隆（补齐后）** | **1526** | **0** | **11** | 13:26 |
 
-**数字对得上**：1532 + 5 = 1537，1526 + 11 = 1537。差的 6 条正是真实模型 live 测试 ——
+**数字对得上**：1532 + 5 = 1537，1526 + 11 = 1537（同一时刻的两次运行，总数相等）。
+后来新增了 4 条 `test_local_net.py`，所以最新一次开发机全量是 1537 / 0 / 5。差的 6 条
+正是真实模型 live 测试 ——
 干净克隆里没有 Key，它们按设计跳过（每条 skip 都带着原因）。**没有一条失败被藏进跳过。**
 
 ### 5.5 未执行的部分（`NOT RUN`）
