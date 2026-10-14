@@ -20,7 +20,7 @@
 
 ## 用法
 
-    python scripts/scan_git_history_secrets.py
+    python tools/scan_git_history_secrets.py
 
 退出码非 0 表示发现了真实凭据。
 """

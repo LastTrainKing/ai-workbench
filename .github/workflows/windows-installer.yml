@@ -1,0 +1,101 @@
+name: Windows installer
+
+# **手动触发，且只手动触发。**
+#
+# 这个 workflow 不会在 push 或 PR 上跑，因为：
+#
+#   * 它需要 Windows runner（PyInstaller 的产物是平台相关的，不能交叉编译）；
+#   * 它需要 ~485 MB 的运行时（PostgreSQL / Redis / Qdrant 的 Windows 二进制），
+#     在 CI 上要从上游重新下载；
+#   * 它产出一个 119 MB 的安装包，作为 artifact 上传 —— 放进每次 push 的流水线
+#     只会让所有人变慢。
+#
+# **它不会伪装成"已自动验证"。** 产物是一个待人工验证的构建：装到干净机器上、
+# 启动、退出、升级，这些步骤见 `docs/release/BUILD_AND_INSTALL.md`。CI 只能
+# 证明"它能被构建出来"，不能证明"它能用"。
+#
+# 状态：**本文件尚未在 GitHub 上执行过。** 本机构建的证据见
+# `docs/release/BUILD_AND_INSTALL.md` 与 `docs/release/TEST_REPORT.md`。
+
+on:
+  workflow_dispatch:
+    inputs:
+      upload_installer:
+        description: "把 119 MB 的安装包作为 artifact 上传"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: 构建并校验原生包
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: backend/requirements-dev.txt
+
+      - name: 安装依赖
+        run: |
+          python -m venv .venv
+          .venv\Scripts\python.exe -m pip install --upgrade pip
+          .venv\Scripts\python.exe -m pip install -r backend/requirements-dev.txt
+
+      # PyInstaller 不在 requirements-dev.txt 里（只有构建安装包时需要它）。
+      - name: 安装 PyInstaller
+        run: .venv\Scripts\python.exe -m pip install "pyinstaller>=6.6,<7.0"
+
+      # 第 1 步：PyInstaller 包。`build_native.py` 会在构建后**自动运行
+      # `verify_native_package.py` 并启动产物** —— 一个只能在这台机器上启动的包
+      # 会在这里失败，而不是在用户的机器上。
+      - name: 构建原生应用包
+        run: .venv\Scripts\python.exe desktop-native\build_native.py
+
+      # 第 2 步：NSIS 安装包。需要 Windows 运行时二进制；
+      # `fetch-runtime.ps1` 从上游下载它们到 `vendor/runtime/`。
+      - name: 获取 Windows 运行时
+        run: powershell -ExecutionPolicy Bypass -File scripts\fetch-runtime.ps1
+        continue-on-error: true
+
+      - name: 组装并编译安装包
+        run: |
+          $nsis = "$env:LOCALAPPDATA\tauri\NSIS\Bin\makensis.exe"
+          if (-not (Test-Path $nsis)) {
+            choco install nsis -y --no-progress
+          }
+          .venv\Scripts\python.exe scripts\build_native_installer.py --build
+
+      - name: 记录校验和
+        run: |
+          $exe = "build\installer\AI-Workbench-Native-Setup.exe"
+          if (Test-Path $exe) {
+            (Get-FileHash $exe -Algorithm SHA256).Hash
+            (Get-Item $exe).Length
+          } else {
+            Write-Error "安装包没有生成"
+            exit 1
+          }
+
+      - name: 上传安装包
+        if: ${{ inputs.upload_installer }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: AI-Workbench-Native-Setup
+          path: build/installer/AI-Workbench-Native-Setup.exe
+          retention-days: 14
+
+      - name: 上传构建报告
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-report
+          path: |
+            build/native-installer-report.json
+          if-no-files-found: ignore

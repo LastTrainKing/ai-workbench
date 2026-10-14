@@ -128,18 +128,38 @@ refactor(repositories): make cross-entity queries explicit
 ## Before opening a pull request
 
 ```bash
-# backend
+# backend — lint and tests
 cd backend
-../.venv/Scripts/python.exe -m ruff check app tests
+../.venv/Scripts/python.exe -m ruff check ../backend/app ../backend/tests ../desktop-native
 ../.venv/Scripts/python.exe -m pytest
 
-# frontend
-cd ../frontend
+# desktop client — the interface's own acceptance
+cd ..
+.venv/Scripts/python.exe desktop-native/verify_projection.py    # 108 assertions
+.venv/Scripts/python.exe desktop-native/verify_native_shell.py  # 31 checks
+.venv/Scripts/python.exe tools/check_layout.py                  # 19 pages x 3 sizes
+.venv/Scripts/python.exe tools/check_qml_pages.py               # 20 pages load
+
+# frontend (the web client — not what the desktop installer ships)
+cd frontend
 npm run lint && npm run typecheck && npm run test && npm run build
 
 # end-to-end (needs a running server)
 cd .. && python scripts/smoke_test.py
 ```
+
+**Changed something in the interface? Run `verify_projection.py`, not just the tests.**
+It asserts what the screen actually renders against the data behind it — `isVisible()`
+and `text` on the real QML objects. This project has twice shipped "all tests green,
+the user sees something false": the home screen read `summary.llm` where the field was
+`summary.providers.llm` (a wrong field name raises nothing; it just makes the screen
+lie), and a missing font fallback rendered an icon as a tofu block. Neither is a logic
+error, and neither is caught by a test that only checks "the page loaded".
+
+**Before adding an assertion, break the thing it guards and watch it fail.** An
+assertion that has never failed is not evidence. Two of the five mutation checks run in
+this repository's history produced *no* failure — and in both cases the mutation was
+wrong, not the assertion.
 
 Then check:
 
@@ -149,6 +169,10 @@ Then check:
 - [ ] new behaviour has tests, including its failure path
 - [ ] documentation updated when behaviour or configuration changed
 - [ ] if you changed the schema, `alembic check` reports no pending operations
+- [ ] if you changed a user-visible string, it is in `qml/theme.js` or came from the
+      backend — not typed into a page twice
+- [ ] `python tools/scan_for_secrets.py` is clean (it exits non-zero when it finds
+      nothing at all, which means it did not run — see `tools/README.md`)
 
 ## Reporting a bug
 
@@ -158,8 +182,9 @@ response header (it correlates every log line for that request), the relevant
 
 ## Security
 
-Do not open a public issue for a vulnerability. Describe the impact and a minimal
-reproduction privately to the maintainer first. Never commit credentials; `.env` is
+Do not open a public issue for a vulnerability — use GitHub's private vulnerability
+reporting. See `SECURITY.md` for the full policy, including how credentials are stored
+and what to do if one is ever committed. Never commit credentials; `.env` is
 git-ignored and `.env.example` is the template.
 
 ## License

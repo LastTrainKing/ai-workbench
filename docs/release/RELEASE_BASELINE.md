@@ -58,20 +58,25 @@
 
 | 用途 | 命令 |
 |---|---|
-| 后端 lint | `.venv/Scripts/python.exe -m ruff check backend/ desktop-native/` |
+| 后端 lint | `.venv/Scripts/python.exe -m ruff check backend/app backend/tests desktop-native` |
 | 后端全量测试 | `cd backend && ../.venv/Scripts/python.exe -m pytest tests -q -p no:randomly` |
-| QML 页面加载 | `.venv/Scripts/python.exe build/rc/check_qml_pages.py` |
+| QML 页面加载 | `.venv/Scripts/python.exe tools/check_qml_pages.py` |
 | Shell 验收（31 项） | `.venv/Scripts/python.exe desktop-native/verify_native_shell.py` |
-| 布局审计（19 页 × 3 档） | `.venv/Scripts/python.exe build/rc/check_layout.py` |
-| 投影层回归（58 条断言） | `.venv/Scripts/python.exe desktop-native/verify_projection.py` |
+| 布局审计（19 页 × 3 档） | `.venv/Scripts/python.exe tools/check_layout.py` |
+| 投影层回归（108 条断言） | `.venv/Scripts/python.exe desktop-native/verify_projection.py` |
 | 桥接层实测（18 项） | `.venv/Scripts/python.exe desktop-native/verify_bridge_employees.py` |
 | 真实端到端 | `.venv/Scripts/python.exe desktop-native/verify_employee_delivery.py` |
-| 秘密扫描（历史） | `.venv/Scripts/python.exe scripts/scan_git_history_secrets.py` |
+| 秘密扫描（当前树） | `.venv/Scripts/python.exe tools/scan_for_secrets.py` |
+| 秘密扫描（全部历史） | `.venv/Scripts/python.exe tools/scan_git_history_secrets.py` |
 | 应用构建 | `.venv/Scripts/python.exe desktop-native/build_native.py` |
 | 安装包构建 | `.venv/Scripts/python.exe scripts/build_native_installer.py --build` |
 
-**注意**：`build/rc/` 下的工具**不在版本控制里**（`build/` 被 gitignore）。三个 shell/布局/QML
-工具属于这一类，因此它们在干净克隆中不存在 —— 这是一个需要在版本三处理的可复现性缺口。
+**版本三已修掉的可复现性缺口**：`check_qml_pages.py` / `check_layout.py` /
+`scan_for_secrets.py` 原先在 `build/rc/` 下，而 `build/` 被 gitignore 覆盖 —— 干净克隆
+里没有它们，于是"按文档可复现"这条不成立。三个工具已移入 **`tools/`（受版本控制）**，
+`scan_git_history_secrets.py` 也从 `scripts/` 移入同一目录。见 `tools/README.md`。
+
+**投影层断言数已从 58 增至 108**（版本二加了交付卡片与普通/专家模式导航两组）。
 
 ## 6. 现有构建产物
 

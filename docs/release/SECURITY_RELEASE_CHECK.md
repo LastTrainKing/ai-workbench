@@ -12,9 +12,9 @@
 |---|---|---|
 | 当前工作树 | 已跟踪文件 + 未跟踪文件 | 干净 |
 | 待提交 diff | `git diff` / `git diff --cached` | 空（工作区干净） |
-| **全部 Git 历史** | `scripts/scan_git_history_secrets.py`（**本轮新增**） | **干净** |
+| **全部 Git 历史** | `tools/scan_git_history_secrets.py`（**本轮新增**） | **干净** |
 
-原有扫描器 `build/rc/scan_for_secrets.py` 只走 `git ls-files` —— 已跟踪文件的**当前内容**。
+原有扫描器 `tools/scan_for_secrets.py` 只走 `git ls-files` —— 已跟踪文件的**当前内容**。
 这答不了 §4.2 真正要问的问题："有没有真实凭据**曾经**进过仓库"。一个密钥被提交、下一次提交
 里删掉，当前树是干净的，而它仍躺在历史里，任何克隆的人都能拿到。
 
@@ -24,7 +24,7 @@
 
 ## 2. 历史扫描（新增工具）
 
-`scripts/scan_git_history_secrets.py`：
+`tools/scan_git_history_secrets.py`：
 
 ```
 历史提交数: 266

@@ -411,7 +411,66 @@ Full detail: [`docs/architecture.md`](docs/architecture.md).
 
 ## Quick start
 
-### Windows (verified path)
+There are two ways to run this, and they are not the same product.
+
+### A. The native Windows desktop app (this is the product)
+
+`desktop-native/` is a Qt 6 / QML application. It is the shipping client: **no browser,
+no local HTTP server** — it calls the service layer in-process. Everything described on
+this page (employees, deliverables, verification, memory, permissions) is reachable
+from it.
+
+**Install** — run `AI-Workbench-Native-Setup.exe` from the GitHub Release assets. It
+bundles the PostgreSQL / Redis / Qdrant binaries and starts them as project-scoped
+processes; nothing is installed as a Windows service and no system setting is changed.
+User data goes to `%LOCALAPPDATA%\AI Workbench Data`, **not** into the program
+directory, so uninstalling the app does not delete your work.
+
+**Run from source** (needs the infrastructure running — see B below):
+
+```bat
+python -m venv .venv
+.venv\Scripts\python.exe -m pip install -r backend\requirements.txt
+.venv\Scripts\python.exe -m pip install PySide6
+.venv\Scripts\python.exe desktop-native\main.py
+```
+
+**Build the installer** (PyInstaller + NSIS, ~20 minutes):
+
+```bat
+.venv\Scripts\python.exe desktop-native\build_native.py
+.venv\Scripts\python.exe scripts\build_native_installer.py --build
+```
+
+`build_native.py` runs `verify_native_package.py` afterwards and **fails if the built
+application does not launch** — a package that starts on the build machine and nowhere
+else is the failure this step exists to catch.
+
+**Platform support: Windows only, and that is verified.** The Qt/QML client is
+platform-neutral in principle, but the installer, the bundled runtime and every
+acceptance run so far are Windows. There is no macOS or Linux claim, and no CI badge
+claiming one.
+
+**Verified UI acceptance** — these run headless and are what "the interface works" is
+based on:
+
+```bat
+.venv\Scripts\python.exe desktop-native\verify_native_shell.py     :: 31 checks
+.venv\Scripts\python.exe desktop-native\verify_projection.py       :: 108 assertions
+.venv\Scripts\python.exe tools\check_layout.py                     :: 19 pages x 3 sizes
+.venv\Scripts\python.exe tools\check_qml_pages.py                  :: 20 pages load
+```
+
+**Screenshots.** `screenshots/` and `desktop-native/docs/` hold real captures. They were
+taken on a machine with the product's fonts installed; the headless harness in this
+repository cannot reproduce glyph rendering (it reports zero font families), so
+screenshots are supplementary evidence, not the primary one — the primary one is the
+projection assertions above.
+
+### B. The web stack (older path, still supported)
+
+The FastAPI backend plus the `frontend/` web client. Useful for development and for the
+API, but it is **not** what the desktop installer ships.
 
 ```bat
 :: 1. one-time environment setup

@@ -1,0 +1,127 @@
+name: CI
+
+# 静态检查 + 后端测试。**这是唯一一个自动运行的 workflow。**
+#
+# 它**不**构建 Windows 安装包 —— 那需要 485 MB 的运行时（PostgreSQL / Redis /
+# Qdrant 的 Windows 二进制）与 NSIS，且产物 119 MB。把它塞进每次 push 的流水线
+# 既慢又没有意义。安装包的构建是 `windows-installer.yml`，**手动触发**，
+# 且不会伪装成"已自动验证"。
+#
+# 状态：**本文件尚未在 GitHub 上执行过。** 命令与本地跑的完全一致
+# （见 docs/release/TEST_REPORT.md），但"本地通过"不等于"CI 通过"，
+# 所以 README 里不放徽章。
+
+on:
+  push:
+    branches: [main, master, "feat/**"]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: 静态检查
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: backend/requirements-dev.txt
+
+      - name: 安装依赖
+        run: pip install -r backend/requirements-dev.txt
+
+      # `--config` 是必须的：ruff 的规则集写在 `backend/pyproject.toml` 里，
+      # 而从仓库根目录调用时它不会被自动发现 —— 那样 CI 会用默认规则集通过，
+      # 而本地用项目规则集失败，两边给出不同的答案。
+      - name: ruff
+        run: ruff check --config backend/pyproject.toml backend/app backend/tests desktop-native
+
+  test:
+    name: 后端测试
+    runs-on: ubuntu-latest
+
+    # 与 `docker-compose.yml` 同版本。**不是 stub**：这套测试的价值有一半来自
+    # "真的能连上 Postgres / Redis / Qdrant"，换成假实现等于在测另一个产品。
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: aiworkbench
+          POSTGRES_PASSWORD: aiworkbench
+          POSTGRES_DB: aiworkbench_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U aiworkbench"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+      qdrant:
+        image: qdrant/qdrant:v1.12.4
+        ports:
+          - 6333:6333
+          - 6334:6334
+
+    env:
+      # `conftest.py` 自己会设这些值；写在这里是让"CI 用的是哪套基础设施"在
+      # 日志里可见，而不是藏在 Python 文件里。
+      DATABASE_URL: postgresql+asyncpg://aiworkbench:aiworkbench@127.0.0.1:5432/aiworkbench_test
+      REDIS_URL: redis://127.0.0.1:6379/1
+      QDRANT_URL: http://127.0.0.1:6333
+      QDRANT_COLLECTION: ai_workbench_chunks_test
+      AI_PROVIDER: offline
+      EMBEDDING_PROVIDER: offline
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: backend/requirements-dev.txt
+
+      - name: 安装依赖
+        run: pip install -r backend/requirements-dev.txt
+
+      - name: 等待基础设施
+        run: |
+          for i in $(seq 1 30); do
+            pg_isready -h 127.0.0.1 -p 5432 -U aiworkbench && break
+            sleep 2
+          done
+          curl -sf http://127.0.0.1:6333/readyz || curl -sf http://127.0.0.1:6333/ || true
+
+      # `-rs` 让每一个 skip 都带着原因出现在日志里。**这是有意的**：
+      # 11 个 skip 里 6 个是真实模型测试（CI 不配 Key，所以它们不跑），
+      # 一个不说原因的 skip 与一个静默通过的测试没有区别。
+      - name: pytest
+        working-directory: backend
+        run: |
+          python -m pytest tests -q -p no:randomly --tb=short -rs
+
+      - name: 上传测试日志
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pytest-output
+          path: backend/.pytest_cache/v/cache/lastfailed
+          if-no-files-found: ignore

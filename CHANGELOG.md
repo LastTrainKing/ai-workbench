@@ -4,6 +4,65 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.0.0] — 2026-10-14
+
+**私人 AI 员工工作台。** 2.5.0 让状态说得准；这一版让**结果出现在工作结束的地方**，
+并把"能不能公开发布"这件事本身做成了可核验的。
+
+发布形态是**候选版（release candidate）**：安装包已重建并与源码 commit 对齐，
+但尚未在第二台机器上做过安装验证，GitHub Actions 也尚未实际运行过。
+两者的状态在 `docs/release/BUILD_AND_INSTALL.md` 与 `docs/release/TEST_REPORT.md` 里
+都如实标注。
+
+### 新增
+
+- **统一结果契约（`run_outcome.py`）。** 一个运行"产出了什么"只有一种形状：状态、
+  摘要、产物、验证证据、可执行的后续动作、以及一个指向专家日志的引用。
+  **读侧投影，不是第二个状态权威** —— 每个字段都是现算的，不落库。
+  契约文档：`docs/product/RUN_OUTCOME_CONTRACT.md`。
+- **成果出现在运行结束的地方。** 运行页原先只写"产出文件在「交付物」里，可以直接
+  打开"，然后给一个跳到另一页的按钮。现在文件名、类型、大小、版本、验证证据和能真
+  按下去的按钮都在原地，并且带**应用内预览**。
+- **按类型验证产物。** `md`/`txt` 必须严格 UTF-8 可解码且非空；`docx`/`xlsx`/`pptx`
+  必须是 zip **且**含该格式的标志性部件；`csv`/`pdf` 读回行数/页数；`code` 明确报告
+  "本次没有运行任何编译或测试"。
+- **验证有了第三种结果。** 检查项是 `pass` / `fail` / `unverified` 三态。
+  读不出文件（缺库、格式没有读取器）既不是通过也不是失败 —— 把它写成 `fail` 是给一个
+  好文件定罪，写成 `pass` 是给一个没人打开过的文件放行。旧的只带 `ok` 的行仍能读。
+- **员工岗位合同**（`EmployeeContract.qml`，12 节）、**记忆七类分类**、**员工声明字段**。
+- **普通 / 专家模式**的导航：普通模式 13 个入口，运行记录、图谱、Planner、权限、搜索、
+  问答只在专家模式出现。
+- **`tools/`** —— 验收与安全工具进了版本控制（原先在 `build/rc/`，而 `build/` 被
+  gitignore 覆盖，干净克隆里没有它们）。
+- **`SECURITY.md`**、**GitHub Actions**（CI 自动跑静态检查与后端测试；Windows 安装包
+  构建是手动 workflow）。
+
+### 修复
+
+- **`_persist_run` 从来没有执行过。** 提交 `591fa2e` 里读的是 `run.started_at`，而
+  `AIRun` 没有这一列（它属于 `ToolCall`）。`AttributeError` 被 `try/except` 吞掉，
+  整个函数跳过 —— 运行照样 COMPLETED，交付物照样登记，唯一痕迹是一行日志。
+  **那个想让成功有结束时间的提交，正是拿掉结束时间的提交。** 已修，并补了断言。
+- **文件被删除后，界面仍显示 `0 B`。** `0 B` 会被读成"文件是空的"，那是另一件更糟的
+  事。文件不在时不再报大小。
+- **`test_workspace_layout.py` 把运行时目录硬编码成 `.runtime`。** 它测的不再是
+  docstring 里写的"默认位置在产品内"，而变成了"目录必须叫 `.runtime`"。
+  改为从 `runtime_root()` 推导。
+- **两个秘密扫描器的缺陷**，都是"工具说没问题，而它其实什么也没查"：
+  一个扫了 0 个对象却报"历史干净"，一个报了 1406 处假阳性。
+
+### 变更
+
+- 运行终态的判定从 `_watch` 的内联代码提取为 `decide_final_status()`。行为逐字不变，
+  但它现在可以**不启动真实模型**就被测试。
+- 首页、交付物页、Agent 页的状态词与类型名统一到 `theme.js`，两处不再各写一份。
+
+### 已知限制
+
+见 `RELEASE_NOTES.md`。简述：仅 Windows；真实桌面截图未做（构建环境无头，且
+`offscreen` 平台报告零个字体族，用它判断字形会得出错误结论）；`code` 类产物不运行
+检查；没有文档转换器所以没有「导出」；`ai_runs.total_tokens` 对自主运行不写入。
+
 ## [2.5.0] — 2026-10-14
 
 私人 AI 员工工作台。这一版把"能跑"变成"说得准"。
