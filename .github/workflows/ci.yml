@@ -123,6 +123,29 @@ jobs:
           cache: pip
           cache-dependency-path: backend/requirements-dev.txt
 
+      # **Qt 的系统库，CI 里必须显式装。**
+      #
+      # `PySide6-Essentials` 的 Linux wheel **不自带** libGL / libEGL —— 它链接系统的那一份。
+      # Ubuntu runner 上没有，于是 `import PySide6` 抛
+      # `ImportError: libGL.so.1: cannot open shared object file`。而两个测试模块在**模块级**
+      # 导入它（`test_native_bridge_session.py`、`test_ai_config_status.py`，它们要驱动桥接层），
+      # 于是：**模块级导入失败 = 收集错误 = pytest 退出码 2 = 整个套件一个都不跑。**
+      #
+      # 第一次 CI 跑就是这个结果：1 分 9 秒、failure、**1533 个测试从未执行**，
+      # 而其中 1530 个和 Qt 毫无关系。
+      #
+      # **本地看不见这个缺陷**，因为开发机上 PySide6 从写桌面端那天起就装着，
+      # 而它的系统库在 Windows 上是随 wheel 来的。这是"开发机看不见"的又一个形态 ——
+      # 前几次是缺依赖文件、是 `--config` 让 glob 失效，这次是缺操作系统的库。
+      - name: Qt 系统库
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends \
+            libgl1 libegl1 libxkbcommon0 libxkbcommon-x11-0 \
+            libdbus-1-3 libfontconfig1 \
+            libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 \
+            libxcb-randr0 libxcb-render-util0 libxcb-shape0 libxcb-xkb1 libxcb-xinerama0
+
       - name: 安装依赖
         run: pip install -r backend/requirements-dev.txt
 

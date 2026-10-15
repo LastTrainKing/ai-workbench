@@ -25,6 +25,10 @@ DESKTOP = REPO / "desktop-native"
 if str(DESKTOP) not in sys.path:
     sys.path.insert(0, str(DESKTOP))
 
+# See the long note in `test_native_bridge_session.py`: a missing Qt runtime is a *collection*
+# error here, and one collection error stops the entire suite. Skip the module instead.
+pytest.importorskip("PySide6", reason="没有可用的 Qt 运行时，无法测试桥接层")
+
 from awbnative import resources
 
 resources.configure(create=False)

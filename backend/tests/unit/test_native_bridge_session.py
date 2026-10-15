@@ -26,6 +26,21 @@ DESKTOP = REPO / "desktop-native"
 if str(DESKTOP) not in sys.path:
     sys.path.insert(0, str(DESKTOP))
 
+# **A missing Qt runtime must skip this module, not break the whole collection.**
+#
+# `awbnative.bridge` imports PySide6, and on Linux that import fails when the Qt system
+# libraries are not installed — `ImportError: libGL.so.1: cannot open shared object file`.
+# A module-level import error is a *collection* error, and pytest exits 2 on one: the first
+# CI run on Ubuntu reported `failure` after 1m 9s and **1533 tests never ran**, because two
+# modules could not import a GUI toolkit. Every other test in the suite had nothing to do
+# with Qt and was taken down with them.
+#
+# `importorskip` is the honest shape. This module cannot test the bridge without a Qt
+# runtime, so it says so and steps aside. The CI installs the system libraries so the tests
+# run there; this guard is for a machine that genuinely cannot — and it turns "the whole
+# suite is red" into "these three tests could not run, here is why".
+pytest.importorskip("PySide6", reason="没有可用的 Qt 运行时，无法测试桥接层")
+
 from awbnative import resources
 
 # `create=False`: this test never touches the filesystem, and a verification run should not
