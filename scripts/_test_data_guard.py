@@ -42,7 +42,33 @@ import sys
 import tempfile
 from pathlib import Path
 
-LOCALAPPDATA = Path(os.environ["LOCALAPPDATA"])
+def _local_app_data() -> Path:
+    """`%LOCALAPPDATA%`；在非 Windows 上退回一个明确的等价位置。
+
+    ## 为什么不能直接写 `Path(os.environ["LOCALAPPDATA"])`
+
+    这一行原先在**模块级**求值，而 `backend/tests/unit/test_user_data_isolation.py`
+    在**模块级** `import` 本模块。Linux 上没有 `LOCALAPPDATA`，于是**导入即 `KeyError`** ——
+    而模块级导入失败就是**收集错误**：pytest 退出码 2，**整套测试一个都不跑**。
+    GitHub Actions 的 ubuntu runner 上就是这样红的：1533 个测试被一个与它们无关的
+    Windows 变量全部带走，其中 1530 个和 Windows 毫无关系。
+
+    ## 非 Windows 上这个值意味着什么
+
+    本模块守的是 `%LOCALAPPDATA%\\AI Workbench Data`，而那个目录**只在 Windows 上存在**。
+    所以别的平台上这里只需要一个**明确、且不与测试目录重叠**的位置：guard 的判定逻辑
+    （`_canonical` / `_overlaps` / `refuse_if_real`）是平台无关的，在 Linux 上照样可测。
+
+    刻意用 XDG 惯例，而不是 `Path.home() / "AI Workbench Data"` —— 后者会让"真实数据目录"
+    看起来像用户主目录里一个真会存在的东西，而这里要说的恰恰是"它在 Linux 上不存在"。
+    """
+    local = os.environ.get("LOCALAPPDATA")
+    if local:
+        return Path(local)
+    return Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local" / "share")
+
+
+LOCALAPPDATA = _local_app_data()
 
 #: 用户的真实数据。**只读，永远不删。**
 REAL_DATA_DIR = LOCALAPPDATA / "AI Workbench Data"

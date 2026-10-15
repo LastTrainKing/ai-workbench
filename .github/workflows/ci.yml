@@ -157,32 +157,37 @@ jobs:
           done
           curl -sf http://127.0.0.1:6333/readyz || curl -sf http://127.0.0.1:6333/ || true
 
-      # `-rs` 让每一个 skip 都带着原因出现在日志里。**这是有意的**：
-      # 11 个 skip 里 6 个是真实模型测试（CI 不配 Key，所以它们不跑），
-      # 一个不说原因的 skip 与一个静默通过的测试没有区别。
-      # **诊断步骤，把收集阶段的输出贴到作业页上。**
+      # **先跑一遍收集阶段，并把它的输出和退出码贴在作业页上。**
       #
-      # 这是被逼出来的：前两次 CI 都在 `pytest` 上以退出码 2 失败（= **收集错误，一个测试都没跑**），
+      # 这是被逼出来的：CI 在 `pytest` 上以退出码 2 失败（= **收集错误，一个测试都没跑**），
       # 而 GitHub 的原始日志页未登录时抓不到 —— `data-log-url` 是空的。于是"CI 红了"和
-      # "为什么红"之间隔着一个我看不见的页面。
+      # "为什么红"之间隔着一个看不见的页面。
+      # `$GITHUB_STEP_SUMMARY` 写的东西**渲染在作业页正文**里，不用点开日志、不用登录。
       #
-      # `$GITHUB_STEP_SUMMARY` 写的东西会**渲染在作业页正文**里，不需要点开日志、
-      # 不需要登录。所以这一步把收集阶段的真实输出贴在那里。
-      #
-      # 它同时也是有用的：收集错误会让整个套件一个测试都不跑（1533 个中被带走），
-      # 而这一步 30 秒就能说清是哪个模块导不进去、缺什么。
-      - name: 收集阶段自检（输出贴在作业页上）
+      # **退出码必须原样交出去。** 第一版写成 `pytest ... | tail -50`，而管道的退出码是
+      # `tail` 的 —— 于是这一步在收集真的失败时**显示成功**，我因此一度以为收集是好的、
+      # 转而怀疑别处。一个会撒谎的诊断步骤比没有诊断更坏。
+      - name: 收集阶段自检（输出与退出码贴在作业页上）
         if: always()
         working-directory: backend
         run: |
+          set +e
+          python -m pytest tests --collect-only -q -p no:randomly > /tmp/collect.txt 2>&1
+          collect_code=$?
+          set -e
           {
-            echo "### 收集阶段自检"
+            echo "### 收集阶段自检 —— 退出码 $collect_code"
             echo ""
             echo '```'
-            python -m pytest tests --collect-only -q -p no:randomly 2>&1 | tail -50
+            tail -60 /tmp/collect.txt
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
+          exit "$collect_code"
 
+      # `-rs` 让每一个 skip 都带着原因出现在日志里。**这是有意的**：
+      # 11 个 skip 里 6 个是真实模型测试（CI 不配 Key，所以它们不跑），
+      # 一个不说原因的 skip 与一个静默通过的测试没有区别。
+      #
       # `tee` 保留退出码：管道会吞掉右边的退出状态，而一个"测试失败了但作业成功了"的
       # CI 比没有 CI 更糟。`PIPESTATUS[0]` 是 pytest 的，`exit` 把它交回给 GitHub。
       - name: pytest

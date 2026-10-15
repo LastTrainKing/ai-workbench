@@ -50,6 +50,19 @@ def _under(path: Path, ancestor: Path) -> bool:
     return a == b or b in a.parents
 
 
+# 大小写不敏感与"结尾点被忽略"是 **Windows 的路径语义**：`_canonical` 里的
+# `os.path.normcase` 在 Windows 上会小写化并把 `/` 转成 `\`，`resolve()` 也会吃掉结尾点。
+# 在 Linux 上两条都不成立（路径区分大小写，结尾点就是文件名的一部分），所以这两条路由
+# **在那里无法被拒绝** —— 断言它们被拒绝，等于在 Linux 上断言一条 Windows 事实。
+#
+# 跳过它们不是把失败藏起来：真正与平台无关的四条（相等、包含、被包含、`..`）照常在
+# 两个平台上都跑。见 `test_every_route_to_the_real_directory_is_refused` 的文档串。
+_WINDOWS_ONLY = pytest.mark.skipif(
+    sys.platform != "win32",
+    reason="大小写与结尾点的等价是 Windows 路径语义，Linux 上不成立",
+)
+
+
 # --------------------------------------------------------------------------- #
 # The guard
 # --------------------------------------------------------------------------- #
@@ -70,8 +83,8 @@ def test_forgetting_the_argument_still_gives_an_isolated_directory() -> None:
         "REAL_CHILD",
         "REAL_PARENT",
         "REAL_DOTDOT",
-        "REAL_TRAILING_DOT",
-        "REAL_UPPERCASE",
+        pytest.param("REAL_TRAILING_DOT", marks=_WINDOWS_ONLY),
+        pytest.param("REAL_UPPERCASE", marks=_WINDOWS_ONLY),
     ],
 )
 def test_every_route_to_the_real_directory_is_refused(candidate: str) -> None:
@@ -80,6 +93,11 @@ def test_every_route_to_the_real_directory_is_refused(candidate: str) -> None:
     A path that merely *normalises* to the real directory is the real directory, and the
     check runs on the normalised form for that reason. Windows makes case and trailing dots
     equivalent, so a check that compared strings would let both through.
+
+    The last two routes are the **Windows** half of that sentence and are skipped elsewhere
+    (`_WINDOWS_ONLY`): on a case-sensitive filesystem with no trailing-dot rule, neither
+    route reaches the real directory at all, so "it is refused" is not a fact this platform
+    has. The first four run everywhere.
     """
     routes = {
         "REAL": REAL_DATA_DIR,

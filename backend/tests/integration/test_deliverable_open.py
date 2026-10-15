@@ -15,6 +15,7 @@ produce a message naming the reason. A silent no-op is the defect.
 from __future__ import annotations
 
 import os
+import sys
 import uuid
 from pathlib import Path
 
@@ -26,6 +27,7 @@ from app.core.security import hash_password
 from app.infrastructure.database import session_scope
 from app.models.delivery import BuildRun, Deliverable
 from app.models.user import User
+from app.services import os_open
 from app.services.os_open import open_path
 
 
@@ -66,7 +68,7 @@ async def test_a_directory_is_refused_with_a_reason(scratch: Path):
 async def test_the_os_is_asked_to_open_exactly_this_path(scratch: Path, monkeypatch):
     """The wiring, asserted at the OS boundary.
 
-    `os.startfile` is replaced with a recorder rather than being allowed to run.
+    The launch call is replaced with a recorder rather than being allowed to run.
 
     **Deliberately not launched.** An earlier version of this check opened the file
     for real and looked for a new process, which is the only way to prove a window
@@ -75,16 +77,26 @@ async def test_the_os_is_asked_to_open_exactly_this_path(scratch: Path, monkeypa
     verified here; it is recorded as NOT VERIFIED, and this asserts the part that
     can be asserted without taking over someone's screen: the right path reaches the
     OS entry point, once.
+
+    **Which entry point that is differs by platform**, so the recorder is attached to
+    the one this platform uses. `_launch` calls `os.startfile` on Windows and
+    `xdg-open` (through `subprocess.Popen`) everywhere else. Recording only
+    `os.startfile` — as this did — makes the check fail on Linux for a reason that has
+    nothing to do with the wiring: the code is correct, the platform simply takes the
+    other branch, and the failure would be blamed on the thing under test.
     """
     target = scratch / f"launch_{uuid.uuid4().hex[:6]}.pptx"
     target.write_bytes(b"x")
 
     calls: list[str] = []
 
-    def recorder(path: str) -> None:
-        calls.append(path)
-
-    monkeypatch.setattr(os, "startfile", recorder, raising=False)
+    if sys.platform == "win32":
+        monkeypatch.setattr(os, "startfile", lambda p: calls.append(p), raising=False)
+    else:
+        # Record the argv instead of starting a real `xdg-open` / `open` process.
+        monkeypatch.setattr(
+            os_open.subprocess, "Popen", lambda argv, **kwargs: calls.append(argv[-1])
+        )
 
     result = await open_path(target)
 
