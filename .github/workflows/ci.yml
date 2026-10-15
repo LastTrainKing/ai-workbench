@@ -160,10 +160,49 @@ jobs:
       # `-rs` 让每一个 skip 都带着原因出现在日志里。**这是有意的**：
       # 11 个 skip 里 6 个是真实模型测试（CI 不配 Key，所以它们不跑），
       # 一个不说原因的 skip 与一个静默通过的测试没有区别。
+      # **诊断步骤，把收集阶段的输出贴到作业页上。**
+      #
+      # 这是被逼出来的：前两次 CI 都在 `pytest` 上以退出码 2 失败（= **收集错误，一个测试都没跑**），
+      # 而 GitHub 的原始日志页未登录时抓不到 —— `data-log-url` 是空的。于是"CI 红了"和
+      # "为什么红"之间隔着一个我看不见的页面。
+      #
+      # `$GITHUB_STEP_SUMMARY` 写的东西会**渲染在作业页正文**里，不需要点开日志、
+      # 不需要登录。所以这一步把收集阶段的真实输出贴在那里。
+      #
+      # 它同时也是有用的：收集错误会让整个套件一个测试都不跑（1533 个中被带走），
+      # 而这一步 30 秒就能说清是哪个模块导不进去、缺什么。
+      - name: 收集阶段自检（输出贴在作业页上）
+        if: always()
+        working-directory: backend
+        run: |
+          {
+            echo "### 收集阶段自检"
+            echo ""
+            echo '```'
+            python -m pytest tests --collect-only -q -p no:randomly 2>&1 | tail -50
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # `tee` 保留退出码：管道会吞掉右边的退出状态，而一个"测试失败了但作业成功了"的
+      # CI 比没有 CI 更糟。`PIPESTATUS[0]` 是 pytest 的，`exit` 把它交回给 GitHub。
       - name: pytest
         working-directory: backend
         run: |
-          python -m pytest tests -q -p no:randomly --tb=short -rs
+          python -m pytest tests -q -p no:randomly --tb=short -rs 2>&1 | tee pytest-output.txt
+          exit "${PIPESTATUS[0]}"
+
+      # 同上：**测试失败的原因也要贴在作业页上。** 未登录抓不到原始日志，而这个可以。
+      - name: 把 pytest 输出贴到作业页
+        if: always()
+        working-directory: backend
+        run: |
+          {
+            echo "### pytest 输出（末尾 60 行）"
+            echo ""
+            echo '```'
+            tail -60 pytest-output.txt 2>/dev/null || echo "(没有输出文件)"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: 上传测试日志
         if: always()
