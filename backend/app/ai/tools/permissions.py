@@ -254,11 +254,6 @@ BUILTIN_DENIED: tuple[str, ...] = (
     # function still meets a wall.
     r"{RUNTIME}\agent-policy.json",
     r"{RUNTIME}\agent-policy",
-    # The policy that governs the agent. Denied on the filesystem side too: the check in
-    # `policy_store` refuses the *write*, and this refuses the *file*, so a path that
-    # reaches around the function still hits a wall.
-    r"{RUNTIME}gent-policy.json",
-    r"{RUNTIME}gent-policy",
     r"{PROJECT}\.runtime\ai-config.json",
 )
 
@@ -293,26 +288,58 @@ class AgentPolicy:
     @classmethod
     def from_settings(cls, **overrides: Any) -> AgentPolicy:
         root = project_root()
-        expand = {"PROJECT": str(root), "USERPROFILE": os.environ.get("USERPROFILE", "")}
-        expand["WINDIR"] = os.environ.get("WINDIR", r"C:\Windows")
-        expand["ProgramFiles"] = os.environ.get("ProgramFiles", r"C:\Program Files")  # noqa: SIM112
-        expand["ProgramFiles(x86)"] = os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)")  # noqa: SIM112
-        expand["ProgramData"] = os.environ.get("ProgramData", r"C:\ProgramData")  # noqa: SIM112
+        # `%USERPROFILE%` is a Windows variable. On POSIX the same place is `$HOME`, and
+        # leaving it unset would expand `%USERPROFILE%\.ssh` to `\.ssh` -> `/.ssh`, which
+        # is not where anyone's keys are. A deny list has to name the real location on
+        # the platform it runs on, or it protects nothing there.
+        expand = {
+            "PROJECT": str(root),
+            "USERPROFILE": os.environ.get("USERPROFILE") or os.environ.get("HOME", ""),
+        }
+        # Windows system directories. Read with an empty default so a platform that does
+        # not have them skips the pattern instead of turning it into `Path(".")` — see
+        # `expand_path`.
+        expand["WINDIR"] = os.environ.get("WINDIR", "")
+        expand["ProgramFiles"] = os.environ.get("ProgramFiles", "")  # noqa: SIM112
+        expand["ProgramFiles(x86)"] = os.environ.get("ProgramFiles(x86)", "")  # noqa: SIM112
+        expand["ProgramData"] = os.environ.get("ProgramData", "")  # noqa: SIM112
         # The product's own data directory. Denied paths name the policy file inside it.
         from app.core.config import runtime_root as _runtime_root
         expand["RUNTIME"] = str(_runtime_root())
 
-        def expand_path(raw: str) -> Path:
+        def expand_path(raw: str) -> Path | None:
+            """Expand one built-in pattern, or `None` when it names nothing here.
+
+            The last two lines are the ones that matter, and neither is cosmetic.
+
+            * **Separators.** The patterns above are authored with Windows separators
+              (`%USERPROFILE%\\.ssh`). On POSIX a backslash is an ordinary filename
+              character, so `{PROJECT}\\.env` became a path whose *name* ends in
+              `\\.env` and never matched `<repo>/.env`. That silently turned this
+              entire list into a no-op on Linux: reading the project's `.env` was
+              **allowed at every permission level**. `Path` understands `/` on Windows
+              too, so normalising here leaves the Windows behaviour identical.
+
+            * **Unset variables.** A placeholder whose variable is missing means the
+              pattern names a location this platform does not have (`%WINDIR%` off
+              Windows). Returning `None` skips it. Substituting the empty string would
+              produce `Path("")` -> `Path(".")`, the *current directory*, and deny the
+              entire repository.
+            """
             text = raw
             for key, value in expand.items():
-                text = text.replace(f"{{{key}}}", value)
-                text = text.replace(f"%{key}%", value)
-            return Path(os.path.expandvars(text))
+                for token in (f"{{{key}}}", f"%{key}%"):
+                    if token not in text:
+                        continue
+                    if not value:
+                        return None
+                    text = text.replace(token, value)
+            return Path(os.path.expandvars(text.replace("\\", "/")))
 
         allowed = [Path(p) for p in settings.agent_allowed_path_list]
         allowed.append(root)  # the project itself is always in scope
 
-        denied = [expand_path(p) for p in BUILTIN_DENIED]
+        denied = [p for p in (expand_path(p) for p in BUILTIN_DENIED) if p is not None]
         denied += [Path(p) for p in settings.agent_denied_path_list]
 
         policy = cls(

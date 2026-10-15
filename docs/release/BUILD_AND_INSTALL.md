@@ -379,7 +379,7 @@ payload 里**（见 §2.2），干净安装时它从来没被创建过 —— �
 
 ### 5.1 已执行
 
-克隆到 `%TEMP%wb-clean`，在**没有** `.venv`、`vendor/runtime/`、`.runtime/` 的状态下：
+克隆到 `%TEMP%\awb-clean`，在**没有** `.venv`、`vendor/runtime/`、`.runtime/` 的状态下：
 
 | # | §15 的步骤 | 结果 |
 |---|---|---|

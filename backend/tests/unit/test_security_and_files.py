@@ -305,3 +305,39 @@ async def test_empty_upload_is_rejected() -> None:
 
     with pytest.raises(StorageError):
         await save_upload(EmptyStream(), "empty.txt", content_type="text/plain")
+
+
+# --------------------------------------------------------------------------- #
+# the built-in deny list
+# --------------------------------------------------------------------------- #
+def test_the_builtin_deny_list_names_real_locations_on_this_platform() -> None:
+    """The deny list has to name real locations on the platform it runs on.
+
+    `BUILTIN_DENIED` is authored with Windows separators. On POSIX a backslash is an
+    ordinary filename character, so a pattern like the project's own env file expanded to a
+    path whose *name* contained a backslash — which never matched the real file. The whole
+    list was a silent no-op on Linux, and the project's `.env` was readable at **every**
+    permission level. Four integration tests on the first Ubuntu CI run said exactly that.
+
+    Asserted on the *expansion*, not on the source text, because the source text looked
+    correct and the behaviour did not. This is the unit-level version of those four, so the
+    next person to change the list finds out on their own machine rather than in CI.
+    """
+    from app.ai.tools.permissions import AgentPolicy, PermissionManager, project_root
+
+    policy = AgentPolicy.from_settings()
+    resolved = {str(p) for p in policy.denied_paths}
+
+    # The entry that failed: it must resolve to the real `.env`, on every platform.
+    env = project_root() / ".env"
+    assert str(env) in resolved, f"{env} is missing from the deny list: {sorted(resolved)}"
+
+    # Listing a path and refusing it are two different claims, and only the second one is
+    # about the file.
+    verdict = PermissionManager(policy).check_path(str(env), write=False)
+    assert verdict.decision.value == "deny", verdict
+
+    # A placeholder whose variable is unset must be **skipped**. Expanding it to the empty
+    # string would produce the current directory and deny the entire repository.
+    assert "." not in resolved, "an unset placeholder expanded to the current directory"
+    assert "" not in resolved, "an unset placeholder expanded to an empty path"
