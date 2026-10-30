@@ -31,7 +31,9 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 
 #: True while a tool is executing. Read by the things the agent must not touch.
-_TOOL_ACTIVE: contextvars.ContextVar[bool] = contextvars.ContextVar("agent_tool_active", default=False)
+_TOOL_ACTIVE: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "agent_tool_active", default=False
+)
 
 #: The tool currently running, for the audit line when something is refused.
 _TOOL_NAME: contextvars.ContextVar[str] = contextvars.ContextVar("agent_tool_name", default="")

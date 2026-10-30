@@ -32,9 +32,7 @@ class ProjectRepository(BaseRepository[Project]):
         stmt = apply_search(stmt, Project.name, search)
         return stmt.order_by(Project.updated_at.desc())
 
-    async def get_owned(
-        self, project_id: uuid.UUID | None, owner_id: uuid.UUID
-    ) -> Project | None:
+    async def get_owned(self, project_id: uuid.UUID | None, owner_id: uuid.UUID) -> Project | None:
         return await self.get_or_none(Project.id == project_id, Project.owner_id == owner_id)
 
     async def stats(self, project_id: uuid.UUID) -> dict[str, int]:
@@ -43,9 +41,7 @@ class ProjectRepository(BaseRepository[Project]):
 
         # Conditions below target KnowledgeBase / Document / AIRun while
         # ``self.model`` is Project, so the explicit ``count_of`` helper is used.
-        kb_count = await self.count_of(
-            KnowledgeBase, KnowledgeBase.project_id == project_id
-        )
+        kb_count = await self.count_of(KnowledgeBase, KnowledgeBase.project_id == project_id)
         doc_row = (
             await self.session.execute(
                 select(
@@ -108,9 +104,7 @@ class TaskRepository(BaseRepository[Task]):
             stmt = stmt.where(Task.due_date.is_not(None), Task.due_date <= due_before)
         if search:
             pattern = f"%{search.strip()}%"
-            stmt = stmt.where(
-                or_(Task.title.ilike(pattern), Task.description.ilike(pattern))
-            )
+            stmt = stmt.where(or_(Task.title.ilike(pattern), Task.description.ilike(pattern)))
         return stmt.order_by(Task.position, Task.created_at)
 
     async def get_owned(self, task_id: uuid.UUID | None, owner_id: uuid.UUID) -> Task | None:
@@ -119,13 +113,17 @@ class TaskRepository(BaseRepository[Task]):
     async def children(self, parent_id: uuid.UUID) -> list[Task]:
         return await self.list(Task.parent_id == parent_id, order_by=Task.position)
 
-    async def all_for_project(self, owner_id: uuid.UUID, project_id: uuid.UUID | None) -> list[Task]:
+    async def all_for_project(
+        self, owner_id: uuid.UUID, project_id: uuid.UUID | None
+    ) -> list[Task]:
         stmt = select(Task).where(Task.owner_id == owner_id)
         if project_id:
             stmt = stmt.where(Task.project_id == project_id)
         return list((await self.session.execute(stmt.order_by(Task.position))).scalars().all())
 
-    async def status_counts(self, owner_id: uuid.UUID, project_id: uuid.UUID | None = None) -> dict[str, int]:
+    async def status_counts(
+        self, owner_id: uuid.UUID, project_id: uuid.UUID | None = None
+    ) -> dict[str, int]:
         stmt = select(Task.status, func.count(Task.id)).where(Task.owner_id == owner_id)
         if project_id:
             stmt = stmt.where(Task.project_id == project_id)
@@ -134,9 +132,7 @@ class TaskRepository(BaseRepository[Task]):
 
     async def next_position(self, owner_id: uuid.UUID, parent_id: uuid.UUID | None) -> int:
         stmt = select(func.coalesce(func.max(Task.position), 0)).where(Task.owner_id == owner_id)
-        stmt = stmt.where(
-            Task.parent_id == parent_id if parent_id else Task.parent_id.is_(None)
-        )
+        stmt = stmt.where(Task.parent_id == parent_id if parent_id else Task.parent_id.is_(None))
         return int((await self.session.execute(stmt)).scalar_one()) + 1
 
     async def due_today(self, owner_id: uuid.UUID, *, start: datetime, end: datetime) -> list[Task]:
@@ -165,9 +161,7 @@ class TaskRepository(BaseRepository[Task]):
             )
         )
         if exists.scalar_one_or_none() is None:
-            self.session.add(
-                TaskDependency(task_id=task_id, depends_on_task_id=depends_on_id)
-            )
+            self.session.add(TaskDependency(task_id=task_id, depends_on_task_id=depends_on_id))
 
     async def remove_dependency(self, task_id: uuid.UUID, dependency_id: uuid.UUID) -> int:
         result = await self.session.execute(
@@ -257,9 +251,7 @@ class NoteRepository(BaseRepository[Note]):
             stmt = stmt.where(Note.knowledge_base_id == knowledge_base_id)
         if search:
             pattern = f"%{search.strip()}%"
-            stmt = stmt.where(
-                or_(Note.title.ilike(pattern), Note.content_md.ilike(pattern))
-            )
+            stmt = stmt.where(or_(Note.title.ilike(pattern), Note.content_md.ilike(pattern)))
         if pinned_first:
             stmt = stmt.order_by(Note.is_pinned.desc(), Note.updated_at.desc())
         else:

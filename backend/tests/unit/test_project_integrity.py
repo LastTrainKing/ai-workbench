@@ -56,9 +56,7 @@ def test_no_stale_service_module_references() -> None:
 
     assert referenced, "expected to find service references"
     services_dir = APP_ROOT / "services"
-    available = {
-        p.stem for p in services_dir.glob("*.py") if p.name != "__init__.py"
-    }
+    available = {p.stem for p in services_dir.glob("*.py") if p.name != "__init__.py"}
     missing = referenced - available
     assert not missing, f"stale service imports: {sorted(missing)} (available: {sorted(available)})"
 
@@ -72,10 +70,29 @@ def test_no_reserved_logging_keys_in_extra_dicts() -> None:
     import re
 
     reserved = {
-        "name", "msg", "args", "levelname", "levelno", "pathname", "filename",
-        "module", "exc_info", "exc_text", "stack_info", "lineno", "funcName",
-        "created", "msecs", "relativeCreated", "thread", "threadName",
-        "processName", "process", "taskName", "message", "asctime",
+        "name",
+        "msg",
+        "args",
+        "levelname",
+        "levelno",
+        "pathname",
+        "filename",
+        "module",
+        "exc_info",
+        "exc_text",
+        "stack_info",
+        "lineno",
+        "funcName",
+        "created",
+        "msecs",
+        "relativeCreated",
+        "thread",
+        "threadName",
+        "processName",
+        "process",
+        "taskName",
+        "message",
+        "asctime",
     }
     key_pattern = re.compile(r'"([A-Za-z_][A-Za-z0-9_]*)"\s*:')
     offenders: list[str] = []
@@ -104,22 +121,44 @@ def test_all_models_are_registered_in_metadata() -> None:
     from app.models import Base
 
     expected_tables = {
-        "users", "projects", "knowledge_bases", "documents", "document_chunks",
-        "tags", "document_tags", "concepts", "document_concepts", "tasks",
-        "task_dependencies", "task_tags", "task_documents", "notes", "prompts",
-        "prompt_versions", "ai_runs", "agent_runs", "tool_calls", "ai_run_sources",
+        "users",
+        "projects",
+        "knowledge_bases",
+        "documents",
+        "document_chunks",
+        "tags",
+        "document_tags",
+        "concepts",
+        "document_concepts",
+        "tasks",
+        "task_dependencies",
+        "task_tags",
+        "task_documents",
+        "notes",
+        "prompts",
+        "prompt_versions",
+        "ai_runs",
+        "agent_runs",
+        "tool_calls",
+        "ai_run_sources",
         "tool_audit_log",
-        "user_profile", "user_preferences", "memory_entries",
-        "memory_candidates", "context_snapshots",
-        "build_runs", "deliverables",
-        "jobs", "activity_events",
+        "user_profile",
+        "user_preferences",
+        "memory_entries",
+        "memory_candidates",
+        "context_snapshots",
+        "build_runs",
+        "deliverables",
+        "jobs",
+        "activity_events",
         # Step 4. The set is asserted exactly rather than as a subset, so a table added
         # without being registered here is a failing test rather than a silent extra.
         "installed_skills",
         # The conversation layer. `conversations` is the container the user asked for
         # ("我点开这个软件，就是要和我的数字员工对话") and `messages` is what was said in
         # it, including the questions it asked before starting work.
-        "conversations", "messages",
+        "conversations",
+        "messages",
         # Logged-out tokens. The revocation list used to live only in Redis, so a cache
         # outage made every logged-out token valid again; this table is the durable copy.
         "revoked_tokens",
@@ -148,12 +187,28 @@ def test_no_duplicate_index_names() -> None:
 # --------------------------------------------------------------------------- #
 #: Directories that legitimately contain generated or third-party content.
 _SKIP_DIRS = {
-    ".git", ".venv", "node_modules", ".runtime", "vendor", "dist",
-    "__pycache__", ".pytest_cache", ".ruff_cache", ".mypy_cache", "coverage",
+    ".git",
+    ".venv",
+    "node_modules",
+    ".runtime",
+    "vendor",
+    "dist",
+    "__pycache__",
+    ".pytest_cache",
+    ".ruff_cache",
+    ".mypy_cache",
+    "coverage",
     # Build output. Not scanned because it is generated, not authored, and the
     # Rust target directory alone is tens of thousands of files — walking it made
     # this test time out rather than fail.
-    "target", "build", "out", "gen", ".next", ".turbo", "bin", "obj",
+    "target",
+    "build",
+    "out",
+    "gen",
+    ".next",
+    ".turbo",
+    "bin",
+    "obj",
 }
 
 #: Patterns that indicate a real credential rather than a placeholder.
@@ -171,14 +226,27 @@ _ALLOW_MARKERS = ("allowlist secret", "secret-scan: allow", "pragma: allowlist")
 
 #: Values that are plainly synthetic rather than a real credential.
 _SYNTHETIC_HINTS = (
-    "xxx", "your", "example", "dummy", "fake", "placeholder", "sample",
-    "0000000000", "1234567890", "0123456789abcdef", "aaaaaaaa",
+    "xxx",
+    "your",
+    "example",
+    "dummy",
+    "fake",
+    "placeholder",
+    "sample",
+    "0000000000",
+    "1234567890",
+    "0123456789abcdef",
+    "aaaaaaaa",
     # "change this before you ship" defaults. `DEFAULT_SECRET_KEY` in
     # `app/core/config.py` is one of these, and it is the opposite of a credential: it is
     # the value that exists so a reviewer can see it was never replaced. `prod` now
     # refuses to start while it is in place, which is the real guard; this keeps the
     # scanner from reporting the placeholder itself.
-    "change-me", "change_me", "changeme", "replace-me", "replace_me",
+    "change-me",
+    "change_me",
+    "changeme",
+    "replace-me",
+    "replace_me",
 )
 
 
@@ -192,7 +260,15 @@ def _iter_repo_files() -> list[Path]:
         if path.name in _ALLOWED:
             continue
         if path.suffix.lower() in {
-            ".png", ".jpg", ".jpeg", ".gif", ".ico", ".pdf", ".zip", ".woff", ".woff2",
+            ".png",
+            ".jpg",
+            ".jpeg",
+            ".gif",
+            ".ico",
+            ".pdf",
+            ".zip",
+            ".woff",
+            ".woff2",
         }:
             continue
         files.append(path)
@@ -232,7 +308,20 @@ def test_no_credentials_are_committed_anywhere() -> None:
             for pattern in _SECRET_PATTERNS:
                 for match in pattern.finditer(line):
                     candidate = match.group(0)
-                    if any(token in candidate.lower() for token in ("xxx", "your", "example", "test", "dummy", "fake", "placeholder", "...", "<")):
+                    if any(
+                        token in candidate.lower()
+                        for token in (
+                            "xxx",
+                            "your",
+                            "example",
+                            "test",
+                            "dummy",
+                            "fake",
+                            "placeholder",
+                            "...",
+                            "<",
+                        )
+                    ):
                         continue
                     if _looks_synthetic(candidate):
                         continue
@@ -285,7 +374,10 @@ def test_no_credential_exists_anywhere_in_git_history() -> None:
     try:
         commits = subprocess.run(
             ["git", "rev-list", "--all"],
-            cwd=REPO_ROOT, capture_output=True, text=True, timeout=60,
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+            timeout=60,
         ).stdout.split()
     except (OSError, subprocess.SubprocessError) as exc:
         pytest.skip(f"git unavailable: {exc}")
@@ -299,7 +391,9 @@ def test_no_credential_exists_anywhere_in_git_history() -> None:
         # the same way the working-tree scan filters them.
         result = subprocess.run(
             ["git", "grep", "-I", "-o", "-E", r"sk-[A-Za-z0-9]{20,}", commit],
-            cwd=REPO_ROOT, capture_output=True, text=True,
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
         )
         for line in result.stdout.splitlines():
             _, _, match = line.partition(":")

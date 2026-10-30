@@ -248,7 +248,18 @@ def _derive_target(tool: str, arguments: dict[str, Any], verdict_target: str) ->
     if verdict_target:
         return verdict_target
 
-    for key in ("path", "source", "destination", "file", "url", "command", "root", "target", "pid", "port"):
+    for key in (
+        "path",
+        "source",
+        "destination",
+        "file",
+        "url",
+        "command",
+        "root",
+        "target",
+        "pid",
+        "port",
+    ):
         value = arguments.get(key)
         if value not in (None, ""):
             return str(value)
@@ -541,14 +552,13 @@ class ToolExecutor:
                 summary=f"{spec.name} {'denied' if denied_in_tool else 'failed'}",
             )
         else:
-            payload, truncated, size = _cap_payload(
-                result.data, self.policy.max_output_bytes
-            )
+            payload, truncated, size = _cap_payload(result.data, self.policy.max_output_bytes)
             outcome = ToolOutcome(
                 ok=bool(result.ok),
                 data=payload,
                 error=result.error,
-                summary=result.summary or (f"{spec.name} ok" if result.ok else f"{spec.name} failed"),
+                summary=result.summary
+                or (f"{spec.name} ok" if result.ok else f"{spec.name} failed"),
                 status="SUCCEEDED" if result.ok else "FAILED",
                 failure=None if result.ok else classify_failure(result.error or "tool failed"),
                 verdict=verdict,
@@ -648,7 +658,9 @@ def _cap_payload(data: Any, limit: int) -> tuple[Any, bool, int]:
 def _measure(value: Any) -> int:
     """The bytes this value actually costs once serialised."""
     try:
-        return len(json.dumps(value, ensure_ascii=False, default=str).encode("utf-8", errors="ignore"))
+        return len(
+            json.dumps(value, ensure_ascii=False, default=str).encode("utf-8", errors="ignore")
+        )
     except (TypeError, ValueError):
         return len(str(value).encode("utf-8", errors="ignore"))
 

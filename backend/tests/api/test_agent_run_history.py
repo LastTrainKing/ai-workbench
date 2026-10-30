@@ -98,10 +98,16 @@ async def _store_run(
 
 
 @pytest.mark.asyncio
-async def test_a_stored_run_is_returned_by_the_list_endpoint(client: httpx.AsyncClient, session) -> None:
+async def test_a_stored_run_is_returned_by_the_list_endpoint(
+    client: httpx.AsyncClient, session
+) -> None:
     token, user_id = await _register(client)
     run_id = await _store_run(
-        session, owner_id=user_id, goal="写一份目录 PPT", status=RunStatus.SUCCEEDED, state="COMPLETED"
+        session,
+        owner_id=user_id,
+        goal="写一份目录 PPT",
+        status=RunStatus.SUCCEEDED,
+        state="COMPLETED",
     )
 
     body = (await client.get("/agent/runs", headers={"Authorization": f"Bearer {token}"})).json()[
@@ -129,7 +135,11 @@ async def test_a_run_that_is_also_live_appears_once(client: httpx.AsyncClient, s
 
     token, user_id = await _register(client)
     run_id = await _store_run(
-        session, owner_id=user_id, goal="写一份目录 PPT", status=RunStatus.RUNNING, state="EXECUTING"
+        session,
+        owner_id=user_id,
+        goal="写一份目录 PPT",
+        status=RunStatus.RUNNING,
+        state="EXECUTING",
     )
 
     controller = get_run_registry().create(run_id, user_id)
@@ -172,7 +182,9 @@ async def test_one_account_cannot_read_anothers_runs(client: httpx.AsyncClient, 
     ).json()["data"]
     assert run_id not in [entry["run_id"] for entry in listing["runs"]]
 
-    by_id = await client.get(f"/agent/runs/{run_id}", headers={"Authorization": f"Bearer {token_b}"})
+    by_id = await client.get(
+        f"/agent/runs/{run_id}", headers={"Authorization": f"Bearer {token_b}"}
+    )
     body = by_id.json()
     assert by_id.status_code == 404, f"expected the not-found answer, got {by_id.status_code}"
     assert body["error"]["code"] == "run_not_found", body["error"]
@@ -206,7 +218,9 @@ async def test_one_account_cannot_read_anothers_runs(client: httpx.AsyncClient, 
 
 
 @pytest.mark.asyncio
-async def test_the_refusal_comes_from_the_ownership_rule_not_the_route(client: httpx.AsyncClient, session) -> None:
+async def test_the_refusal_comes_from_the_ownership_rule_not_the_route(
+    client: httpx.AsyncClient, session
+) -> None:
     """A wrong account is refused for a run that *does* exist and *is* readable by someone.
 
     This is the control for the test above: the same id, the same route, the same token
@@ -235,7 +249,9 @@ async def test_the_refusal_comes_from_the_ownership_rule_not_the_route(client: h
 
 
 @pytest.mark.asyncio
-async def test_every_status_maps_to_a_state_the_ui_can_render(client: httpx.AsyncClient, session) -> None:
+async def test_every_status_maps_to_a_state_the_ui_can_render(
+    client: httpx.AsyncClient, session
+) -> None:
     """A row status is not a run state, and the endpoint must not pretend otherwise.
 
     ``SUCCEEDED`` is what the column holds; ``COMPLETED`` is what the run was doing. Passing
@@ -283,7 +299,9 @@ async def test_history_is_newest_first_and_paginates(client: httpx.AsyncClient, 
         )
 
     first_page = (
-        await client.get("/agent/runs?limit=2&offset=0", headers={"Authorization": f"Bearer {token}"})
+        await client.get(
+            "/agent/runs?limit=2&offset=0", headers={"Authorization": f"Bearer {token}"}
+        )
     ).json()["data"]
     assert first_page["total"] == 5
     assert len(first_page["runs"]) == 2
@@ -292,7 +310,9 @@ async def test_history_is_newest_first_and_paginates(client: httpx.AsyncClient, 
     assert first_page["runs"][1]["run_id"] == created[-2]
 
     second_page = (
-        await client.get("/agent/runs?limit=2&offset=2", headers={"Authorization": f"Bearer {token}"})
+        await client.get(
+            "/agent/runs?limit=2&offset=2", headers={"Authorization": f"Bearer {token}"}
+        )
     ).json()["data"]
     assert second_page["runs"][0]["run_id"] == created[-3]
     assert {entry["run_id"] for entry in first_page["runs"]} & {
@@ -305,8 +325,12 @@ async def test_the_status_filter_is_applied_by_the_database(
     client: httpx.AsyncClient, session
 ) -> None:
     token, user_id = await _register(client)
-    await _store_run(session, owner_id=user_id, goal="好的", status=RunStatus.SUCCEEDED, state="COMPLETED")
-    await _store_run(session, owner_id=user_id, goal="坏的", status=RunStatus.FAILED, state="FAILED")
+    await _store_run(
+        session, owner_id=user_id, goal="好的", status=RunStatus.SUCCEEDED, state="COMPLETED"
+    )
+    await _store_run(
+        session, owner_id=user_id, goal="坏的", status=RunStatus.FAILED, state="FAILED"
+    )
 
     body = (
         await client.get(
@@ -318,7 +342,9 @@ async def test_the_status_filter_is_applied_by_the_database(
 
 
 @pytest.mark.asyncio
-async def test_a_terminal_row_never_reports_a_running_state(client: httpx.AsyncClient, session) -> None:
+async def test_a_terminal_row_never_reports_a_running_state(
+    client: httpx.AsyncClient, session
+) -> None:
     """A row that has ended must not display as still going.
 
     This is the shape of a real bug: the startup reconcile marked an interrupted run's row

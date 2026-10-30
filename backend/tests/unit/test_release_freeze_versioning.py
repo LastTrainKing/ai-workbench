@@ -57,7 +57,9 @@ def test_the_sync_script_check_mode_passes() -> None:
 def test_installer_declares_a_four_part_product_version() -> None:
     """NSIS's VIProductVersion needs four components; it must match the three-part one."""
     version = sync_version.read_version()
-    nsi = (REPO_ROOT / "installer" / "ai-workbench.nsi").read_text(encoding="utf-8", errors="replace")
+    nsi = (REPO_ROOT / "installer" / "ai-workbench.nsi").read_text(
+        encoding="utf-8", errors="replace"
+    )
     assert f'!define APP_VERSION     "{version}"' in nsi
     assert f'VIProductVersion "{version}.0"' in nsi
 

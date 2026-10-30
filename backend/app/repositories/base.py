@@ -113,8 +113,10 @@ class BaseRepository(Generic[ModelT]):
             ).scalar_one()
         )
         rows = (
-            await self.session.execute(stmt.limit(page_size).offset((page - 1) * page_size))
-        ).scalars().all()
+            (await self.session.execute(stmt.limit(page_size).offset((page - 1) * page_size)))
+            .scalars()
+            .all()
+        )
         return list(rows), total
 
     # ----------------------------------------------------------------- write --

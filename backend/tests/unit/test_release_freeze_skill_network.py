@@ -130,7 +130,10 @@ async def test_redirect_to_metadata_is_refused() -> None:
     )
     with pytest.raises(PermissionDeniedError):
         await _get_checked(
-            client, "https://api.github.com/a", permissions=_manager(), headers={}  # type: ignore[arg-type]
+            client,
+            "https://api.github.com/a",
+            permissions=_manager(),
+            headers={},  # type: ignore[arg-type]
         )
 
 
@@ -142,7 +145,10 @@ async def test_redirect_chain_inside_the_allow_list_is_followed() -> None:
         }
     )
     response = await _get_checked(
-        client, "https://api.github.com/a", permissions=_manager(), headers={}  # type: ignore[arg-type]
+        client,
+        "https://api.github.com/a",
+        permissions=_manager(),
+        headers={},  # type: ignore[arg-type]
     )
     assert response.status_code == 200
     assert client.requested == ["https://api.github.com/a", "https://api.github.com/b"]
@@ -156,7 +162,10 @@ async def test_redirect_loop_is_bounded() -> None:
     )
     with pytest.raises(PermissionDeniedError):
         await _get_checked(
-            client, "https://api.github.com/a", permissions=_manager(), headers={}  # type: ignore[arg-type]
+            client,
+            "https://api.github.com/a",
+            permissions=_manager(),
+            headers={},  # type: ignore[arg-type]
         )
     # Bounded, not infinite.
     assert len(client.requested) <= discovery._MAX_REDIRECTS + 1

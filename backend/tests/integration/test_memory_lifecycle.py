@@ -243,11 +243,7 @@ async def test_conflicts_become_candidates_without_changing_either_row(
     assert report.conflicts == 1
     assert report.candidates_created == 1
 
-    pending = (
-        await session.execute(
-            select_candidate(user_id)
-        )
-    ).scalars().all()
+    pending = (await session.execute(select_candidate(user_id))).scalars().all()
     assert len(pending) == 1
     assert pending[0].proposed_kind == "conflict"
 

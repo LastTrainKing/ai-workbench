@@ -78,7 +78,9 @@ class DeliveryService:
         )
         self.session.add(run)
         await self.session.flush()
-        logger.info("build_run_created", extra={"build_run_id": str(run.id), "kind": deliverable_kind})
+        logger.info(
+            "build_run_created", extra={"build_run_id": str(run.id), "kind": deliverable_kind}
+        )
         return run
 
     async def get_build_run(self, *, owner_id: uuid.UUID, build_run_id: uuid.UUID) -> BuildRun:
@@ -315,7 +317,11 @@ class DeliveryService:
                 context = (
                     f"这是一次真实的交付验收：用户看到产出物后选择了接受。"
                     f"产出格式：{item.kind}。"
-                    + (f"当前生效的偏好：{item.applied_preferences}。" if item.applied_preferences else "")
+                    + (
+                        f"当前生效的偏好：{item.applied_preferences}。"
+                        if item.applied_preferences
+                        else ""
+                    )
                 )
             else:
                 statement = (
@@ -381,7 +387,9 @@ class DeliveryService:
         stmt = stmt.order_by(Deliverable.created_at.desc()).limit(limit)
         return list((await self.session.execute(stmt)).scalars())
 
-    async def get_deliverable(self, *, owner_id: uuid.UUID, deliverable_id: uuid.UUID) -> Deliverable:
+    async def get_deliverable(
+        self, *, owner_id: uuid.UUID, deliverable_id: uuid.UUID
+    ) -> Deliverable:
         item = await self.session.get(Deliverable, deliverable_id)
         if item is None or item.user_id != owner_id:
             raise NotFoundError("产出物不存在")

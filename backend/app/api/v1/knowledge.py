@@ -49,12 +49,8 @@ async def list_bases(
     include_archived: bool = False,
 ) -> dict:
     repo = KnowledgeBaseRepository(session)
-    stmt = repo.query(
-        user.id, project_id=project_id, search=q, include_archived=include_archived
-    )
-    rows, total = await repo.paginate(
-        stmt, page=pagination.page, page_size=pagination.page_size
-    )
+    stmt = repo.query(user.id, project_id=project_id, search=q, include_archived=include_archived)
+    rows, total = await repo.paginate(stmt, page=pagination.page, page_size=pagination.page_size)
     return ok(
         build_page(
             [KnowledgeBaseOut.model_validate(row).model_dump(mode="json") for row in rows],
@@ -179,9 +175,7 @@ async def list_documents(
         status=status_filter,
         search=q,
     )
-    rows, total = await repo.paginate(
-        stmt, page=pagination.page, page_size=pagination.page_size
-    )
+    rows, total = await repo.paginate(stmt, page=pagination.page, page_size=pagination.page_size)
     return ok(
         build_page(
             [DocumentOut.model_validate(row).model_dump(mode="json") for row in rows],
@@ -212,7 +206,10 @@ async def get_document(document_id: uuid.UUID, user: CurrentUser, session: DbSes
 
 @documents_router.get("/{document_id}/content", summary="Extracted plain text")
 async def get_document_content(
-    document_id: uuid.UUID, user: CurrentUser, session: DbSession, limit: int = Query(40_000, ge=500, le=200_000)
+    document_id: uuid.UUID,
+    user: CurrentUser,
+    session: DbSession,
+    limit: int = Query(40_000, ge=500, le=200_000),
 ) -> dict:
     content = await DocumentService(session).content(
         owner_id=user.id, document_id=document_id, limit=limit
@@ -239,9 +236,7 @@ async def get_document_chunks(
     )
 
 
-@documents_router.get(
-    "/{document_id}/embedding-status", summary="Per-document embedding counters"
-)
+@documents_router.get("/{document_id}/embedding-status", summary="Per-document embedding counters")
 async def embedding_status(document_id: uuid.UUID, user: CurrentUser, session: DbSession) -> dict:
     document = await DocumentService(session).get(owner_id=user.id, document_id=document_id)
     chunk_repo = DocumentChunkRepository(session)

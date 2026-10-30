@@ -230,7 +230,9 @@ def plan_snapshot_cleanup(
     now = now or datetime.now(UTC)
     protected_runs = protected_run_ids or set()
 
-    ordered = sorted(snapshots, key=lambda item: getattr(item, "created_at", "") or "", reverse=True)
+    ordered = sorted(
+        snapshots, key=lambda item: getattr(item, "created_at", "") or "", reverse=True
+    )
 
     newest_by_run: dict[str, str] = {}
     for snapshot in ordered:
@@ -254,7 +256,9 @@ def plan_snapshot_cleanup(
         created_at = getattr(snapshot, "created_at", "") or ""
         run_id = getattr(snapshot, "run_id", "") or ""
         size = int(getattr(snapshot, "total_bytes", 0) or 0)
-        item = CleanupItem(id=snapshot_id, created_at=created_at, reason="", size_bytes=size, run_id=run_id)
+        item = CleanupItem(
+            id=snapshot_id, created_at=created_at, reason="", size_bytes=size, run_id=run_id
+        )
 
         reasons: list[str] = []
         if getattr(snapshot, "pinned", False):
@@ -281,7 +285,11 @@ def plan_snapshot_cleanup(
 
         exceeds_count = not within_count
         exceeds_age = age is not None and not within_age
-        deletable = (exceeds_count and exceeds_age) if policy.require_both_limits else (exceeds_count or exceeds_age)
+        deletable = (
+            (exceeds_count and exceeds_age)
+            if policy.require_both_limits
+            else (exceeds_count or exceeds_age)
+        )
         if not deletable:
             item.reason = "只超出其中一项上限，按保守处理保留"
             plan.protected.append(item)
@@ -390,9 +398,7 @@ def apply_snapshot_cleanup(
     # Read the index back and re-hash every tree.
     verification = verify_snapshot_archive(archive_root)
     if not verification["ok"]:
-        report["failed"].append(
-            f"归档校验失败，未删除任何快照：{verification['mismatched']}"
-        )
+        report["failed"].append(f"归档校验失败，未删除任何快照：{verification['mismatched']}")
         logger.error("snapshot_archive_mismatch", extra={"mismatched": verification["mismatched"]})
         return report
 
@@ -406,7 +412,9 @@ def apply_snapshot_cleanup(
                 report["failed"].append(f"{item.id}: 删除返回 False（目录不存在？）")
         except (OSError, ValueError) as exc:
             report["failed"].append(f"{item.id}: {type(exc).__name__}: {exc}")
-            logger.error("snapshot_delete_failed", extra={"snapshot_id": item.id, "error": str(exc)})
+            logger.error(
+                "snapshot_delete_failed", extra={"snapshot_id": item.id, "error": str(exc)}
+            )
 
     report["after"] = plan.total - report["deleted"]
     logger.info(
@@ -424,7 +432,12 @@ def verify_snapshot_archive(archive_root: Path) -> dict[str, Any]:
     readable" is not the same claim as "the archive is what was written".
     """
     index_path = archive_root / "index.json"
-    result: dict[str, Any] = {"ok": False, "verified": 0, "mismatched": [], "index": str(index_path)}
+    result: dict[str, Any] = {
+        "ok": False,
+        "verified": 0,
+        "mismatched": [],
+        "index": str(index_path),
+    }
     if not index_path.is_file():
         result["mismatched"].append("index.json 不存在")
         return result
@@ -577,7 +590,11 @@ def plan_audit_cleanup(
 
         exceeds_count = not within_count
         exceeds_age = age is not None and not within_age
-        deletable = (exceeds_count and exceeds_age) if policy.require_both_limits else (exceeds_count or exceeds_age)
+        deletable = (
+            (exceeds_count and exceeds_age)
+            if policy.require_both_limits
+            else (exceeds_count or exceeds_age)
+        )
         if not deletable:
             item.reason = "只超出其中一项上限，按保守处理保留"
             plan.protected.append(item)
@@ -625,9 +642,7 @@ async def apply_audit_cleanup(
     ids = [item.id for item in plan.candidates]
     try:
         rows = list(
-            (
-                await session.execute(select(ToolAuditLog).where(ToolAuditLog.id.in_(ids)))
-            ).scalars()
+            (await session.execute(select(ToolAuditLog).where(ToolAuditLog.id.in_(ids)))).scalars()
         )
         archive_dir.mkdir(parents=True, exist_ok=True)
         with archive_path.open("w", encoding="utf-8") as handle:
@@ -672,7 +687,9 @@ async def apply_audit_cleanup(
         report["failed"].append(
             f"归档校验失败：回读 {len(recovered_rows)} 条、计划 {len(ids)} 条；未删除任何记录"
         )
-        logger.error("audit_archive_mismatch", extra={"recovered": len(recovered_rows), "planned": len(ids)})
+        logger.error(
+            "audit_archive_mismatch", extra={"recovered": len(recovered_rows), "planned": len(ids)}
+        )
         return report
     if _file_sha256(archive_path) != archive_digest:
         report["failed"].append("归档在写入后发生变化，未删除任何记录")
@@ -711,7 +728,12 @@ async def restore_audit_archive(session: Any, archive_path: Path) -> dict[str, A
 
     from app.models.ai import ToolAuditLog
 
-    report: dict[str, Any] = {"kind": "audit", "restored": 0, "failed": [], "archive_path": str(archive_path)}
+    report: dict[str, Any] = {
+        "kind": "audit",
+        "restored": 0,
+        "failed": [],
+        "archive_path": str(archive_path),
+    }
     if not archive_path.is_file():
         report["failed"].append("归档文件不存在")
         return report
@@ -736,7 +758,9 @@ async def restore_audit_archive(session: Any, archive_path: Path) -> dict[str, A
     existing = set(
         (
             await session.execute(
-                select(ToolAuditLog.id).where(ToolAuditLog.id.in_([uuid.UUID(row["id"]) for row in rows]))
+                select(ToolAuditLog.id).where(
+                    ToolAuditLog.id.in_([uuid.UUID(row["id"]) for row in rows])
+                )
             )
         ).scalars()
     )
@@ -761,7 +785,9 @@ async def restore_audit_archive(session: Any, archive_path: Path) -> dict[str, A
                 target=row.get("target", ""),
                 status=row.get("status", ""),
                 exit_code=row.get("exit_code"),
-                created_at=datetime.fromisoformat(row["created_at"]) if row.get("created_at") else None,
+                created_at=datetime.fromisoformat(row["created_at"])
+                if row.get("created_at")
+                else None,
             )
         )
         inserted += 1
@@ -785,7 +811,9 @@ async def restore_audit_archive(session: Any, archive_path: Path) -> dict[str, A
     )
     report["restored"] = landed
     if landed != len(rows):
-        report["failed"].append(f"恢复后核对不一致：写入 {inserted} 条，库中查到 {landed} 条，归档 {len(rows)} 条")
+        report["failed"].append(
+            f"恢复后核对不一致：写入 {inserted} 条，库中查到 {landed} 条，归档 {len(rows)} 条"
+        )
     return report
 
 

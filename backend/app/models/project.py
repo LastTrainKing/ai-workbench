@@ -21,9 +21,7 @@ if TYPE_CHECKING:
 
 class Project(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     __tablename__ = "projects"
-    __table_args__ = (
-        Index("ix_projects_owner_status", "owner_id", "status"),
-    )
+    __table_args__ = (Index("ix_projects_owner_status", "owner_id", "status"),)
 
     owner_id: Mapped[uuid.UUID] = mapped_column(
         Uuid(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False

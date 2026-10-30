@@ -37,9 +37,17 @@ from typing import Any
 #: the ability to `file_read` a PDF but not to `knowledge_search` for it, which is the
 #: wrong way round.
 BUSINESS_TOOLS: tuple[str, ...] = (
-    "knowledge_search", "knowledge_document_read", "knowledge_link", "task_list",
-    "task_create", "task_create_batch", "task_update", "project_list", "note_create",
-    "task_planner", "calculator",
+    "knowledge_search",
+    "knowledge_document_read",
+    "knowledge_link",
+    "task_list",
+    "task_create",
+    "task_create_batch",
+    "task_update",
+    "project_list",
+    "note_create",
+    "task_planner",
+    "calculator",
 )
 
 #: The tool names this build actually has, by category. Kept as literals rather than
@@ -47,13 +55,30 @@ BUSINESS_TOOLS: tuple[str, ...] = (
 #: ``test_employee_templates.py`` asserts this matches ``build_computer_registry``.
 TOOLS_BY_CATEGORY: dict[str, tuple[str, ...]] = {
     "filesystem": (
-        "directory_create", "directory_delete", "directory_list", "document_read",
-        "document_write", "file_append", "file_copy", "file_delete", "file_exists",
-        "file_metadata", "file_move", "file_read", "file_search", "file_write",
+        "directory_create",
+        "directory_delete",
+        "directory_list",
+        "document_read",
+        "document_write",
+        "file_append",
+        "file_copy",
+        "file_delete",
+        "file_exists",
+        "file_metadata",
+        "file_move",
+        "file_read",
+        "file_search",
+        "file_write",
     ),
     "git": (
-        "git_add", "git_branch", "git_checkout", "git_commit", "git_diff", "git_log",
-        "git_restore", "git_status",
+        "git_add",
+        "git_branch",
+        "git_checkout",
+        "git_commit",
+        "git_diff",
+        "git_log",
+        "git_restore",
+        "git_status",
     ),
     "terminal": ("cmd_exec", "node_exec", "powershell_exec", "python_exec", "terminal_exec"),
     "code": ("code_analyze", "code_patch", "code_replace", "code_search"),
@@ -70,29 +95,66 @@ ALL_TOOLS: frozenset[str] = frozenset(
 #: Read-only tools. Every role gets these — refusing a researcher the ability to read a
 #: file would not make anything safer, it would only make the role useless.
 READ_ONLY_TOOLS: tuple[str, ...] = (
-    "file_read", "file_exists", "file_metadata", "file_search", "directory_list",
-    "document_read", "git_status", "git_diff", "git_log", "code_search", "code_analyze",
-    "process_list", "screen_read",
+    "file_read",
+    "file_exists",
+    "file_metadata",
+    "file_search",
+    "directory_list",
+    "document_read",
+    "git_status",
+    "git_diff",
+    "git_log",
+    "code_search",
+    "code_analyze",
+    "process_list",
+    "screen_read",
 )
 
 #: The read-only half of the business tools — available to every role for the same reason.
 READ_ONLY_BUSINESS_TOOLS: tuple[str, ...] = (
-    "knowledge_search", "knowledge_document_read", "task_list", "project_list", "calculator",
+    "knowledge_search",
+    "knowledge_document_read",
+    "task_list",
+    "project_list",
+    "calculator",
 )
 
 #: Tools that write to the workspace but are recoverable (a snapshot precedes every run).
 REVERSIBLE_WRITE_TOOLS: tuple[str, ...] = (
-    "file_write", "file_append", "file_copy", "file_move", "directory_create",
-    "document_write", "code_patch", "code_replace", "git_add", "git_commit", "git_branch",
-    "git_checkout", "git_restore",
+    "file_write",
+    "file_append",
+    "file_copy",
+    "file_move",
+    "directory_create",
+    "document_write",
+    "code_patch",
+    "code_replace",
+    "git_add",
+    "git_commit",
+    "git_branch",
+    "git_checkout",
+    "git_restore",
 )
 
 #: Tools that reach outside the workspace or cannot be undone by restoring a snapshot.
 #: A role that lists one of these is asking for a confirmation prompt on every call.
 IRREVERSIBLE_TOOLS: tuple[str, ...] = (
-    "file_delete", "directory_delete", "terminal_exec", "cmd_exec", "powershell_exec",
-    "python_exec", "node_exec", "process_start", "process_stop", "download_file",
-    "http_get", "http_post", "run_build", "run_tests", "run_lint", "run_typecheck",
+    "file_delete",
+    "directory_delete",
+    "terminal_exec",
+    "cmd_exec",
+    "powershell_exec",
+    "python_exec",
+    "node_exec",
+    "process_start",
+    "process_stop",
+    "download_file",
+    "http_get",
+    "http_post",
+    "run_build",
+    "run_tests",
+    "run_lint",
+    "run_typecheck",
     "screenshot",
 )
 
@@ -210,8 +272,14 @@ TEMPLATES: tuple[RoleTemplate, ...] = (
             "核对文件确实存在且非空，再报告完成",
         ),
         tools=(
-            *_READ, *_READ_B, *_WRITE,
-            "task_create", "task_create_batch", "task_update", "note_create", "task_planner",
+            *_READ,
+            *_READ_B,
+            *_WRITE,
+            "task_create",
+            "task_create_batch",
+            "task_update",
+            "note_create",
+            "task_planner",
         ),
         deliverable_kind="md",
         deliverable_location="工作区 workspace/deliverables/",
@@ -276,7 +344,14 @@ TEMPLATES: tuple[RoleTemplate, ...] = (
             "检测重复与冲突，生成清理计划（此步不写任何东西）",
             "把计划交给用户确认，再执行",
         ),
-        tools=(*_READ, *_READ_B, "knowledge_link", "file_write", "document_write", "directory_create"),
+        tools=(
+            *_READ,
+            *_READ_B,
+            "knowledge_link",
+            "file_write",
+            "document_write",
+            "directory_create",
+        ),
         deliverable_kind="md",
         deliverable_location="工作区 workspace/deliverables/",
         acceptance=("清理计划列出每一条待处理项及理由", "执行前的计划与实际执行一致"),

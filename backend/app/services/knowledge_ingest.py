@@ -185,10 +185,7 @@ def classify(
         return Classification(None, "", 0.0, "文档没有可识别的文字")
 
     profile_terms = _terms(
-        " ".join(
-            str(profile.get(key) or "")
-            for key in ("identity", "stage", "domain", "bio")
-        )
+        " ".join(str(profile.get(key) or "") for key in ("identity", "stage", "domain", "bio"))
         + " "
         + " ".join(str(g) for g in (profile.get("current_goals") or []))
     )
@@ -254,9 +251,7 @@ async def find_near_duplicates(
     """
     rows = list(
         (
-            await session.execute(
-                select(Document).where(Document.owner_id == owner_id).limit(200)
-            )
+            await session.execute(select(Document).where(Document.owner_id == owner_id).limit(200))
         ).scalars()
     )
     if not rows:
@@ -267,13 +262,17 @@ async def find_near_duplicates(
     findings: list[DuplicateFinding] = []
     for row in rows:
         chunk = (
-            await session.execute(
-                select(DocumentChunk)
-                .where(DocumentChunk.document_id == row.id)
-                .order_by(DocumentChunk.chunk_index)
-                .limit(1)
+            (
+                await session.execute(
+                    select(DocumentChunk)
+                    .where(DocumentChunk.document_id == row.id)
+                    .order_by(DocumentChunk.chunk_index)
+                    .limit(1)
+                )
             )
-        ).scalars().first()
+            .scalars()
+            .first()
+        )
         if chunk is None or not chunk.content:
             continue
         ratio = overlap_ratio(text[:4000], chunk.content)
@@ -305,9 +304,7 @@ async def detect_gaps(
     """
     bases = list(
         (
-            await session.execute(
-                select(KnowledgeBase).where(KnowledgeBase.owner_id == owner_id)
-            )
+            await session.execute(select(KnowledgeBase).where(KnowledgeBase.owner_id == owner_id))
         ).scalars()
     )
     corpus = _terms(" ".join(f"{b.name} {b.description or ''}" for b in bases))

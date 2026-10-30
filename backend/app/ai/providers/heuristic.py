@@ -55,14 +55,97 @@ _SENT_SPLIT = re.compile(r"(?<=[。！？!?；;\n])|(?<=[.!?])\s+")
 _TASK_MARKER = re.compile(r"task\s*[:=]\s*([a-z_]+)", re.IGNORECASE)
 
 _STOPWORDS = {
-    "the", "a", "an", "and", "or", "of", "to", "in", "is", "are", "was", "were",
-    "be", "been", "for", "on", "with", "as", "by", "that", "this", "it", "at",
-    "from", "but", "not", "you", "your", "we", "our", "they", "their", "will",
-    "can", "if", "then", "than", "so", "such", "into", "about", "which", "when",
-    "what", "how", "why", "use", "using", "used", "may", "must", "should",
-    "的", "了", "和", "是", "在", "我", "有", "就", "不", "人", "都", "一", "一个",
-    "上", "也", "很", "到", "说", "要", "去", "会", "着", "没有", "看", "好", "自己",
-    "这", "那", "为", "与", "对", "可以", "并", "等", "被", "把", "而", "从", "以",
+    "the",
+    "a",
+    "an",
+    "and",
+    "or",
+    "of",
+    "to",
+    "in",
+    "is",
+    "are",
+    "was",
+    "were",
+    "be",
+    "been",
+    "for",
+    "on",
+    "with",
+    "as",
+    "by",
+    "that",
+    "this",
+    "it",
+    "at",
+    "from",
+    "but",
+    "not",
+    "you",
+    "your",
+    "we",
+    "our",
+    "they",
+    "their",
+    "will",
+    "can",
+    "if",
+    "then",
+    "than",
+    "so",
+    "such",
+    "into",
+    "about",
+    "which",
+    "when",
+    "what",
+    "how",
+    "why",
+    "use",
+    "using",
+    "used",
+    "may",
+    "must",
+    "should",
+    "的",
+    "了",
+    "和",
+    "是",
+    "在",
+    "我",
+    "有",
+    "就",
+    "不",
+    "人",
+    "都",
+    "一",
+    "一个",
+    "上",
+    "也",
+    "很",
+    "到",
+    "说",
+    "要",
+    "去",
+    "会",
+    "着",
+    "没有",
+    "看",
+    "好",
+    "自己",
+    "这",
+    "那",
+    "为",
+    "与",
+    "对",
+    "可以",
+    "并",
+    "等",
+    "被",
+    "把",
+    "而",
+    "从",
+    "以",
 }
 
 
@@ -103,8 +186,13 @@ class HeuristicEmbeddingProvider(EmbeddingProvider):
 
     name = "offline"
 
-    def __init__(self, *, model: str = "heuristic-hash-ngram-v1", timeout: float = 5.0,
-                 dimension: int = DEFAULT_DIMENSION) -> None:
+    def __init__(
+        self,
+        *,
+        model: str = "heuristic-hash-ngram-v1",
+        timeout: float = 5.0,
+        dimension: int = DEFAULT_DIMENSION,
+    ) -> None:
         super().__init__(model=model, timeout=timeout)
         self._dim = dimension
 
@@ -151,8 +239,9 @@ class HeuristicLLMProvider(LLMProvider):
 
     name = "offline"
 
-    def __init__(self, *, model: str = "heuristic-extractive-v1", timeout: float = 30.0,
-                 max_retries: int = 1) -> None:
+    def __init__(
+        self, *, model: str = "heuristic-extractive-v1", timeout: float = 30.0, max_retries: int = 1
+    ) -> None:
         super().__init__(model=model, timeout=timeout, max_retries=max_retries)
 
     @property
@@ -234,7 +323,10 @@ class HeuristicLLMProvider(LLMProvider):
         elif task == "query_rewrite":
             payload = {"queries": self._rewrite(user)}
         elif task == "agent_system":
-            payload = {"thought": "offline heuristic agent", "final_answer": self._answer(user, context)}
+            payload = {
+                "thought": "offline heuristic agent",
+                "final_answer": self._answer(user, context),
+            }
         elif task == "document_summary":
             payload = self._summary_payload(context or user)
         else:
@@ -372,10 +464,13 @@ class HeuristicLLMProvider(LLMProvider):
         if not todos:
             for h in headings[:5]:
                 todos.append({"title": f"掌握：{h}", "source": "由文档小节标题推导"})
-        key_points = [s.strip() for _, _, s in sorted(
-            ((sum(freq.get(t, 0) for t in tokenize(s)), i, s) for i, s in enumerate(sentences)),
-            key=lambda x: -x[0],
-        )[:8]]
+        key_points = [
+            s.strip()
+            for _, _, s in sorted(
+                ((sum(freq.get(t, 0) for t in tokenize(s)), i, s) for i, s in enumerate(sentences)),
+                key=lambda x: -x[0],
+            )[:8]
+        ]
         return {
             "summary": self._summary(clean),
             "concepts": concepts,
@@ -557,20 +652,14 @@ class HeuristicLLMProvider(LLMProvider):
         gather knowledge → derive a plan → persist tasks → summarise.
         The policy inspects the transcript so the loop always terminates.
         """
-        used = {
-            m.name
-            for m in messages
-            if m.role == "tool" and m.name
-        }
+        used = {m.name for m in messages if m.role == "tool" and m.name}
         available = {t.name: t for t in tools}
         lowered = goal.lower()
 
         wants_knowledge = any(
             k in lowered for k in ("知识", "资料", "文档", "knowledge", "文档库", "根据")
         )
-        wants_tasks = any(
-            k in lowered for k in ("计划", "任务", "plan", "task", "安排", "学习")
-        )
+        wants_tasks = any(k in lowered for k in ("计划", "任务", "plan", "task", "安排", "学习"))
 
         sequence: list[str] = []
         if wants_knowledge or wants_tasks:
@@ -591,7 +680,11 @@ class HeuristicLLMProvider(LLMProvider):
             elif name == "task_create_batch":
                 args = {"from_goal": goal[:300], "project_id": None}
             elif name == "note_create":
-                args = {"title": goal[:60] or "AI 工作记录", "content_md": "", "from_goal": goal[:300]}
+                args = {
+                    "title": goal[:60] or "AI 工作记录",
+                    "content_md": "",
+                    "from_goal": goal[:300],
+                }
             return "", [ToolCallRequest(id=f"call_{name}", name=name, arguments=args)]
 
         summary = self._answer(goal, self._latest_context(messages))

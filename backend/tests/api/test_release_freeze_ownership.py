@@ -129,13 +129,13 @@ async def _pair(client: httpx.AsyncClient) -> tuple[dict[str, str], dict[str, st
 
 async def test_project_is_not_reachable_by_another_account(client: httpx.AsyncClient) -> None:
     a, b = await _pair(client)
-    project = _created(
-        await client.post("/projects", headers=a, json={"name": "A's project"})
-    )
+    project = _created(await client.post("/projects", headers=a, json={"name": "A's project"}))
     pid = project["id"]
 
     assert (await client.get(f"/projects/{pid}", headers=b)).status_code == 404
-    assert (await client.patch(f"/projects/{pid}", headers=b, json={"name": "hijacked"})).status_code == 404
+    assert (
+        await client.patch(f"/projects/{pid}", headers=b, json={"name": "hijacked"})
+    ).status_code == 404
     assert (await client.delete(f"/projects/{pid}", headers=b)).status_code == 404
 
     # ... and A still has it, unmodified.
@@ -144,7 +144,9 @@ async def test_project_is_not_reachable_by_another_account(client: httpx.AsyncCl
     assert still.json()["data"]["name"] == "A's project"
 
 
-async def test_knowledge_base_is_not_reachable_by_another_account(client: httpx.AsyncClient) -> None:
+async def test_knowledge_base_is_not_reachable_by_another_account(
+    client: httpx.AsyncClient,
+) -> None:
     a, b = await _pair(client)
     kb = _created(await client.post("/knowledge-bases", headers=a, json={"name": "A's KB"}))
     kid = kb["id"]
@@ -155,13 +157,13 @@ async def test_knowledge_base_is_not_reachable_by_another_account(client: httpx.
 
 async def test_task_is_not_reachable_by_another_account(client: httpx.AsyncClient) -> None:
     a, b = await _pair(client)
-    task = _created(
-        await client.post("/tasks", headers=a, json={"title": "A's task"})
-    )
+    task = _created(await client.post("/tasks", headers=a, json={"title": "A's task"}))
     tid = task["id"]
 
     assert (await client.get(f"/tasks/{tid}", headers=b)).status_code == 404
-    assert (await client.patch(f"/tasks/{tid}", headers=b, json={"title": "hijacked"})).status_code == 404
+    assert (
+        await client.patch(f"/tasks/{tid}", headers=b, json={"title": "hijacked"})
+    ).status_code == 404
     assert (await client.delete(f"/tasks/{tid}", headers=b)).status_code == 404
 
 

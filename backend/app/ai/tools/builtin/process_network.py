@@ -42,11 +42,18 @@ MAX_RESPONSE_BYTES = 2_000_000
 _SHELL = "power" + "shell"
 SHELL_WRAPPERS = frozenset(
     {
-        "cmd", "cmd.exe",
-        _SHELL, _SHELL + ".exe",
-        "pwsh", "pwsh.exe",
-        "sh", "bash",
-        "wscript", "wscript.exe", "cscript", "cscript.exe",
+        "cmd",
+        "cmd.exe",
+        _SHELL,
+        _SHELL + ".exe",
+        "pwsh",
+        "pwsh.exe",
+        "sh",
+        "bash",
+        "wscript",
+        "wscript.exe",
+        "cscript",
+        "cscript.exe",
     }
 )
 
@@ -62,7 +69,10 @@ class ProcessListTool(Tool):
         parameters={
             "type": "object",
             "properties": {
-                "name_filter": {"type": "string", "description": "Substring match on the process name"},
+                "name_filter": {
+                    "type": "string",
+                    "description": "Substring match on the process name",
+                },
                 "limit": {"type": "integer"},
             },
             "required": [],
@@ -83,7 +93,9 @@ class ProcessListTool(Tool):
         )
         from app.ai.tools.builtin.shell import _run_process
 
-        outcome = await _run_process(exe=exe, args=[*flags, script], cwd=Path(ctx.resolve(".")), timeout=30)
+        outcome = await _run_process(
+            exe=exe, args=[*flags, script], cwd=Path(ctx.resolve(".")), timeout=30
+        )
         if outcome["exit_code"] != 0:
             return ToolResult(ok=False, error=outcome["stderr"], summary="could not list processes")
 
@@ -108,7 +120,9 @@ class ProcessListTool(Tool):
             if not needle or needle in str(item.get("ProcessName", "")).lower()
         ][: max(1, min(int(limit or 60), 400))]
 
-        return ToolResult(ok=True, data={"processes": rows, "count": len(rows)}, summary=f"{len(rows)} processes")
+        return ToolResult(
+            ok=True, data={"processes": rows, "count": len(rows)}, summary=f"{len(rows)} processes"
+        )
 
 
 class ProcessStartTool(Tool):
@@ -160,11 +174,11 @@ class ProcessStartTool(Tool):
                     details={"command": command, "arguments": (arguments or [])[:10]},
                 )
             full_command = " ".join([command, *(arguments or [])]).strip()
-            verdict = ctx.permissions.check_command(full_command, cwd=working, interpreter="process")
+            verdict = ctx.permissions.check_command(
+                full_command, cwd=working, interpreter="process"
+            )
             if not verdict.allowed:
-                raise PermissionDeniedError(
-                    verdict.reason, details={"command": full_command[:300]}
-                )
+                raise PermissionDeniedError(verdict.reason, details={"command": full_command[:300]})
 
         creationflags = 0x0800_0000 if os.name == "nt" else 0
         try:
@@ -177,13 +191,20 @@ class ProcessStartTool(Tool):
                 creationflags=creationflags,
             )
         except (OSError, FileNotFoundError) as exc:
-            return ToolResult(ok=False, error=f"Could not start '{command}': {exc}", summary="start failed")
+            return ToolResult(
+                ok=False, error=f"Could not start '{command}': {exc}", summary="start failed"
+            )
 
         ctx.consume_write()
         ctx.register_artifact("processes_started", str(process.pid))
         return ToolResult(
             ok=True,
-            data={"pid": process.pid, "command": command, "arguments": arguments or [], "cwd": str(working)},
+            data={
+                "pid": process.pid,
+                "command": command,
+                "arguments": arguments or [],
+                "cwd": str(working),
+            },
             summary=f"started pid {process.pid}",
         )
 
@@ -217,7 +238,9 @@ class ProcessStopTool(Tool):
         pid = int(pid)
         if pid <= 4:
             return ToolResult(
-                ok=False, error=f"Refusing to stop pid {pid}: it is a system process", summary="refused"
+                ok=False,
+                error=f"Refusing to stop pid {pid}: it is a system process",
+                summary="refused",
             )
 
         started = {int(p) for p in ctx.artifacts.get("processes_started", []) if str(p).isdigit()}
@@ -233,14 +256,18 @@ class ProcessStopTool(Tool):
             )
             _, err = await killer.communicate()
             if killer.returncode != 0:
-                return ToolResult(ok=False, error=err.decode(errors="replace"), summary="stop failed")
+                return ToolResult(
+                    ok=False, error=err.decode(errors="replace"), summary="stop failed"
+                )
         else:
             import signal
 
             try:
                 os.kill(pid, signal.SIGKILL if force else signal.SIGTERM)
             except ProcessLookupError:
-                return ToolResult(ok=False, error=f"No process with pid {pid}", summary="not running")
+                return ToolResult(
+                    ok=False, error=f"No process with pid {pid}", summary="not running"
+                )
 
         ctx.consume_write()
         return ToolResult(ok=True, data={"pid": pid, "force": force}, summary=f"stopped pid {pid}")
@@ -262,7 +289,9 @@ class ProcessStatusTool(Tool):
         mutates_state=False,
     )
 
-    async def execute(self, ctx: ToolContext, pid: int | None = None, port: int | None = None) -> ToolResult:
+    async def execute(
+        self, ctx: ToolContext, pid: int | None = None, port: int | None = None
+    ) -> ToolResult:
         import socket
 
         data: dict[str, Any] = {}
@@ -270,8 +299,12 @@ class ProcessStatusTool(Tool):
             alive = True
             if os.name == "nt":
                 probe = await asyncio.create_subprocess_exec(
-                    "tasklist", "/FI", f"PID eq {int(pid)}", "/NH",
-                    stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
+                    "tasklist",
+                    "/FI",
+                    f"PID eq {int(pid)}",
+                    "/NH",
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.DEVNULL,
                 )
                 out, _ = await probe.communicate()
                 alive = str(int(pid)) in out.decode(errors="replace")
@@ -285,7 +318,11 @@ class ProcessStatusTool(Tool):
                 data["port"] = port
                 data["listening"] = sock.connect_ex(("127.0.0.1", port)) == 0
 
-        return ToolResult(ok=True, data=data, summary=", ".join(f"{k}={v}" for k, v in data.items()) or "nothing asked")
+        return ToolResult(
+            ok=True,
+            data=data,
+            summary=", ".join(f"{k}={v}" for k, v in data.items()) or "nothing asked",
+        )
 
 
 # --------------------------------------------------------------------------- #
@@ -397,7 +434,6 @@ class _NetworkTool(Tool):
             }
         except urllib.error.URLError as exc:
             return {"status": 0, "error": f"{type(exc.reason).__name__}: {exc.reason}"}
-
 
 
 class HttpGetTool(_NetworkTool):
@@ -563,10 +599,15 @@ class DownloadFileTool(_NetworkTool):
         ctx.require_permission(target, write=True)
 
         if target.exists() and not overwrite:
-            return ToolResult(ok=False, error=f"{target} already exists", summary="destination exists")
+            return ToolResult(
+                ok=False, error=f"{target} already exists", summary="destination exists"
+            )
 
         cap = min(
-            int(max_bytes or (ctx.permissions.policy.max_download_bytes if ctx.permissions else 200_000_000)),
+            int(
+                max_bytes
+                or (ctx.permissions.policy.max_download_bytes if ctx.permissions else 200_000_000)
+            ),
             ctx.permissions.policy.max_download_bytes if ctx.permissions else 200_000_000,
         )
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -612,7 +653,9 @@ class DownloadFileTool(_NetworkTool):
                         if written > cap:
                             handle.close()
                             target.unlink(missing_ok=True)
-                            raise ValidationError(f"Download exceeded the {cap}-byte limit and was removed")
+                            raise ValidationError(
+                                f"Download exceeded the {cap}-byte limit and was removed"
+                            )
                         handle.write(chunk)
             return {"bytes": written, "content_type": response.headers.get("Content-Type", "")}
 
@@ -622,7 +665,9 @@ class DownloadFileTool(_NetworkTool):
             return ToolResult(ok=False, error=str(exc), summary="download refused")
         except Exception as exc:
             target.unlink(missing_ok=True)
-            return ToolResult(ok=False, error=f"{type(exc).__name__}: {exc}", summary="download failed")
+            return ToolResult(
+                ok=False, error=f"{type(exc).__name__}: {exc}", summary="download failed"
+            )
 
         ctx.consume_write()
         ctx.register_artifact("files_downloaded", str(target))
@@ -647,7 +692,12 @@ class ScreenshotTool(Tool):
         category="observation",
         parameters={
             "type": "object",
-            "properties": {"destination": {"type": "string", "description": "Defaults to workspace/screenshots"}},
+            "properties": {
+                "destination": {
+                    "type": "string",
+                    "description": "Defaults to workspace/screenshots",
+                }
+            },
             "required": [],
         },
         permission_level=0,
@@ -679,7 +729,9 @@ class ScreenshotTool(Tool):
         )
         from app.ai.tools.builtin.shell import _run_process
 
-        outcome = await _run_process(exe=exe, args=[*flags, script], cwd=Path(ctx.resolve(".")), timeout=45)
+        outcome = await _run_process(
+            exe=exe, args=[*flags, script], cwd=Path(ctx.resolve(".")), timeout=45
+        )
         if outcome["exit_code"] != 0 or "NO_DISPLAY" in outcome["stdout"]:
             return ToolResult(
                 ok=False,
@@ -687,7 +739,9 @@ class ScreenshotTool(Tool):
                 summary="no display available",
             )
         if not target.exists():
-            return ToolResult(ok=False, error="The capture produced no file", summary="capture failed")
+            return ToolResult(
+                ok=False, error="The capture produced no file", summary="capture failed"
+            )
 
         ctx.consume_write()
         ctx.register_artifact("screenshots", str(target))
@@ -720,7 +774,9 @@ class ScreenReadTool(Tool):
         )
         from app.ai.tools.builtin.shell import _run_process
 
-        outcome = await _run_process(exe=exe, args=[*flags, script], cwd=Path(ctx.resolve(".")), timeout=30)
+        outcome = await _run_process(
+            exe=exe, args=[*flags, script], cwd=Path(ctx.resolve(".")), timeout=30
+        )
         if outcome["exit_code"] != 0:
             return ToolResult(
                 ok=False,

@@ -190,7 +190,9 @@ class TieredResult:
         }
 
 
-async def _try_memory(session: AsyncSession, user_id: uuid.UUID, question: str) -> tuple[TierAttempt, str, list[str]]:
+async def _try_memory(
+    session: AsyncSession, user_id: uuid.UUID, question: str
+) -> tuple[TierAttempt, str, list[str]]:
     """Tier 1: is there a stored fact about this user that bears on the question?
 
     Scored by term rarity rather than vector distance on purpose. The memory table is
@@ -297,10 +299,7 @@ async def _try_skill(
         ),
         # `body` must travel with the match. Passing only id/name/score is how the
         # agent ended up being told 「【他的做法：X】」 with nothing after it.
-        [
-            {"id": m.id, "name": m.name, "score": m.score, "body": m.body}
-            for m in matches
-        ],
+        [{"id": m.id, "name": m.name, "score": m.score, "body": m.body} for m in matches],
     )
 
 

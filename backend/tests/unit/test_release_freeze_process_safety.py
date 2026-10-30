@@ -62,7 +62,8 @@ def _code_only(path: Path) -> str:
             end = getattr(first.value, "end_lineno", first.value.lineno) or first.value.lineno
             docstring_lines.update(range(first.value.lineno, end + 1))
     return "\n".join(
-        line for number, line in enumerate(source.splitlines(), start=1)
+        line
+        for number, line in enumerate(source.splitlines(), start=1)
         if number not in docstring_lines
     )
 
@@ -150,7 +151,9 @@ def test_installer_runner_reports_a_missing_installer(tmp_path: Path) -> None:
         guard.run_nsis_installer(tmp_path / "nope.exe", tmp_path / "target")
 
 
-def test_installer_runner_does_not_pass_shell_true(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_installer_runner_does_not_pass_shell_true(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """It hands a raw command line to CreateProcess, but must not hand it to a shell.
 
     `Popen`, not `run`: the installer is launched with its output redirected to **files**

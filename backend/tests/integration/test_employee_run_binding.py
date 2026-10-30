@@ -127,9 +127,7 @@ async def test_a_run_cannot_borrow_another_users_employee(session: Any, owner: U
 
 
 @pytest.mark.asyncio
-async def test_a_missing_employee_falls_back_to_the_users_policy(
-    session: Any, owner: User
-) -> None:
+async def test_a_missing_employee_falls_back_to_the_users_policy(session: Any, owner: User) -> None:
     """A run whose employee was deleted should still be able to finish.
 
     Falling back to the user's own policy is not a widening in the dangerous direction:

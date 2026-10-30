@@ -334,9 +334,7 @@ async def _watch(
 
             # 决定这次运行的终态。规则表在 `decide_final_status` —— 它能被单独测试，
             # 而这一段以前只能靠真的跑一个模型来验证。
-            final, summary = decide_final_status(
-                state, unsettled=unsettled, collected=collected
-            )
+            final, summary = decide_final_status(state, unsettled=unsettled, collected=collected)
             await service.set_status(run, final, summary=summary)
 
             # Now that the run has its final status, attach it to each deliverable
@@ -345,7 +343,11 @@ async def _watch(
 
             logger.info(
                 "build_run_finished",
-                extra={"build_run_id": str(build_run_id), "state": state, "deliverables": collected},
+                extra={
+                    "build_run_id": str(build_run_id),
+                    "state": state,
+                    "deliverables": collected,
+                },
             )
     except Exception as exc:
         # The watcher dying must not strand the run.
@@ -359,7 +361,11 @@ async def _watch(
 
         logger.warning(
             "build_run_watch_failed",
-            extra={"build_run_id": str(build_run_id), "error": reason, "traceback": traceback.format_exc()[:2500]},
+            extra={
+                "build_run_id": str(build_run_id),
+                "error": reason,
+                "traceback": traceback.format_exc()[:2500],
+            },
         )
         try:
             from app.infrastructure.database import session_scope
@@ -378,7 +384,10 @@ async def _watch(
         except Exception as nested:
             logger.error(
                 "build_run_watch_failure_not_recorded",
-                extra={"build_run_id": str(build_run_id), "error": f"{type(nested).__name__}: {nested}"},
+                extra={
+                    "build_run_id": str(build_run_id),
+                    "error": f"{type(nested).__name__}: {nested}",
+                },
             )
 
 

@@ -253,7 +253,9 @@ async def update_memory(
 
 
 @router.delete("/memories/{memory_id}", summary="Delete a memory")
-async def delete_memory(memory_id: uuid.UUID, user: CurrentUser, session: DbSession) -> dict[str, Any]:
+async def delete_memory(
+    memory_id: uuid.UUID, user: CurrentUser, session: DbSession
+) -> dict[str, Any]:
     """Hard delete.
 
     Deleting has to actually remove the row: an archive flag that still gets
@@ -361,7 +363,9 @@ async def memory_cleanup_apply(
                 why=group.why,
             )
         )
-    plan.litter = [{"id": row.id, "content": "", "use_count": 0, "why": row.why} for row in payload.litter]
+    plan.litter = [
+        {"id": row.id, "content": "", "use_count": 0, "why": row.why} for row in payload.litter
+    ]
 
     result = await apply_cleanup(session, user_id=user.id, plan=plan)
     return ok(
@@ -482,7 +486,6 @@ async def extract_profile(payload: ProfileExtractRequest, user: CurrentUser) -> 
 
 
 @router.get("/context/preview", summary="What the model would be told right now")
-
 async def preview_context(
     user: CurrentUser,
     session: DbSession,
@@ -566,6 +569,7 @@ async def context_stats(user: CurrentUser, session: DbSession) -> dict[str, Any]
             "onboarded": bool(profile and profile.onboarded),
         }
     )
+
 
 class TierQuery(BaseModel):
     """A question to run down the retrieval ladder."""

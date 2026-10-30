@@ -170,9 +170,7 @@ class Retriever:
                 "took_ms": took_ms,
             },
         )
-        return RetrievalResult(
-            chunks, mode, dense_count, sparse_count, took_ms, reranked, [query]
-        )
+        return RetrievalResult(chunks, mode, dense_count, sparse_count, took_ms, reranked, [query])
 
     # --------------------------------------------------------------- sparse leg --
     async def _sparse_search(
@@ -245,9 +243,7 @@ class Retriever:
 
     # ------------------------------------------------------------------ fusion --
     @staticmethod
-    def _fuse(
-        dense: dict[str, float], sparse: dict[str, float], alpha: float
-    ) -> dict[str, float]:
+    def _fuse(dense: dict[str, float], sparse: dict[str, float], alpha: float) -> dict[str, float]:
         if not dense:
             return dict(sparse)
         if not sparse:
@@ -353,12 +349,7 @@ class Retriever:
             )
             length = len(chunk.content)
             length_prior = 1.0 if 200 <= length <= 1600 else 0.6
-            lexical = (
-                0.45 * coverage
-                + 0.25 * phrase
-                + 0.2 * heading_match
-                + 0.1 * length_prior
-            )
+            lexical = 0.45 * coverage + 0.25 * phrase + 0.2 * heading_match + 0.1 * length_prior
             # Keep the retrieval signal dominant but let lexical features reorder
             # near-ties (this is what makes the top result feel "on topic").
             chunk.score = round(0.65 * chunk.score + 0.35 * lexical, 6)

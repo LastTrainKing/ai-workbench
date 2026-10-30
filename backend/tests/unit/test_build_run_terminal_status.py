@@ -115,15 +115,20 @@ def test_nothing_is_reported_completed_without_a_file_and_a_settled_run():
     This is the invariant behind §12 flow 3, checked over the whole table rather than
     case by case — because the failure mode is a *combination* someone did not think of.
     """
-    states = ["COMPLETED", "FAILED", "CANCELLED", "LIMIT_REACHED",
-              "WAITING_CONFIRMATION", "MAX_STEPS", "weird"]
+    states = [
+        "COMPLETED",
+        "FAILED",
+        "CANCELLED",
+        "LIMIT_REACHED",
+        "WAITING_CONFIRMATION",
+        "MAX_STEPS",
+        "weird",
+    ]
 
     for state in states:
         for unsettled in (False, True):
             for collected in (0, 1, 5):
-                status, _ = decide_final_status(
-                    state, unsettled=unsettled, collected=collected
-                )
+                status, _ = decide_final_status(state, unsettled=unsettled, collected=collected)
                 if status is BuildStatus.COMPLETED:
                     assert state == "COMPLETED", (state, unsettled, collected)
                     assert not unsettled, (state, unsettled, collected)

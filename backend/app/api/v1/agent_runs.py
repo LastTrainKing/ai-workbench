@@ -345,9 +345,7 @@ async def list_unresolved_calls(
     "/runs/{run_id}/reconcile",
     summary="Check the world and settle what each interrupted call did",
 )
-async def reconcile_run_calls(
-    run_id: str, user: CurrentUser, session: DbSession
-) -> dict[str, Any]:
+async def reconcile_run_calls(run_id: str, user: CurrentUser, session: DbSession) -> dict[str, Any]:
     """Look at the targets and record what can be established.
 
     Three verdicts per invocation — `APPLIED`, `NOT_APPLIED`, `UNDECIDABLE` — with the
@@ -365,7 +363,9 @@ async def reconcile_run_calls(
     reports = await reconcile_unknown_calls(session, registry=registry, ai_run_id=run.id)
     await session.commit()
 
-    items = [report.to_payload() for report in reports if report.status_before != report.status_after]
+    items = [
+        report.to_payload() for report in reports if report.status_before != report.status_after
+    ]
     return ok(
         {
             "checked": len(reports),

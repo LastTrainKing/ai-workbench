@@ -84,9 +84,7 @@ async def record_memory_usage(memory_ids: list[Any]) -> None:
 
     try:
         async with session_scope() as session:
-            await session.execute(
-                text(f"SET LOCAL lock_timeout = '{USAGE_LOCK_TIMEOUT_MS}ms'")
-            )
+            await session.execute(text(f"SET LOCAL lock_timeout = '{USAGE_LOCK_TIMEOUT_MS}ms'"))
             await session.execute(
                 update(MemoryEntry)
                 .where(MemoryEntry.id.in_(memory_ids))
@@ -196,6 +194,7 @@ class AssembledContext:
 # counts, report structure and thesis covers. Recency and usage are still recorded —
 # `use_count` and `last_used_at` are bumped by `record_memory_usage` — they are simply
 # not what decides inclusion any more. `relevance.rank` does, and it is measured.
+
 
 class ContextAssembler:
     """Builds the context package for one call."""
@@ -334,7 +333,9 @@ class ContextAssembler:
         memory_block = await self._memory_block(goal=goal)
         blocks = [
             await self._profile_block(),
-            ContextBlock(kind="project", text=project_digest) if project_digest else ContextBlock(kind="project", text=""),
+            ContextBlock(kind="project", text=project_digest)
+            if project_digest
+            else ContextBlock(kind="project", text=""),
             await self._preference_block(),
             memory_block,
         ]
@@ -362,7 +363,9 @@ class ContextAssembler:
             else:
                 merged[block.kind] = block
 
-        ordered = [merged[key] for key in ("profile", "project", "memory", "knowledge") if key in merged]
+        ordered = [
+            merged[key] for key in ("profile", "project", "memory", "knowledge") if key in merged
+        ]
 
         total = sum(block.tokens for block in ordered)
         truncated = False
@@ -399,17 +402,13 @@ class ContextAssembler:
             if profile is None:
                 return [], 0, True
             keep = self.budget_tokens * CHARS_PER_TOKEN
-            trimmed = ContextBlock(
-                kind="profile", text=profile.text[:keep], truncated=True
-            )
+            trimmed = ContextBlock(kind="profile", text=profile.text[:keep], truncated=True)
             return [trimmed], trimmed.tokens, True
 
         total = sum(block.tokens for block in working)
         if total > self.budget_tokens:
             # Still over: keep the profile and whatever fits after it.
-            ordered = sorted(
-                working, key=lambda b: 0 if b.kind == "profile" else 1
-            )
+            ordered = sorted(working, key=lambda b: 0 if b.kind == "profile" else 1)
             kept: list[ContextBlock] = []
             running = 0
             for block in ordered:
@@ -418,7 +417,9 @@ class ContextAssembler:
                     running += block.tokens
                 elif block.kind == "profile":
                     keep = max(80, (self.budget_tokens - running) * CHARS_PER_TOKEN)
-                    kept.append(ContextBlock(kind="profile", text=block.text[:keep], truncated=True))
+                    kept.append(
+                        ContextBlock(kind="profile", text=block.text[:keep], truncated=True)
+                    )
                     running += kept[-1].tokens
             working = kept
             total = running
@@ -451,7 +452,11 @@ async def purge_old_snapshots(session: AsyncSession, *, days: int = 30) -> int:
     """Housekeeping: snapshots are diagnostics, not records."""
     cutoff = datetime.now(UTC) - timedelta(days=days)
     rows = list(
-        (await session.execute(select(ContextSnapshot).where(ContextSnapshot.created_at < cutoff))).scalars()
+        (
+            await session.execute(
+                select(ContextSnapshot).where(ContextSnapshot.created_at < cutoff)
+            )
+        ).scalars()
     )
     for row in rows:
         await session.delete(row)

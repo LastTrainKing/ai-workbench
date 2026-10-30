@@ -84,7 +84,9 @@ async def _check(tool: str, arguments: dict, workspace: Path) -> tuple[Reconcile
 async def test_a_file_holding_the_intended_bytes_is_applied(tmp_path: Path) -> None:
     target = tmp_path / "out.txt"
     _write_exact(target, "hello\n")
-    verdict, _detail = await _check("file_write", {"path": "out.txt", "content": "hello\n"}, tmp_path)
+    verdict, _detail = await _check(
+        "file_write", {"path": "out.txt", "content": "hello\n"}, tmp_path
+    )
     assert verdict is ReconcileVerdict.APPLIED
 
 
@@ -104,12 +106,16 @@ async def test_a_file_with_different_content_is_undecidable_not_not_applied(tmp_
     """
     target = tmp_path / "out.txt"
     _write_exact(target, "something else entirely\n")
-    verdict, detail = await _check("file_write", {"path": "out.txt", "content": "hello\n"}, tmp_path)
+    verdict, detail = await _check(
+        "file_write", {"path": "out.txt", "content": "hello\n"}, tmp_path
+    )
     assert verdict is ReconcileVerdict.UNDECIDABLE, detail
     assert verdict is not ReconcileVerdict.NOT_APPLIED
 
 
-async def test_a_relative_path_without_a_recorded_working_directory_is_not_checked(tmp_path: Path) -> None:
+async def test_a_relative_path_without_a_recorded_working_directory_is_not_checked(
+    tmp_path: Path,
+) -> None:
     """A check against the wrong directory is worse than no check.
 
     `out.txt` resolves against the *process's* directory when no working directory is
@@ -183,7 +189,9 @@ def _git_repo(path: Path) -> None:
 
 async def test_paths_in_the_index_are_applied(tmp_path: Path) -> None:
     _git_repo(tmp_path)
-    subprocess.run(["git", "add", "--", "a.txt"], cwd=str(tmp_path), capture_output=True, check=True)
+    subprocess.run(
+        ["git", "add", "--", "a.txt"], cwd=str(tmp_path), capture_output=True, check=True
+    )
     verdict, detail = await _check("git_add", {"paths": ["a.txt"]}, tmp_path)
     assert verdict is ReconcileVerdict.APPLIED, detail
 
@@ -251,7 +259,9 @@ async def test_applied_sets_succeeded_but_does_not_invent_a_finish_time(tmp_path
     """
     target = tmp_path / "out.txt"
     _write_exact(target, "hello\n")
-    call = _call("file_write", {"path": "out.txt", "content": "hello\n"}, working_directory=str(tmp_path))
+    call = _call(
+        "file_write", {"path": "out.txt", "content": "hello\n"}, working_directory=str(tmp_path)
+    )
     call.started_at = None
     report = await reconcile_call(call, registry=_registry(), ctx=_ctx(tmp_path))
     assert report.status_after == ToolCallStatus.SUCCEEDED.value

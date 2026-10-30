@@ -92,8 +92,12 @@ async def test_reset_only_affects_the_caller(client: httpx.AsyncClient) -> None:
 
     assert (await client.delete("/ai-config", headers=a_headers)).status_code == 200
 
-    a_model = (await client.get("/ai-config", headers=a_headers)).json()["data"]["effective"]["model"]
-    b_model = (await client.get("/ai-config", headers=b_headers)).json()["data"]["effective"]["model"]
+    a_model = (await client.get("/ai-config", headers=a_headers)).json()["data"]["effective"][
+        "model"
+    ]
+    b_model = (await client.get("/ai-config", headers=b_headers)).json()["data"]["effective"][
+        "model"
+    ]
 
     assert a_model != "model-for-a"
     assert b_model == "model-for-b"

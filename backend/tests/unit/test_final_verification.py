@@ -78,7 +78,9 @@ class ScriptedLLM:
     def _tool(self, name: str, arguments: dict) -> ChatResult:
         return ChatResult(
             content="",
-            tool_calls=[ToolCallRequest(id=f"c{len(self.verifier_prompts)}", name=name, arguments=arguments)],
+            tool_calls=[
+                ToolCallRequest(id=f"c{len(self.verifier_prompts)}", name=name, arguments=arguments)
+            ],
         )
 
     async def chat(self, messages, **kwargs) -> ChatResult:
@@ -130,13 +132,17 @@ class PathAwareRegistry:
         path = str(arguments.get("path") or "")
         if name == "file_exists":
             # Truthful either way: ok=True, and the answer is in `exists`.
-            return ToolResult(ok=True, data={"exists": path in self.existing}, summary="file_exists")
+            return ToolResult(
+                ok=True, data={"exists": path in self.existing}, summary="file_exists"
+            )
         if name == "document_read":
             if path not in self.existing:
                 return ToolResult(
                     ok=False, error=f"ValidationError: 文件不存在：{path}", summary="读取失败"
                 )
-            return ToolResult(ok=True, data={"path": path, "slides": 11}, summary="document_read ok")
+            return ToolResult(
+                ok=True, data={"path": path, "slides": 11}, summary="document_read ok"
+            )
         if name == "document_write":
             self.existing.add(path)
             return ToolResult(ok=True, data={"path": path}, summary="document_write ok")
@@ -263,7 +269,9 @@ async def test_every_attempt_erroring_is_inconclusive_and_not_failed(tmp_path):
     assert result.verified is False
     # The reason is in the record, and it says which of the two things happened.
     assert any(
-        "没能取得证据" in event.message for event in controller.events if event.kind == "verification"
+        "没能取得证据" in event.message
+        for event in controller.events
+        if event.kind == "verification"
     )
     assert any(
         event.kind == "verification" and event.data.get("conclusive") is False

@@ -32,9 +32,7 @@ async def list_projects(
 ) -> dict:
     repo = ProjectRepository(session)
     stmt = repo.query(user.id, status=status_filter.value if status_filter else None, search=q)
-    rows, total = await repo.paginate(
-        stmt, page=pagination.page, page_size=pagination.page_size
-    )
+    rows, total = await repo.paginate(stmt, page=pagination.page, page_size=pagination.page_size)
     page = build_page(
         [ProjectOut.model_validate(row).model_dump(mode="json") for row in rows],
         page=pagination.page,

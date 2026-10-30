@@ -138,8 +138,7 @@ class DocumentAnalysisRequest(BaseModel):
     actions: list[str] = Field(
         default_factory=lambda: ["summary"],
         description=(
-            "One or more of: summary, concepts, todos, terms, study_plan, "
-            "interview, note, cards"
+            "One or more of: summary, concepts, todos, terms, study_plan, interview, note, cards"
         ),
     )
     knowledge_base_id: uuid.UUID | None = None

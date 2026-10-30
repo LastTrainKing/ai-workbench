@@ -305,6 +305,7 @@ class AgentPolicy:
         expand["ProgramData"] = os.environ.get("ProgramData", "")  # noqa: SIM112
         # The product's own data directory. Denied paths name the policy file inside it.
         from app.core.config import runtime_root as _runtime_root
+
         expand["RUNTIME"] = str(_runtime_root())
 
         def expand_path(raw: str) -> Path | None:
@@ -382,7 +383,11 @@ class AgentPolicy:
 #: reason it is flagged, so the confirmation dialog can explain itself.
 _DANGEROUS_COMMANDS: tuple[tuple[re.Pattern[str], RiskLevel, str], ...] = (
     # --- destructive filesystem operations ---------------------------------
-    (re.compile(r"\brm\s+(-[a-z]*[rf][a-z]*\s+)+", re.I), RiskLevel.HIGH, "recursive or forced delete"),
+    (
+        re.compile(r"\brm\s+(-[a-z]*[rf][a-z]*\s+)+", re.I),
+        RiskLevel.HIGH,
+        "recursive or forced delete",
+    ),
     (re.compile(r"\brmdir\s+/s", re.I), RiskLevel.HIGH, "recursive directory removal"),
     (re.compile(r"\bdel\s+/[fsq]", re.I), RiskLevel.HIGH, "forced file deletion"),
     (re.compile(r"\bRemove-Item\b.*-Recurse\b", re.I), RiskLevel.HIGH, "recursive delete"),
@@ -390,7 +395,6 @@ _DANGEROUS_COMMANDS: tuple[tuple[re.Pattern[str], RiskLevel, str], ...] = (
     (re.compile(r"\bformat\s+[a-z]:", re.I), RiskLevel.CRITICAL, "disk format"),
     (re.compile(r"\bmkfs\b", re.I), RiskLevel.CRITICAL, "filesystem creation"),
     (re.compile(r"\bdiskpart\b", re.I), RiskLevel.CRITICAL, "disk partitioning"),
-
     # --- process termination -----------------------------------------------
     #
     # Absent until round 15, and the omission was measured rather than guessed: a live
@@ -403,41 +407,74 @@ _DANGEROUS_COMMANDS: tuple[tuple[re.Pattern[str], RiskLevel, str], ...] = (
     # including ones this product did not start. That is the same defect the installer had.
     (re.compile(r"\btaskkill\b", re.I), RiskLevel.HIGH, "terminates processes"),
     (re.compile(r"\bStop-Process\b", re.I), RiskLevel.HIGH, "terminates processes"),
-    (re.compile(r"\bkill\s+(-[a-z]*9|-[a-z]*KILL|-[a-z]*TERM)", re.I), RiskLevel.HIGH, "terminates processes"),
+    (
+        re.compile(r"\bkill\s+(-[a-z]*9|-[a-z]*KILL|-[a-z]*TERM)", re.I),
+        RiskLevel.HIGH,
+        "terminates processes",
+    ),
     (re.compile(r"\bpkill\b|\bkillall\b", re.I), RiskLevel.HIGH, "terminates processes by name"),
     (re.compile(r"\btskill\b|\bwmic\b.*\bdelete\b", re.I), RiskLevel.HIGH, "terminates processes"),
-    (re.compile(r"\btaskkill\b.*\s/IM\s", re.I), RiskLevel.CRITICAL, "kills every process with that image name"),
-
+    (
+        re.compile(r"\btaskkill\b.*\s/IM\s", re.I),
+        RiskLevel.CRITICAL,
+        "kills every process with that image name",
+    ),
     # --- git history rewriting ---------------------------------------------
     (re.compile(r"\bgit\s+reset\s+--hard\b", re.I), RiskLevel.HIGH, "discards uncommitted work"),
     (re.compile(r"\bgit\s+clean\s+-[a-z]*[fd]", re.I), RiskLevel.HIGH, "deletes untracked files"),
     (re.compile(r"\bgit\s+push\b.*--force", re.I), RiskLevel.HIGH, "rewrites remote history"),
     (re.compile(r"\bgit\s+filter-branch\b", re.I), RiskLevel.HIGH, "rewrites history"),
     (re.compile(r"\bgit\s+branch\s+-D\b", re.I), RiskLevel.MEDIUM, "force-deletes a branch"),
-
     # --- system configuration ----------------------------------------------
     (re.compile(r"\breg\s+(add|delete|import)\b", re.I), RiskLevel.HIGH, "modifies the registry"),
     (re.compile(r"\bSet-ItemProperty\b.*HKLM", re.I), RiskLevel.HIGH, "modifies the registry"),
     (re.compile(r"\bsetx\b", re.I), RiskLevel.MEDIUM, "changes persistent environment variables"),
-    (re.compile(r"\bicacls\b|\btakeown\b|\bcacls\b", re.I), RiskLevel.HIGH, "changes file permissions"),
-    (re.compile(r"\bnet\s+user\b|\bnet\s+localgroup\b", re.I), RiskLevel.CRITICAL, "changes user accounts"),
+    (
+        re.compile(r"\bicacls\b|\btakeown\b|\bcacls\b", re.I),
+        RiskLevel.HIGH,
+        "changes file permissions",
+    ),
+    (
+        re.compile(r"\bnet\s+user\b|\bnet\s+localgroup\b", re.I),
+        RiskLevel.CRITICAL,
+        "changes user accounts",
+    ),
     (re.compile(r"\bschtasks\b.*\/create", re.I), RiskLevel.HIGH, "creates a scheduled task"),
-    (re.compile(r"\bsc\s+(create|delete|config)\b", re.I), RiskLevel.HIGH, "changes a Windows service"),
-
+    (
+        re.compile(r"\bsc\s+(create|delete|config)\b", re.I),
+        RiskLevel.HIGH,
+        "changes a Windows service",
+    ),
     # --- power and privilege ------------------------------------------------
-    (re.compile(r"\bshutdown\b|\brestart-computer\b|\bstop-computer\b", re.I), RiskLevel.CRITICAL, "powers off the machine"),
+    (
+        re.compile(r"\bshutdown\b|\brestart-computer\b|\bstop-computer\b", re.I),
+        RiskLevel.CRITICAL,
+        "powers off the machine",
+    ),
     (re.compile(r"\brunas\b", re.I), RiskLevel.CRITICAL, "runs as another user"),
     (re.compile(r"-Verb\s+RunAs", re.I), RiskLevel.CRITICAL, "requests administrator elevation"),
-    (re.compile(r"\bStart-Process\b.*-Verb\s+RunAs", re.I), RiskLevel.CRITICAL, "requests administrator elevation"),
-
+    (
+        re.compile(r"\bStart-Process\b.*-Verb\s+RunAs", re.I),
+        RiskLevel.CRITICAL,
+        "requests administrator elevation",
+    ),
     # --- piping a download straight into an interpreter ---------------------
-    (re.compile(r"\b(iwr|Invoke-WebRequest|curl|wget)\b.*\|\s*(iex|Invoke-Expression|bash|sh|python)", re.I),
-     RiskLevel.CRITICAL, "executes downloaded code"),
+    (
+        re.compile(
+            r"\b(iwr|Invoke-WebRequest|curl|wget)\b.*\|\s*(iex|Invoke-Expression|bash|sh|python)",
+            re.I,
+        ),
+        RiskLevel.CRITICAL,
+        "executes downloaded code",
+    ),
     (re.compile(r"\bInvoke-Expression\b", re.I), RiskLevel.HIGH, "evaluates a string as code"),
 )
 
 #: Commands that are fine on their own but deserve a note in the audit log.
-_NETWORK_COMMANDS = re.compile(r"\b(curl|wget|Invoke-WebRequest|Invoke-RestMethod|git\s+clone|npm\s+install|pip\s+install)\b", re.I)
+_NETWORK_COMMANDS = re.compile(
+    r"\b(curl|wget|Invoke-WebRequest|Invoke-RestMethod|git\s+clone|npm\s+install|pip\s+install)\b",
+    re.I,
+)
 
 
 #: Reasons that are **never** waved through, even in Autonomous mode.
@@ -672,8 +709,7 @@ class PermissionManager:
                 # store reachable; a name is not a guarantee about where it goes.
                 if self._resolves_to_local(host):
                     return _deny(
-                        f"{host} is on the allowed list but resolves to a local or private "
-                        "address",
+                        f"{host} is on the allowed list but resolves to a local or private address",
                         risk=RiskLevel.HIGH,
                         operation="Contact a host",
                         target=host,
@@ -694,7 +730,9 @@ class PermissionManager:
                         target=host,
                         impact="The content of this request leaves this machine.",
                     )
-                return _allow("Host is on the allowed list", operation="Contact a host", target=host)
+                return _allow(
+                    "Host is on the allowed list", operation="Contact a host", target=host
+                )
 
         if self.policy.mode is AgentMode.ASSIST:
             return _deny("Assist mode does not make network requests", target=host)
@@ -756,7 +794,9 @@ class PermissionManager:
                 numbers = [int(part, 0) for part in parts]
             except ValueError:
                 return None
-            if all(0 <= number <= 0xFF for number in numbers[:-1]) and numbers[-1] < 256 ** (5 - len(numbers)):
+            if all(0 <= number <= 0xFF for number in numbers[:-1]) and numbers[-1] < 256 ** (
+                5 - len(numbers)
+            ):
                 packed = 0
                 for number in numbers:
                     packed = (packed << 8) | number
@@ -807,7 +847,6 @@ class PermissionManager:
                 return True
         return False
 
-
     # ------------------------------------------------------------- commands --
     def check_command(
         self,
@@ -842,7 +881,9 @@ class PermissionManager:
 
         risk, reason = classify_command(command)
         if risk is RiskLevel.LOW:
-            return _allow("Routine command", operation=f"Run a {interpreter} command", target=command[:300])
+            return _allow(
+                "Routine command", operation=f"Run a {interpreter} command", target=command[:300]
+            )
 
         # In autonomous mode the user has already accepted the scope, but a
         # critical command still stops: autonomy is not a licence for the

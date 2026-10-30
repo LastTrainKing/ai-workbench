@@ -241,7 +241,9 @@ class MemoryEvaluator:
         )
         messages = [
             ChatMessage(role="system", content=system),
-            ChatMessage(role="user", content=f"上下文：{context[:800]}\n\n候选内容：{statement[:1200]}"),
+            ChatMessage(
+                role="user", content=f"上下文：{context[:800]}\n\n候选内容：{statement[:1200]}"
+            ),
         ]
         # `max_tokens` covers the reasoning model's thinking as well as its answer, and
         # a budget too small for the thinking produces *no* answer — the provider
@@ -257,9 +259,7 @@ class MemoryEvaluator:
         except json.JSONDecodeError as exc:
             # A parse failure is a real failure too, and is raised rather than
             # converted into a verdict — see `evaluate`.
-            raise ValueError(
-                f"判定器返回的不是合法 JSON：{(chat.content or '')[:200]!r}"
-            ) from exc
+            raise ValueError(f"判定器返回的不是合法 JSON：{(chat.content or '')[:200]!r}") from exc
 
     # ---------------------------------------------------------------- evaluate --
     async def evaluate(
@@ -318,10 +318,14 @@ class MemoryEvaluator:
             confidence = max(0.0, min(1.0, float(judged.get("confidence") or 0.0)))
         except (TypeError, ValueError):
             confidence = 0.0
-        scope = "project" if str(judged.get("scope", "")).lower().startswith("project") else "global"
+        scope = (
+            "project" if str(judged.get("scope", "")).lower().startswith("project") else "global"
+        )
 
         if confidence < CANDIDATE_FLOOR:
-            return Verdict(Routing.DROP, "置信度过低", kind=kind, confidence=confidence, content=content)
+            return Verdict(
+                Routing.DROP, "置信度过低", kind=kind, confidence=confidence, content=content
+            )
 
         # ---------------------------------------------------------- duplicate --
         # First, the model's answer. It is asked about the statement it was given, and
@@ -569,7 +573,9 @@ class MemoryEvaluator:
             # An approved candidate keeps the source it was proposed from, so a
             # preference learned from a rejection still reads as "delivery" rather
             # than being flattened into "conversation" on the way in.
-            source=str((candidate.structured or {}).get("origin", {}).get("kind") or "conversation"),
+            source=str(
+                (candidate.structured or {}).get("origin", {}).get("kind") or "conversation"
+            ),
             status="active",
             confirmed_by_user=True,
         )

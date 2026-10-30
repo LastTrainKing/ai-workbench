@@ -177,12 +177,17 @@ def backup_database(reason: str) -> Path:
     completed = subprocess.run(
         [
             str(binary),
-            "-h", parsed.hostname or "127.0.0.1",
-            "-p", str(parsed.port or 5432),
-            "-U", parsed.username or "aiworkbench",
-            "-d", (parsed.path or "/aiworkbench").lstrip("/"),
+            "-h",
+            parsed.hostname or "127.0.0.1",
+            "-p",
+            str(parsed.port or 5432),
+            "-U",
+            parsed.username or "aiworkbench",
+            "-d",
+            (parsed.path or "/aiworkbench").lstrip("/"),
             "-Fc",
-            "-f", str(target),
+            "-f",
+            str(target),
         ],
         capture_output=True,
         text=True,
@@ -265,7 +270,11 @@ def _default_literal(column: Any) -> tuple[str | None, str]:
         return None, "默认值是一个函数，没有可直接写进 DDL 的形式"
     try:
         return (
-            str(literal(default.arg).compile(dialect=dialect, compile_kwargs={"literal_binds": True})),
+            str(
+                literal(default.arg).compile(
+                    dialect=dialect, compile_kwargs={"literal_binds": True}
+                )
+            ),
             "",
         )
     except Exception as exc:
@@ -306,9 +315,7 @@ def _plan_adoption(reflected: dict[str, Any], metadata: Any) -> dict[str, Any]:
 
     problems: list[str] = []
     if undeclared_tables:
-        problems.append(
-            "这些表在数据库里存在，但模型里没有声明：" + ", ".join(undeclared_tables)
-        )
+        problems.append("这些表在数据库里存在，但模型里没有声明：" + ", ".join(undeclared_tables))
 
     missing_columns: list[tuple[str, str, str]] = []
     for table in sorted(db_tables & declared):
@@ -334,7 +341,9 @@ def _plan_adoption(reflected: dict[str, Any], metadata: Any) -> dict[str, Any]:
                 )
 
     for table in sorted(db_tables & declared):
-        for name in sorted(set(db_columns.get(table, {})) - {c.name for c in metadata.tables[table].columns}):
+        for name in sorted(
+            set(db_columns.get(table, {})) - {c.name for c in metadata.tables[table].columns}
+        ):
             problems.append(f"{table}.{name} 在数据库里存在，但模型里没有声明")
 
     return {
@@ -385,7 +394,9 @@ async def adopt_pre_migration_database(conn: Any, head: str) -> dict[str, Any]:
     # `exec_driver_sql` rather than `text`: this is DDL, and `text()` would look for bind
     # parameters in default expressions and quoted identifiers.
     for table in plan["missing_tables"]:
-        await conn.exec_driver_sql(str(CreateTable(metadata.tables[table]).compile(dialect=dialect)))
+        await conn.exec_driver_sql(
+            str(CreateTable(metadata.tables[table]).compile(dialect=dialect))
+        )
         applied.append(f"建表 {table}")
 
     for table, column, clause in plan["missing_columns"]:
@@ -394,7 +405,9 @@ async def adopt_pre_migration_database(conn: Any, head: str) -> dict[str, Any]:
 
     # Indexes are separate DDL and are not emitted by `CreateTable`. Compared by name, which
     # is how SQLAlchemy names them and how the migrations create them.
-    for table in sorted(set(metadata.tables) & (set(reflected["tables"]) | set(plan["missing_tables"]))):
+    for table in sorted(
+        set(metadata.tables) & (set(reflected["tables"]) | set(plan["missing_tables"]))
+    ):
         present = reflected["indexes"].get(table, set())
         for index in sorted(metadata.tables[table].indexes, key=lambda i: i.name or ""):
             if index.name and index.name not in present:
@@ -488,8 +501,7 @@ async def ensure_schema(conn: Any) -> str:
         after = await current_revision(conn)
         if after != head:
             raise SchemaOutOfDateError(
-                f"迁移执行后版本号仍是 {after}，期望 {head}。"
-                f"数据库已备份到 {backup}，请人工核对。"
+                f"迁移执行后版本号仍是 {after}，期望 {head}。数据库已备份到 {backup}，请人工核对。"
             )
         return "upgraded"
 

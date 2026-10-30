@@ -206,7 +206,11 @@ async def _consider_memories(
         verdict = await evaluator.evaluate(statement, context=context, source=source)
         logger.info(
             "memory_verdict",
-            extra={"routing": verdict.routing.value, "kind": verdict.kind, "reason": verdict.reason[:120]},
+            extra={
+                "routing": verdict.routing.value,
+                "kind": verdict.kind,
+                "reason": verdict.reason[:120],
+            },
         )
     except Exception as exc:
         logger.warning("memory_pass_failed", extra={"error": f"{type(exc).__name__}: {exc}"})
@@ -242,10 +246,13 @@ class PlannerService:
             knowledge_base_ids=knowledge_base_ids,
             top_k=6,
         )
-        knowledge_context = "\n\n".join(
-            f"【资料 {i}】{c.document_title} / {c.heading}\n{c.content[:1200]}"
-            for i, c in enumerate(retrieval.chunks, start=1)
-        ) or "（知识库中没有检索到相关资料，请基于通用方法论拆解）"
+        knowledge_context = (
+            "\n\n".join(
+                f"【资料 {i}】{c.document_title} / {c.heading}\n{c.content[:1200]}"
+                for i, c in enumerate(retrieval.chunks, start=1)
+            )
+            or "（知识库中没有检索到相关资料，请基于通用方法论拆解）"
+        )
 
         # Personal context first, then the grounded material.
         #
@@ -264,7 +271,7 @@ class PlannerService:
                     "chunk_id": str(getattr(c, "chunk_id", "") or ""),
                 }
                 for c in retrieval.chunks
-            ]
+            ],
         )
         personal = assembled.render()
         context = f"{personal}\n\n{knowledge_context}" if personal else knowledge_context
@@ -434,9 +441,7 @@ class PlannerService:
                 }
             ]
 
-        total_minutes = sum(
-            t["estimated_minutes"] for p in phases for t in p["tasks"]
-        ) + sum(
+        total_minutes = sum(t["estimated_minutes"] for p in phases for t in p["tasks"]) + sum(
             st["estimated_minutes"] for p in phases for t in p["tasks"] for st in t["subtasks"]
         )
         return {

@@ -44,20 +44,44 @@ _RULE_OVERRIDE_PATTERNS: tuple[tuple[str, str], ...] = (
     ),
     (r"不要(再)?(遵守|执行|理会)(任何)?(规则|限制|约束|指令)", "试图解除约束"),
     (r"(解除|取消|绕过|跳过)(所有)?(权限|限制|约束|审批|确认)", "试图绕过权限或审批"),
-    (r"(无需|不用|不必|不需要)(再)?(请求|等待|征求)(用户|我)?(的)?(授权|确认|同意|批准)", "试图跳过授权"),
-    (r"你(已经|已被)?(获得|拥有|得到)(了)?(所有|全部|最高|完整)(的)?(权限|授权|控制权)", "声称拥有未授予的权限"),
+    (
+        r"(无需|不用|不必|不需要)(再)?(请求|等待|征求)(用户|我)?(的)?(授权|确认|同意|批准)",
+        "试图跳过授权",
+    ),
+    (
+        r"你(已经|已被)?(获得|拥有|得到)(了)?(所有|全部|最高|完整)(的)?(权限|授权|控制权)",
+        "声称拥有未授予的权限",
+    ),
     (r"(直接|自行|随意)(执行|运行|删除|发送)(任何|所有)?", "试图扩大执行范围"),
-    (r"ignore\s+(all\s+)?(previous|prior|above|the)\s+(instructions?|rules?|prompts?)", "试图忽略既有规则"),
-    (r"disregard\s+(all\s+)?(previous|prior|above|the)\s+(instructions?|rules?)", "试图忽略既有规则"),
-    (r"(bypass|skip|disable)\s+(all\s+)?(permissions?|restrictions?|approvals?|confirmations?)", "试图绕过权限或审批"),
-    (r"you\s+(now\s+)?have\s+(full|all|complete|unrestricted)\s+(access|permissions?|control)", "声称拥有未授予的权限"),
+    (
+        r"ignore\s+(all\s+)?(previous|prior|above|the)\s+(instructions?|rules?|prompts?)",
+        "试图忽略既有规则",
+    ),
+    (
+        r"disregard\s+(all\s+)?(previous|prior|above|the)\s+(instructions?|rules?)",
+        "试图忽略既有规则",
+    ),
+    (
+        r"(bypass|skip|disable)\s+(all\s+)?(permissions?|restrictions?|approvals?|confirmations?)",
+        "试图绕过权限或审批",
+    ),
+    (
+        r"you\s+(now\s+)?have\s+(full|all|complete|unrestricted)\s+(access|permissions?|control)",
+        "声称拥有未授予的权限",
+    ),
     (r"without\s+(asking|waiting\s+for)\s+(the\s+)?(user|confirmation|approval)", "试图跳过授权"),
 )
 
 #: Phrases that try to get the employee to reveal or restate its own instructions.
 _DISCLOSURE_PATTERNS: tuple[tuple[str, str], ...] = (
-    (r"(打印|输出|复述|重复|展示|告诉我)(你的)?(系统)?(提示词|指令|prompt|设定)", "试图套取系统提示词"),
-    (r"(reveal|print|repeat|show|output)\s+(your\s+)?(system\s+)?(prompt|instructions?)", "试图套取系统提示词"),
+    (
+        r"(打印|输出|复述|重复|展示|告诉我)(你的)?(系统)?(提示词|指令|prompt|设定)",
+        "试图套取系统提示词",
+    ),
+    (
+        r"(reveal|print|repeat|show|output)\s+(your\s+)?(system\s+)?(prompt|instructions?)",
+        "试图套取系统提示词",
+    ),
     (r"(进入|切换到)(开发者|调试|DAN|越狱)(模式|状态)", "试图切换运行模式"),
     (r"(developer|debug|jailbreak)\s+mode", "试图切换运行模式"),
 )

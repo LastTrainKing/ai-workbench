@@ -20,7 +20,12 @@ async def test_task_crud_and_status_transitions(
     created = await client.post(
         "/tasks",
         headers=auth_headers,
-        json={"title": "整理 JVM 笔记", "priority": "HIGH", "estimated_minutes": 90, "due_date": "+7d"},
+        json={
+            "title": "整理 JVM 笔记",
+            "priority": "HIGH",
+            "estimated_minutes": 90,
+            "due_date": "+7d",
+        },
     )
     assert created.status_code == 201
     task = created.json()["data"]
@@ -65,12 +70,12 @@ async def test_invalid_due_date_is_rejected(client: httpx.AsyncClient, auth_head
 
 @pytest.mark.asyncio
 async def test_dependency_blocks_completion(client: httpx.AsyncClient, auth_headers: dict) -> None:
-    first = (
-        await client.post("/tasks", headers=auth_headers, json={"title": "准备资料"})
-    ).json()["data"]
-    second = (
-        await client.post("/tasks", headers=auth_headers, json={"title": "阅读资料"})
-    ).json()["data"]
+    first = (await client.post("/tasks", headers=auth_headers, json={"title": "准备资料"})).json()[
+        "data"
+    ]
+    second = (await client.post("/tasks", headers=auth_headers, json={"title": "阅读资料"})).json()[
+        "data"
+    ]
 
     link = await client.post(
         f"/tasks/{second['id']}/dependencies",
@@ -123,9 +128,9 @@ async def test_circular_dependency_is_rejected(
 
 @pytest.mark.asyncio
 async def test_task_tree_is_hierarchical(client: httpx.AsyncClient, auth_headers: dict) -> None:
-    root = (
-        await client.post("/tasks", headers=auth_headers, json={"title": "阶段一"})
-    ).json()["data"]
+    root = (await client.post("/tasks", headers=auth_headers, json={"title": "阶段一"})).json()[
+        "data"
+    ]
     for index in range(3):
         await client.post(
             "/tasks", headers=auth_headers, json={"title": f"任务 {index}", "parent_id": root["id"]}
@@ -150,7 +155,9 @@ async def test_knowledge_link_lifecycle(
         data={"knowledge_base_id": knowledge_base["id"]},
     )
     document_id = upload.json()["data"]["document"]["id"]
-    task = (await client.post("/tasks", headers=auth_headers, json={"title": "学习 GC"})).json()["data"]
+    task = (await client.post("/tasks", headers=auth_headers, json={"title": "学习 GC"})).json()[
+        "data"
+    ]
 
     linked = await client.post(
         f"/tasks/{task['id']}/knowledge",
@@ -171,7 +178,9 @@ async def test_knowledge_link_lifecycle(
 
 @pytest.mark.asyncio
 async def test_task_owner_isolation(client: httpx.AsyncClient, auth_headers: dict) -> None:
-    task = (await client.post("/tasks", headers=auth_headers, json={"title": "私有任务"})).json()["data"]
+    task = (await client.post("/tasks", headers=auth_headers, json={"title": "私有任务"})).json()[
+        "data"
+    ]
 
     other = await client.post(
         "/auth/register",
@@ -219,9 +228,7 @@ async def test_planner_generates_a_grounded_plan(
 
 
 @pytest.mark.asyncio
-async def test_planner_persists_a_task_tree(
-    client: httpx.AsyncClient, auth_headers: dict
-) -> None:
+async def test_planner_persists_a_task_tree(client: httpx.AsyncClient, auth_headers: dict) -> None:
     response = await client.post(
         "/planner/plan",
         headers=auth_headers,

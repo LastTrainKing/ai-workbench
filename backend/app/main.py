@@ -106,9 +106,7 @@ async def _purge_expired_revocations() -> None:
             logger.info("expired_revocations_purged", extra={"count": removed})
     except Exception as exc:
         # Housekeeping must not stop startup; it must not be silent either.
-        logger.error(
-            "revocation_purge_failed", extra={"error": f"{type(exc).__name__}: {exc}"}
-        )
+        logger.error("revocation_purge_failed", extra={"error": f"{type(exc).__name__}: {exc}"})
 
 
 async def _reconcile_interrupted_runs() -> None:
@@ -137,9 +135,7 @@ async def _reconcile_interrupted_runs() -> None:
         async with session_scope() as session:
             rows = list(
                 (
-                    await session.execute(
-                        select(BuildRun).where(BuildRun.status.in_(active))
-                    )
+                    await session.execute(select(BuildRun).where(BuildRun.status.in_(active)))
                 ).scalars()
             )
             for run in rows:
@@ -196,9 +192,7 @@ async def _reconcile_stuck_employees() -> None:
         async with session_scope() as session:
             rows = list(
                 (
-                    await session.execute(
-                        select(Employee).where(Employee.status.in_(stale))
-                    )
+                    await session.execute(select(Employee).where(Employee.status.in_(stale)))
                 ).scalars()
             )
             for employee in rows:
@@ -258,15 +252,11 @@ async def _reconcile_unknown_tool_calls() -> None:
                     "applied": sum(1 for r in reports if r.verdict.value == "APPLIED"),
                     "not_applied": sum(1 for r in reports if r.verdict.value == "NOT_APPLIED"),
                     "undecidable": sum(1 for r in reports if r.verdict.value == "UNDECIDABLE"),
-                    "examples": [
-                        f"{r.tool_name}:{r.verdict.value}" for r in reports[:8]
-                    ],
+                    "examples": [f"{r.tool_name}:{r.verdict.value}" for r in reports[:8]],
                 },
             )
     except Exception as exc:
-        logger.error(
-            "tool_call_reconcile_failed", extra={"error": f"{type(exc).__name__}: {exc}"}
-        )
+        logger.error("tool_call_reconcile_failed", extra={"error": f"{type(exc).__name__}: {exc}"})
 
 
 async def _reconcile_interrupted_agent_runs() -> None:
@@ -323,9 +313,7 @@ async def _reconcile_interrupted_agent_runs() -> None:
                 ids = [run.id for run in rows]
                 agent_rows = list(
                     (
-                        await session.execute(
-                            select(AgentRun).where(AgentRun.ai_run_id.in_(ids))
-                        )
+                        await session.execute(select(AgentRun).where(AgentRun.ai_run_id.in_(ids)))
                     ).scalars()
                 )
                 for agent_run in agent_rows:
@@ -336,7 +324,9 @@ async def _reconcile_interrupted_agent_runs() -> None:
                     # two disagreeing: the row said FAILED and the API said EXECUTING, for
                     # the same run. Reassigned rather than mutated in place, because an
                     # in-place edit of a JSONB column is not tracked and would not be saved.
-                    scratchpad = agent_run.scratchpad if isinstance(agent_run.scratchpad, dict) else {}
+                    scratchpad = (
+                        agent_run.scratchpad if isinstance(agent_run.scratchpad, dict) else {}
+                    )
                     agent_run.scratchpad = {**scratchpad, "state": RunState.INTERRUPTED.value}
                 await session.commit()
         if orphans:

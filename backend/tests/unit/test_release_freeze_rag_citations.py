@@ -39,11 +39,7 @@ def test_one_citation_for_many_claims_is_not_grounded() -> None:
     The first sentence cites [1] and the two that follow cite nothing. Under the old rule
     this was "grounded" because a valid number was present.
     """
-    answer = (
-        "G1 把堆划分为 Region[1]。"
-        "ZGC 追求极低的停顿时间。"
-        "HashMap 在 JDK 8 之后采用红黑树。"
-    )
+    answer = "G1 把堆划分为 Region[1]。ZGC 追求极低的停顿时间。HashMap 在 JDK 8 之后采用红黑树。"
     report = analyse_citations(answer, 2)
     assert report.grounded is False
     assert report.claim_units == 3

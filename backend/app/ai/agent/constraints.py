@@ -144,7 +144,9 @@ class TaskConstraints:
     def render(self) -> str:
         lines = ["【本次任务的硬约束】这些来自任务本身，优先于任何长期偏好："]
         if self.duration_minutes:
-            lines.append(f"- 汇报时长：{self.duration_minutes:g} 分钟（依据：原文「{self.evidence}」）")
+            lines.append(
+                f"- 汇报时长：{self.duration_minutes:g} 分钟（依据：原文「{self.evidence}」）"
+            )
         if self.has_slide_range:
             lines.append(f"- 幻灯片页数：必须是 {self.slide_min}~{self.slide_max} 页")
             lines.append(f"- 依据：{self.rationale()}")
@@ -278,9 +280,8 @@ class PreferenceResolution:
         if self.constraints.has_slide_range:
             lines.append(f"- 硬约束：{self.constraints.rationale()}。")
         if self.target_slides:
-            if (
-                self.target_slides == self.constraints.slide_min
-                and any(o.verdict == "bounded" for o in self.bounded)
+            if self.target_slides == self.constraints.slide_min and any(
+                o.verdict == "bounded" for o in self.bounded
             ):
                 reason = (
                     f"这是 {self.constraints.duration_minutes:g} 分钟约束下的最小值，"
@@ -513,9 +514,7 @@ async def load_preferences(session: AsyncSession, user_id: Any) -> list[Preferen
         # Not fatal — a run without personalisation still runs. But it is logged
         # rather than swallowed, because "no preferences" and "could not read the
         # preferences" must not look the same from the outside.
-        logger.warning(
-            "preference_load_failed", extra={"error": f"{type(exc).__name__}: {exc}"}
-        )
+        logger.warning("preference_load_failed", extra={"error": f"{type(exc).__name__}: {exc}"})
     return found
 
 

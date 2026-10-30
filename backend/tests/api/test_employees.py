@@ -45,8 +45,12 @@ async def test_role_catalogue_is_public_to_a_logged_in_user(
     data = (await client.get("/employees/templates", headers=auth_headers)).json()["data"]
     roles = {t["role_id"] for t in data["templates"]}
     assert roles == {
-        "assistant", "researcher", "knowledge_manager",
-        "document_expert", "software_engineer", "blank",
+        "assistant",
+        "researcher",
+        "knowledge_manager",
+        "document_expert",
+        "software_engineer",
+        "blank",
     }
     assert data["default_role_id"] == "assistant"
     assert data["total_tools"] > 0
@@ -61,9 +65,18 @@ async def test_each_role_template_carries_its_contract(
     researcher = next(t for t in data["templates"] if t["role_id"] == "researcher")
     # The user is choosing a role; the whole contract is the information they need.
     for key in (
-        "mission", "responsibilities", "out_of_scope", "inputs", "sop", "tools",
-        "deliverable_kind", "deliverable_location", "acceptance", "needs_approval",
-        "prohibitions", "definition_of_done",
+        "mission",
+        "responsibilities",
+        "out_of_scope",
+        "inputs",
+        "sop",
+        "tools",
+        "deliverable_kind",
+        "deliverable_location",
+        "acceptance",
+        "needs_approval",
+        "prohibitions",
+        "definition_of_done",
     ):
         assert researcher[key], f"研究员的合同缺少 {key}"
 
@@ -109,9 +122,7 @@ async def test_two_employees_cannot_share_a_name(
 async def test_unknown_role_is_rejected_with_the_list(
     client: httpx.AsyncClient, auth_headers: dict[str, str]
 ) -> None:
-    response = await client.post(
-        "/employees", json={"role_id": "astronaut"}, headers=auth_headers
-    )
+    response = await client.post("/employees", json={"role_id": "astronaut"}, headers=auth_headers)
     # 422, not 400: `ValidationError` maps to UNPROCESSABLE_CONTENT across this project.
     assert response.status_code == 422
     assert "astronaut" in response.text
@@ -313,9 +324,7 @@ async def test_another_user_cannot_read_an_employee(
 ) -> None:
     employee = await _hire(client, auth_headers, name="私有的")
     other = await _second_user(client)
-    assert (
-        await client.get(f"/employees/{employee['id']}", headers=other)
-    ).status_code == 404
+    assert (await client.get(f"/employees/{employee['id']}", headers=other)).status_code == 404
 
 
 @pytest.mark.asyncio
@@ -325,13 +334,9 @@ async def test_another_user_cannot_edit_or_delete_an_employee(
     employee = await _hire(client, auth_headers, name="不许动")
     other = await _second_user(client)
     assert (
-        await client.patch(
-            f"/employees/{employee['id']}", json={"mission": "劫持"}, headers=other
-        )
+        await client.patch(f"/employees/{employee['id']}", json={"mission": "劫持"}, headers=other)
     ).status_code == 404
-    assert (
-        await client.delete(f"/employees/{employee['id']}", headers=other)
-    ).status_code == 404
+    assert (await client.delete(f"/employees/{employee['id']}", headers=other)).status_code == 404
     assert (
         await client.post(f"/employees/{employee['id']}/archive", headers=other)
     ).status_code == 404

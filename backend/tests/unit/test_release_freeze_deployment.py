@@ -120,7 +120,9 @@ def test_infra_script_generates_and_persists_a_key() -> None:
     assert "api_key: $env:QDRANT_API_KEY" in text
 
 
-def test_backend_reads_the_launcher_key_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_backend_reads_the_launcher_key_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """The backend and the launcher are separate processes; the file is how they agree."""
     from app.core import config as config_module
     from app.core.config import Settings
@@ -137,7 +139,9 @@ def test_backend_reads_the_launcher_key_file(tmp_path: Path, monkeypatch: pytest
     assert explicit.qdrant_api_key == "explicit-key"
 
 
-def test_backend_tolerates_a_missing_key_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_backend_tolerates_a_missing_key_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     from app.core import config as config_module
     from app.core.config import Settings
 

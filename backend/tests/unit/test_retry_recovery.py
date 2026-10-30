@@ -90,13 +90,17 @@ class FakeLLM:
             if str(getattr(message, "role", "")) == "user":
                 last_user = index
         return sum(
-            1 for message in messages[last_user + 1 :] if str(getattr(message, "role", "")) == "tool"
+            1
+            for message in messages[last_user + 1 :]
+            if str(getattr(message, "role", "")) == "tool"
         )
 
     def _tool(self, name: str, arguments: dict) -> ChatResult:
         return ChatResult(
             content="",
-            tool_calls=[ToolCallRequest(id=f"call-{len(self.prompts)}", name=name, arguments=arguments)],
+            tool_calls=[
+                ToolCallRequest(id=f"call-{len(self.prompts)}", name=name, arguments=arguments)
+            ],
         )
 
     async def chat(self, messages, **kwargs) -> ChatResult:
@@ -147,7 +151,9 @@ class FakeRegistry:
 
 
 def build_agent(*, llm, registry, max_retries=3, max_tool_calls=100, tmp_path=None):
-    policy = AgentPolicy.from_settings(level=2, max_retries=max_retries, max_tool_calls=max_tool_calls)
+    policy = AgentPolicy.from_settings(
+        level=2, max_retries=max_retries, max_tool_calls=max_tool_calls
+    )
     controller = RunController(run_id="test-run", owner_id=uuid.uuid4())
     agent = AutonomousAgent(
         llm=llm,
@@ -278,7 +284,10 @@ async def test_an_identical_retry_is_refused_instead_of_run_again(tmp_path):
 async def test_a_different_second_attempt_is_allowed(tmp_path):
     """A genuinely different retry is not mistaken for a loop."""
     llm = FakeLLM(
-        executor_plan=lambda turn: ("file_write", {"path": f"notes/attempt-{turn}.md", "content": "x"})
+        executor_plan=lambda turn: (
+            "file_write",
+            {"path": f"notes/attempt-{turn}.md", "content": "x"},
+        )
     )
     registry = FakeRegistry()
     agent, _controller = build_agent(llm=llm, registry=registry, max_retries=1, tmp_path=tmp_path)
@@ -302,7 +311,9 @@ async def test_recovery_that_produced_nothing_stops_the_step(tmp_path):
 
     step = result.plan.steps[0]
     assert len(step.attempts) == 1, "a failed recovery must not lead to another attempt"
-    assert any("恢复分析失败" in event.message for event in controller.events if event.kind == "error")
+    assert any(
+        "恢复分析失败" in event.message for event in controller.events if event.kind == "error"
+    )
     assert result.state is not module.RunState.LIMIT_REACHED
 
 
@@ -331,6 +342,7 @@ async def test_one_step_cannot_spend_the_whole_run_budget(tmp_path, monkeypatch)
 @pytest.mark.asyncio
 async def test_a_successful_step_never_enters_recovery(tmp_path):
     """Scenario A: no failure, no recovery, no history."""
+
     class PassingVerify(FakeLLM):
         async def chat(self, messages, **kwargs):
             system = self._system(messages)

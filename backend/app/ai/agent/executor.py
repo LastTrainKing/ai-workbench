@@ -214,7 +214,11 @@ class AgentExecutor:
         """
         lines: list[str] = []
         specs = registry.specs()
-        business = [s for s in specs if s.category in {"knowledge", "task", "project", "note", "ai", "general"}]
+        business = [
+            s
+            for s in specs
+            if s.category in {"knowledge", "task", "project", "note", "ai", "general"}
+        ]
         computer = [s for s in specs if s not in business]
 
         if business:
@@ -242,7 +246,9 @@ class AgentExecutor:
                     if spec.requires_confirmation or spec.risk_level in {"high", "critical"}:
                         flags.append("需确认")
                     suffix = f" [{'/'.join(flags)}]" if flags else ""
-                    lines.append(f"  - {spec.name}{suffix}: {spec.description} 参数: {params or '无'}")
+                    lines.append(
+                        f"  - {spec.name}{suffix}: {spec.description} 参数: {params or '无'}"
+                    )
         return "\n".join(lines)
 
     async def _system_prompt(
@@ -390,7 +396,9 @@ class AgentExecutor:
                     break
 
                 request = chat.tool_calls[0]
-                signature = f"{request.name}:{json.dumps(request.arguments, sort_keys=True, default=str)}"
+                signature = (
+                    f"{request.name}:{json.dumps(request.arguments, sort_keys=True, default=str)}"
+                )
                 seen_calls[signature] = seen_calls.get(signature, 0) + 1
                 if seen_calls[signature] > 1:
                     stopped_reason = AgentStopReason.LOOP_DETECTED.value
@@ -446,9 +454,7 @@ class AgentExecutor:
                 )
                 await session.commit()
 
-                result: ToolResult = await registry.execute(
-                    ctx, request.name, request.arguments
-                )
+                result: ToolResult = await registry.execute(ctx, request.name, request.arguments)
                 step = AgentStep(
                     index=step_index,
                     thought=(chat.content or "").strip()[:2000],
@@ -600,8 +606,7 @@ class AgentExecutor:
         except AIError as exc:
             agent_run.status = RunStatus.FAILED.value
             agent_run.scratchpad = [
-                {"step": s.index, "tool": s.tool, "ok": s.ok, "summary": s.summary}
-                for s in steps
+                {"step": s.index, "tool": s.tool, "ok": s.ok, "summary": s.summary} for s in steps
             ]
             await session.flush()
             await recorder.finish(

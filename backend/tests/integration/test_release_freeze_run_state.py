@@ -167,9 +167,7 @@ def _stub_provider(monkeypatch: pytest.MonkeyPatch):
     """Replace the provider factory with a controllable stub."""
 
     def install(llm: Any) -> None:
-        monkeypatch.setattr(
-            executor_module, "build_llm_provider", lambda: (llm, _StubInfo())
-        )
+        monkeypatch.setattr(executor_module, "build_llm_provider", lambda: (llm, _StubInfo()))
 
     return install
 
@@ -212,12 +210,12 @@ async def test_agent_hitting_max_steps_is_incomplete_not_succeeded(
 
         from app.models.ai import AgentRun, AIRun
 
-        run = (
-            await session.execute(select(AIRun).where(AIRun.owner_id == owner))
-        ).scalars().one()
+        run = (await session.execute(select(AIRun).where(AIRun.owner_id == owner))).scalars().one()
         agent = (
-            await session.execute(select(AgentRun).where(AgentRun.owner_id == owner))
-        ).scalars().one()
+            (await session.execute(select(AgentRun).where(AgentRun.owner_id == owner)))
+            .scalars()
+            .one()
+        )
         # The three places the status is visible must agree.
         assert run.status == RunStatus.INCOMPLETE.value
         assert agent.status == RunStatus.INCOMPLETE.value
@@ -295,9 +293,7 @@ async def test_claimed_deliverable_that_does_not_exist_is_not_a_success(
 
         from app.models.ai import AIRun
 
-        run = (
-            await session.execute(select(AIRun).where(AIRun.owner_id == owner))
-        ).scalars().one()
+        run = (await session.execute(select(AIRun).where(AIRun.owner_id == owner))).scalars().one()
         assert run.status == RunStatus.INCOMPLETE.value
         assert run.result_payload["verified"] is False
         assert run.result_payload["verification_problems"]

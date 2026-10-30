@@ -118,9 +118,9 @@ def test_garbage_plan_falls_back_to_a_minimal_executable_plan() -> None:
     plan = PlannerService._normalise_plan({}, "掌握 RAG 检索", 7)
     assert plan["phases"], "a plan must always be produced"
     assert plan["goal"] == "掌握 RAG 检索"
-    assert all(
-        t["completion_criteria"] for p in plan["phases"] for t in p["tasks"]
-    ), "even the fallback must satisfy the contract"
+    assert all(t["completion_criteria"] for p in plan["phases"] for t in p["tasks"]), (
+        "even the fallback must satisfy the contract"
+    )
 
 
 def test_invalid_priority_is_normalised() -> None:

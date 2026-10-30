@@ -60,7 +60,10 @@ class CodeSearchTool(Tool):
             "type": "object",
             "properties": {
                 "pattern": {"type": "string"},
-                "path": {"type": "string", "description": "File or directory (default: working directory)"},
+                "path": {
+                    "type": "string",
+                    "description": "File or directory (default: working directory)",
+                },
                 "file_pattern": {"type": "string", "description": "Glob, e.g. *.py"},
                 "regex": {"type": "boolean"},
                 "case_sensitive": {"type": "boolean"},
@@ -94,7 +97,16 @@ class CodeSearchTool(Tool):
             raise ValidationError(f"Invalid regular expression: {exc}") from exc
 
         limit = max(1, min(int(max_results or 100), 500))
-        skip_dirs = {"node_modules", ".git", "__pycache__", ".venv", "venv", "dist", "build", ".next"}
+        skip_dirs = {
+            "node_modules",
+            ".git",
+            "__pycache__",
+            ".venv",
+            "venv",
+            "dist",
+            "build",
+            ".next",
+        }
         targets: list[Path] = []
 
         if base.is_file():
@@ -136,7 +148,12 @@ class CodeSearchTool(Tool):
 
         return ToolResult(
             ok=True,
-            data={"matches": hits, "count": len(hits), "files_scanned": scanned, "truncated": len(hits) >= limit},
+            data={
+                "matches": hits,
+                "count": len(hits),
+                "files_scanned": scanned,
+                "truncated": len(hits) >= limit,
+            },
             summary=f"{len(hits)} match(es) in {scanned} file(s)",
         )
 
@@ -157,7 +174,10 @@ class CodeReplaceTool(Tool):
             "type": "object",
             "properties": {
                 "path": {"type": "string"},
-                "old_text": {"type": "string", "description": "Must match exactly, including indentation"},
+                "old_text": {
+                    "type": "string",
+                    "description": "Must match exactly, including indentation",
+                },
                 "new_text": {"type": "string"},
                 "allow_multiple": {"type": "boolean", "description": "Replace every occurrence"},
             },
@@ -258,7 +278,9 @@ class CodePatchTool(Tool):
         for start, old_lines, new_lines in hunks:
             index = start - 1 + offset
             window = lines[index : index + len(old_lines)]
-            if [line.rstrip("\r\n") for line in window] != [line.rstrip("\r\n") for line in old_lines]:
+            if [line.rstrip("\r\n") for line in window] != [
+                line.rstrip("\r\n") for line in old_lines
+            ]:
                 return ToolResult(
                     ok=False,
                     error=(
@@ -401,9 +423,13 @@ class CodeAnalyzeTool(Tool):
             for number, line in enumerate(lines, start=1):
                 stripped = line.strip()
                 if re.match(r"^(export\s+)?(default\s+)?class\s+\w+", stripped):
-                    analysis["classes"].append({"name": re.findall(r"class\s+(\w+)", stripped)[0], "line": number})
+                    analysis["classes"].append(
+                        {"name": re.findall(r"class\s+(\w+)", stripped)[0], "line": number}
+                    )
                 elif re.match(r"^(export\s+)?(async\s+)?function\s+\w+", stripped):
-                    analysis["functions"].append({"name": re.findall(r"function\s+(\w+)", stripped)[0], "line": number})
+                    analysis["functions"].append(
+                        {"name": re.findall(r"function\s+(\w+)", stripped)[0], "line": number}
+                    )
                 elif re.match(r"^(export\s+)?const\s+\w+\s*=\s*(async\s*)?\(", stripped):
                     analysis["functions"].append(
                         {"name": re.findall(r"const\s+(\w+)", stripped)[0], "line": number}

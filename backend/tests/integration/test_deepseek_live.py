@@ -191,7 +191,7 @@ async def test_real_json_mode_succeeds_without_the_word_json(provider: DeepSeekP
     result = await provider.chat(
         [
             ChatMessage(role="system", content="请输出一个结构化对象，包含字段 ok。"),
-            ChatMessage(role="user", content="输出 {\"ok\": true}"),
+            ChatMessage(role="user", content='输出 {"ok": true}'),
         ],
         temperature=0.0,
         max_tokens=512,

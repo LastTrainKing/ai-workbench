@@ -102,9 +102,7 @@ async def ensure_seeded(session: AsyncSession) -> int:
       "seeded from the code" from "written by someone in the UI", and it is the whole
       reason this can be automatic rather than a prompt.
     """
-    rows = (
-        await session.execute(select(Prompt, PromptVersion).join(PromptVersion))
-    ).all()
+    rows = (await session.execute(select(Prompt, PromptVersion).join(PromptVersion))).all()
     by_name: dict[str, list[tuple[Prompt, PromptVersion]]] = {}
     for prompt, version in rows:
         by_name.setdefault(prompt.name, []).append((prompt, version))
@@ -206,10 +204,10 @@ async def get_prompt(session: AsyncSession, name: str) -> ResolvedPrompt:
 async def list_prompts(session: AsyncSession) -> list[dict[str, object]]:
     rows = (await session.execute(select(Prompt).order_by(Prompt.name))).scalars().all()
     versions = (
-        await session.execute(
-            select(PromptVersion).where(PromptVersion.is_current.is_(True))
-        )
-    ).scalars().all()
+        (await session.execute(select(PromptVersion).where(PromptVersion.is_current.is_(True))))
+        .scalars()
+        .all()
+    )
     current_by_prompt = {v.prompt_id: v for v in versions}
     counts: dict[object, int] = {}
     all_versions = (await session.execute(select(PromptVersion))).scalars().all()
@@ -229,9 +227,9 @@ async def list_prompts(session: AsyncSession) -> list[dict[str, object]]:
                 "is_active": prompt.is_active,
                 "current_version": version.version if version else 0,
                 "version_count": counts.get(prompt.id, 0),
-                "variables": list(version.variables or []) if version else (
-                    builtin.variables if builtin else []
-                ),
+                "variables": list(version.variables or [])
+                if version
+                else (builtin.variables if builtin else []),
                 "updated_at": prompt.updated_at,
                 "task": builtin.task if builtin else "",
             }
@@ -259,9 +257,7 @@ async def list_prompts(session: AsyncSession) -> list[dict[str, object]]:
 
 
 async def get_prompt_detail(session: AsyncSession, name: str) -> dict[str, object]:
-    prompt = (
-        await session.execute(select(Prompt).where(Prompt.name == name))
-    ).scalar_one_or_none()
+    prompt = (await session.execute(select(Prompt).where(Prompt.name == name))).scalar_one_or_none()
     builtin = TEMPLATES_BY_NAME.get(name)
     if prompt is None and builtin is None:
         raise NotFoundError(f"Prompt '{name}' does not exist")
@@ -273,7 +269,9 @@ async def get_prompt_detail(session: AsyncSession, name: str) -> dict[str, objec
                 .where(PromptVersion.prompt_id == prompt.id)
                 .order_by(PromptVersion.version.desc())
             )
-        ).scalars().all()
+        )
+        .scalars()
+        .all()
         if prompt
         else []
     )
@@ -313,9 +311,7 @@ async def create_version(
     if len(content) > 40_000:
         raise ValidationError("Prompt content is too long (max 40000 chars)")
 
-    prompt = (
-        await session.execute(select(Prompt).where(Prompt.name == name))
-    ).scalar_one_or_none()
+    prompt = (await session.execute(select(Prompt).where(Prompt.name == name))).scalar_one_or_none()
     if prompt is None:
         builtin = TEMPLATES_BY_NAME.get(name)
         prompt = Prompt(
@@ -366,9 +362,7 @@ async def create_version(
 
 
 async def activate_version(session: AsyncSession, name: str, version: int) -> dict[str, object]:
-    prompt = (
-        await session.execute(select(Prompt).where(Prompt.name == name))
-    ).scalar_one_or_none()
+    prompt = (await session.execute(select(Prompt).where(Prompt.name == name))).scalar_one_or_none()
     if prompt is None:
         raise NotFoundError(f"Prompt '{name}' does not exist")
     target = (
@@ -382,9 +376,7 @@ async def activate_version(session: AsyncSession, name: str, version: int) -> di
         raise NotFoundError(f"Prompt '{name}' has no version {version}")
 
     await session.execute(
-        update(PromptVersion)
-        .where(PromptVersion.prompt_id == prompt.id)
-        .values(is_current=False)
+        update(PromptVersion).where(PromptVersion.prompt_id == prompt.id).values(is_current=False)
     )
     target.is_current = True
     await session.flush()

@@ -24,10 +24,29 @@ request_id_var: ContextVar[str] = ContextVar("request_id", default="-")
 run_id_var: ContextVar[str] = ContextVar("run_id", default="-")
 
 _RESERVED = {
-    "name", "msg", "args", "levelname", "levelno", "pathname", "filename",
-    "module", "exc_info", "exc_text", "stack_info", "lineno", "funcName",
-    "created", "msecs", "relativeCreated", "thread", "threadName",
-    "processName", "process", "taskName", "message", "asctime",
+    "name",
+    "msg",
+    "args",
+    "levelname",
+    "levelno",
+    "pathname",
+    "filename",
+    "module",
+    "exc_info",
+    "exc_text",
+    "stack_info",
+    "lineno",
+    "funcName",
+    "created",
+    "msecs",
+    "relativeCreated",
+    "thread",
+    "threadName",
+    "processName",
+    "process",
+    "taskName",
+    "message",
+    "asctime",
 }
 
 _SENSITIVE_KEYS = ("api_key", "apikey", "authorization", "password", "secret", "token")
@@ -155,9 +174,7 @@ def configure_logging(service: str = "api") -> None:
 
     level = getattr(logging, settings.log_level.upper(), logging.INFO)
     handler = logging.StreamHandler(_safe_stream(sys.stdout))
-    handler.setFormatter(
-        JsonFormatter(service) if settings.log_json else ConsoleFormatter(service)
-    )
+    handler.setFormatter(JsonFormatter(service) if settings.log_json else ConsoleFormatter(service))
 
     root = logging.getLogger()
     root.handlers.clear()

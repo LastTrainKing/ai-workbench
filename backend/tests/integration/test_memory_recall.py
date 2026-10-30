@@ -135,7 +135,9 @@ def test_rank_is_empty_for_an_empty_corpus() -> None:
 
 def test_rank_respects_the_limit() -> None:
     """And returns the best first, so `[:limit]` is a top-N and not an arbitrary N."""
-    recalled = rank("做一份答辩 PPT，页数别太多，封面要写清楚", [_Memory(t) for t in MEMORIES], limit=1)
+    recalled = rank(
+        "做一份答辩 PPT，页数别太多，封面要写清楚", [_Memory(t) for t in MEMORIES], limit=1
+    )
     assert len(recalled) == 1
 
 
@@ -196,7 +198,9 @@ async def test_the_assembler_injects_only_what_is_relevant(
     )
     assert "答辩" not in unrelated.render()
 
-    related = await ContextAssembler(session, user_id=user_id).assemble(goal="帮我写一份项目验收报告")
+    related = await ContextAssembler(session, user_id=user_id).assemble(
+        goal="帮我写一份项目验收报告"
+    )
     memory_block = next(block for block in related.blocks if block.kind == "memory")
     assert MEMORIES[0] in memory_block.text
     assert "答辩" not in memory_block.text

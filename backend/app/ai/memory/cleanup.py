@@ -182,9 +182,7 @@ def _parse_index(value: Any, size: int) -> int | None:
     return index if 1 <= index <= size else None
 
 
-async def plan_cleanup(
-    session: AsyncSession, *, user_id: uuid.UUID, llm: Any
-) -> CleanupPlan:
+async def plan_cleanup(session: AsyncSession, *, user_id: uuid.UUID, llm: Any) -> CleanupPlan:
     """Work out what a cleanup would do, and write nothing.
 
     Returns a plan whose every entry names a row and says why it is on the list, so the
@@ -250,9 +248,7 @@ async def plan_cleanup(
     # Measured here: 6,212 characters of reasoning against a 2,000-token ceiling, and
     # the endpoint answered 502. Raising it is the fix; retrying with the same budget
     # is the same failure again.
-    chat = await llm.chat(
-        messages, temperature=0.0, max_tokens=reasoning_budget(), json_mode=True
-    )
+    chat = await llm.chat(messages, temperature=0.0, max_tokens=reasoning_budget(), json_mode=True)
     try:
         parsed = json.loads(chat.content)
     except json.JSONDecodeError as exc:

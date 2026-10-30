@@ -83,9 +83,7 @@ def _narrow_level(base: PermissionLevel, requested: Any) -> PermissionLevel:
     return want if want < base else base
 
 
-def _narrow_tools(
-    base: frozenset[str] | None, profile: dict[str, Any]
-) -> frozenset[str] | None:
+def _narrow_tools(base: frozenset[str] | None, profile: dict[str, Any]) -> frozenset[str] | None:
     """The employee's tool whitelist, intersected with the user's if the user has one.
 
     Three cases, and the middle one is the one that matters:

@@ -138,9 +138,7 @@ class EmployeeService:
         # logger's own name — so passing it raises at emit time and turns a clean 201
         # into a 500. `test_project_integrity` scans for exactly this, and it scans the
         # source text, so the sentence describing the mistake must not spell it out.
-        logger.info(
-            "employee created", extra={"role": role_id, "employee_name": final_name}
-        )
+        logger.info("employee created", extra={"role": role_id, "employee_name": final_name})
         return employee
 
     async def update_employee(

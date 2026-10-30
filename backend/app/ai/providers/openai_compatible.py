@@ -101,9 +101,7 @@ class OpenAICompatibleProvider(LLMProvider):
     ) -> None:
         super().__init__(model=model, timeout=timeout, max_retries=max_retries)
         if not api_key:
-            raise AIAuthError(
-                "AI_API_KEY is not configured for the openai_compatible provider."
-            )
+            raise AIAuthError("AI_API_KEY is not configured for the openai_compatible provider.")
         # A key written before the save path checked for this, or edited into the config
         # file by hand, still reaches here. `httpx` encodes header values as ASCII, so
         # without this the failure is `UnicodeEncodeError` from inside the HTTP client —
@@ -349,16 +347,17 @@ class OpenAICompatibleProvider(LLMProvider):
             return EmbeddingResult(vectors=[], model=self.model, provider=self.name, dimension=0)
 
         started = time.perf_counter()
-        data = await self._post(
-            "/embeddings", {"model": self.model, "input": list(texts)}
-        )
+        data = await self._post("/embeddings", {"model": self.model, "input": list(texts)})
         latency_ms = int((time.perf_counter() - started) * 1000)
 
         rows = data.get("data")
         if not isinstance(rows, list) or len(rows) != len(texts):
             raise AIResponseFormatError(
                 "Embedding response size does not match the request",
-                details={"expected": len(texts), "got": len(rows) if isinstance(rows, list) else None},
+                details={
+                    "expected": len(texts),
+                    "got": len(rows) if isinstance(rows, list) else None,
+                },
             )
         # Some vendors return rows out of order; honour the explicit index.
         ordered = sorted(rows, key=lambda r: r.get("index", 0))

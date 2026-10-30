@@ -296,9 +296,17 @@ def test_swapping_a_named_thing_is_not_a_near_copy():
     genuine rephrasing in the sample. `same_thing` refuses it because the two statements
     do not name the same things, which is the only signal that separates them.
     """
-    assert same_thing("用户在做毕业设计，需要写文献综述", "用户正在做毕业设计，要写文献综述") is True
+    assert (
+        same_thing("用户在做毕业设计，需要写文献综述", "用户正在做毕业设计，要写文献综述") is True
+    )
     assert same_thing("用户喜欢用 Python 写脚本。", "用户喜欢用 Java 写脚本。") is False
-    assert same_thing("用户以后所有项目都使用 Vue，不再使用 React。", "用户以后所有项目都用 Vue，不用 React 了。") is True
+    assert (
+        same_thing(
+            "用户以后所有项目都使用 Vue，不再使用 React。",
+            "用户以后所有项目都用 Vue，不用 React 了。",
+        )
+        is True
+    )
 
 
 @pytest.mark.asyncio

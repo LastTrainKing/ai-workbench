@@ -68,7 +68,11 @@ class LLMProvider(ABC):
         the kind of thing this project keeps writing comments about.
         """
         result = await self.chat(
-            messages, temperature=temperature, max_tokens=max_tokens, tools=tools, json_mode=json_mode
+            messages,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            tools=tools,
+            json_mode=json_mode,
         )
         if result.content or result.reasoning_content:
             yield ChatStreamChunk(
