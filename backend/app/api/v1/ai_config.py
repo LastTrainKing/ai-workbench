@@ -108,7 +108,9 @@ async def list_models(
             f"Unknown provider '{provider}'", details={"allowed": provider_registry.ids()}
         )
 
-    models = [{"id": m.id, "label": m.label, "description": m.description} for m in descriptor.models]
+    models = [
+        {"id": m.id, "label": m.label, "description": m.description} for m in descriptor.models
+    ]
 
     # Optionally ask the vendor. Only attempted when the provider is active and
     # has a key, so this cannot accidentally bill an unconfigured account.

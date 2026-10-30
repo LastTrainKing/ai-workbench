@@ -22,7 +22,10 @@ class Note(Base, UUIDPrimaryKeyMixin, TimestampMixin):
         Uuid(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
     )
     project_id: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid(as_uuid=True), ForeignKey("projects.id", ondelete="SET NULL"), nullable=True, index=True
+        Uuid(as_uuid=True),
+        ForeignKey("projects.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
     )
     knowledge_base_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid(as_uuid=True),

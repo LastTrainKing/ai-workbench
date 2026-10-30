@@ -194,7 +194,11 @@ TOOLS = [
     ToolSpec(
         name="knowledge_search",
         description="search",
-        parameters={"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]},
+        parameters={
+            "type": "object",
+            "properties": {"query": {"type": "string"}},
+            "required": ["query"],
+        },
     ),
     ToolSpec(
         name="task_create_batch",
@@ -208,7 +212,11 @@ TOOLS = [
     ToolSpec(
         name="note_create",
         description="create a note",
-        parameters={"type": "object", "properties": {"title": {"type": "string"}}, "required": ["title"]},
+        parameters={
+            "type": "object",
+            "properties": {"title": {"type": "string"}},
+            "required": ["title"],
+        },
     ),
 ]
 

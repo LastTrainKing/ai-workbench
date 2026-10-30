@@ -59,6 +59,13 @@ jobs:
       - name: ruff
         run: ruff check backend/app backend/tests desktop-native tools
 
+      # 格式检查（KI-03 的守卫）。此前 CI 只跑 `ruff check`，不查格式，
+      # 所以 `docs/testing.md` 里写的 `ruff format --check` 从来没被守住过，
+      # 一路飘到 136 个文件不合规。现在把它接进 CI，防止再漂。
+      - name: ruff format
+        working-directory: backend
+        run: ruff format --check app tests
+
       # 文档里的相对链接必须指向存在的东西。**没有任何东西会在链接烂掉时报错**，
       # 所以它只能靠一条会失败的检查守着。第一次跑就抓到两个：`docs/archive/`
       # 里两个链接写成了仓库根相对，而文件本身在下一层 —— 目标存在、链接是断的。

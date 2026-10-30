@@ -153,9 +153,7 @@ class AgentRun(Base, UUIDPrimaryKeyMixin):
         Uuid(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
     )
     goal: Mapped[str] = mapped_column(Text, nullable=False, default="")
-    status: Mapped[str] = mapped_column(
-        String(16), nullable=False, default=RunStatus.RUNNING.value
-    )
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default=RunStatus.RUNNING.value)
     max_steps: Mapped[int] = mapped_column(Integer, nullable=False, default=8)
     steps_used: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     plan: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, nullable=False, default=list)
@@ -234,7 +232,10 @@ class AIRunSource(Base):
         Uuid(as_uuid=True), ForeignKey("ai_runs.id", ondelete="CASCADE"), nullable=False, index=True
     )
     document_id: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid(as_uuid=True), ForeignKey("documents.id", ondelete="SET NULL"), nullable=True, index=True
+        Uuid(as_uuid=True),
+        ForeignKey("documents.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
     )
     chunk_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid(as_uuid=True), ForeignKey("document_chunks.id", ondelete="SET NULL"), nullable=True

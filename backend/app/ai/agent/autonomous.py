@@ -52,8 +52,15 @@ logger = get_logger(__name__)
 #: Tools whose results are evidence, not opinion. A step that ran one of these
 #: and saw a non-zero exit code has failed, full stop.
 EVIDENCE_TOOLS = {
-    "run_tests", "run_lint", "run_typecheck", "run_build",
-    "terminal_exec", "powershell_exec", "cmd_exec", "python_exec", "node_exec",
+    "run_tests",
+    "run_lint",
+    "run_typecheck",
+    "run_build",
+    "terminal_exec",
+    "powershell_exec",
+    "cmd_exec",
+    "python_exec",
+    "node_exec",
 }
 
 #: How many tool calls a single step may use before it is considered stuck.
@@ -138,6 +145,7 @@ async def _chat(
         logger.warning("reasoning_budget_raised", extra={"from": budget, "to": wider})
         return await asyncio.wait_for(call(wider), timeout=timeout * 2)
 
+
 #: Phrases that mark a step as *diagnostic* rather than *assertive*.
 #:
 #: "Run the tests and record which ones fail" is a step whose whole purpose is to
@@ -149,9 +157,26 @@ async def _chat(
 #: those, producing real output is the success criterion; the exit code still
 #: decides every step that asserts a result.
 _DIAGNOSTIC_MARKERS = (
-    "记录", "读取", "观察", "定位", "分析", "查看", "列出", "确认失败", "复现",
-    "record", "read", "observe", "locate", "analyse", "analyze", "inspect",
-    "list", "reproduce", "capture", "identify",
+    "记录",
+    "读取",
+    "观察",
+    "定位",
+    "分析",
+    "查看",
+    "列出",
+    "确认失败",
+    "复现",
+    "record",
+    "read",
+    "observe",
+    "locate",
+    "analyse",
+    "analyze",
+    "inspect",
+    "list",
+    "reproduce",
+    "capture",
+    "identify",
 )
 
 
@@ -344,12 +369,17 @@ def repair_tool_pairing(messages: list[ChatMessage]) -> list[ChatMessage]:
                 repaired = [
                     m
                     for m in repaired
-                    if not (str(getattr(m, "role", "")) == "assistant" and getattr(m, "tool_calls", None))
+                    if not (
+                        str(getattr(m, "role", "")) == "assistant"
+                        and getattr(m, "tool_calls", None)
+                    )
                 ]
                 pending_ids.clear()
             if calls:
                 pending_ids = {
-                    str(call.get("id")) for call in calls if isinstance(call, dict) and call.get("id")
+                    str(call.get("id"))
+                    for call in calls
+                    if isinstance(call, dict) and call.get("id")
                 }
             repaired.append(message)
             continue
@@ -613,8 +643,11 @@ class AutonomousAgent:
                 # nothing under it is exactly the bug this method was written to fix.
                 logger.warning(
                     "skill_matched_without_body",
-                    extra={"run_id": self.controller.run_id, "skill_id": match.id,
-                           "skill_name": match.name},
+                    extra={
+                        "run_id": self.controller.run_id,
+                        "skill_id": match.id,
+                        "skill_name": match.name,
+                    },
                 )
                 continue
             blocks.append(f"【他的做法：{match.name}】\n{body}")
@@ -644,9 +677,7 @@ class AutonomousAgent:
             # Stated as a hard requirement, ahead of the goal, so the plan is built
             # around it rather than patched to fit it afterwards.
             system += (
-                "\n\n"
-                + requirements
-                + "\n\n【规划时必须遵守】\n"
+                "\n\n" + requirements + "\n\n【规划时必须遵守】\n"
                 "1. 硬约束是任务本身的要求，优先于任何长期偏好。\n"
                 "2. 长期偏好只能在硬约束范围内起作用；被标为 bounded 的偏好要按上面的结论执行，"
                 "不要自行放大或缩小。\n"
@@ -743,7 +774,9 @@ class AutonomousAgent:
         raise RuntimeError(f"无法生成可执行的计划：{last_error}")
 
     # ================================================================= execute ==
-    async def _run_tools_for_step(self, step: PlanStep, plan: ExecutionPlan) -> list[dict[str, Any]]:
+    async def _run_tools_for_step(
+        self, step: PlanStep, plan: ExecutionPlan
+    ) -> list[dict[str, Any]]:
         """Let the model work on one step until it stops calling tools."""
         personal = await self._personal_context(purpose="executor", goal=plan.goal)
         history = render_attempt_history(step)
@@ -770,7 +803,9 @@ class AutonomousAgent:
         messages: list[ChatMessage] = [ChatMessage(role="system", content=system)]
         # Bounded, and repaired at the boundary — see `trim_history`.
         messages.extend(trim_history(self._tool_messages, 6))
-        messages.append(ChatMessage(role="user", content=f"请执行第 {step.id} 步：{step.description}"))
+        messages.append(
+            ChatMessage(role="user", content=f"请执行第 {step.id} 步：{step.description}")
+        )
 
         observations: list[dict[str, Any]] = []
         summary = ""
@@ -857,7 +892,9 @@ class AutonomousAgent:
                             "type": "function",
                             "function": {
                                 "name": request.name,
-                                "arguments": json.dumps(request.arguments, ensure_ascii=False, default=str),
+                                "arguments": json.dumps(
+                                    request.arguments, ensure_ascii=False, default=str
+                                ),
                             },
                         }
                     ],
@@ -868,7 +905,9 @@ class AutonomousAgent:
                     role="tool",
                     name=request.name,
                     tool_call_id=request.id,
-                    content=json.dumps(result.to_payload(limit=2000), ensure_ascii=False, default=str),
+                    content=json.dumps(
+                        result.to_payload(limit=2000), ensure_ascii=False, default=str
+                    ),
                 )
             )
         else:
@@ -879,7 +918,9 @@ class AutonomousAgent:
         return observations
 
     # ================================================================== verify ==
-    async def _verify_step(self, step: PlanStep, plan: ExecutionPlan) -> tuple[bool, dict[str, Any]]:
+    async def _verify_step(
+        self, step: PlanStep, plan: ExecutionPlan
+    ) -> tuple[bool, dict[str, Any]]:
         """Decide whether a step succeeded, using evidence.
 
         The model is asked for a *tool call* that proves the step, not for an
@@ -1065,10 +1106,15 @@ class AutonomousAgent:
 
             manager = get_snapshot_manager()
             snapshot = await asyncio.to_thread(
-                manager.create, self.working_directory, label=goal[:120], run_id=self.controller.run_id
+                manager.create,
+                self.working_directory,
+                label=goal[:120],
+                run_id=self.controller.run_id,
             )
             snapshot_id = snapshot.id
-            self.controller.emit("state", message=f"已创建快照 {snapshot_id}", data={"snapshot_id": snapshot_id})
+            self.controller.emit(
+                "state", message=f"已创建快照 {snapshot_id}", data={"snapshot_id": snapshot_id}
+            )
         except Exception as exc:
             logger.warning("snapshot_failed", extra={"error": str(exc)})
 
@@ -1087,12 +1133,19 @@ class AutonomousAgent:
             if exhausted:
                 self.controller.set_state(RunState.LIMIT_REACHED, f"已达资源上限：{exhausted}")
                 return self._result(
-                    RunState.LIMIT_REACHED, started, plan, snapshot_id, all_evidence, error=exhausted
+                    RunState.LIMIT_REACHED,
+                    started,
+                    plan,
+                    snapshot_id,
+                    all_evidence,
+                    error=exhausted,
                 )
 
             step.status = StepStatus.RUNNING
             step.started_at = time.strftime("%H:%M:%S")
-            self.controller.set_state(RunState.EXECUTING, f"执行第 {step.id} 步：{step.description}")
+            self.controller.set_state(
+                RunState.EXECUTING, f"执行第 {step.id} 步：{step.description}"
+            )
 
             # What this step has spent, so one step cannot eat the whole run.
             #
@@ -1126,9 +1179,13 @@ class AutonomousAgent:
                     observations = await self._run_tools_for_step(step, plan)
                 except RunCancelledError:
                     step.status = StepStatus.SKIPPED
-                    return self._result(RunState.CANCELLED, started, plan, snapshot_id, all_evidence)
+                    return self._result(
+                        RunState.CANCELLED, started, plan, snapshot_id, all_evidence
+                    )
                 except Exception as exc:
-                    observations = [{"tool": "", "ok": False, "error": f"{type(exc).__name__}: {exc}"}]
+                    observations = [
+                        {"tool": "", "ok": False, "error": f"{type(exc).__name__}: {exc}"}
+                    ]
 
                 self.controller.set_state(RunState.OBSERVING, f"分析第 {step.id} 步的结果")
 
@@ -1139,7 +1196,9 @@ class AutonomousAgent:
                     step.status = StepStatus.DONE
                     step.completed_at = time.strftime("%H:%M:%S")
                     step.result = step.result or evidence.get("summary", "")
-                    self.controller.emit("step", message=f"第 {step.id} 步完成", data=step.as_dict())
+                    self.controller.emit(
+                        "step", message=f"第 {step.id} 步完成", data=step.as_dict()
+                    )
                     break
 
                 step.status = StepStatus.FAILED
@@ -1164,7 +1223,11 @@ class AutonomousAgent:
                     message=(
                         f"第 {step.id} 步第 {attempt} 次尝试："
                         + ("、".join(record["tools_used"]) or "没有调用工具")
-                        + ("（与上一次完全相同）" if record["same_as_previous"] else "（与上一次不同）")
+                        + (
+                            "（与上一次完全相同）"
+                            if record["same_as_previous"]
+                            else "（与上一次不同）"
+                        )
                     ),
                     data={"attempt": record, "step": step.id},
                 )
@@ -1274,7 +1337,9 @@ class AutonomousAgent:
                 logger.warning("post_state_failed", extra={"error": str(exc)})
 
         answer = await self._final_report(plan, state, all_evidence)
-        return self._result(state, started, plan, snapshot_id, all_evidence, answer=answer, verified=verified)
+        return self._result(
+            state, started, plan, snapshot_id, all_evidence, answer=answer, verified=verified
+        )
 
     # ------------------------------------------------------------- final check --
     #: How many times the final verifier may try to *obtain* evidence.
@@ -1284,9 +1349,7 @@ class AutonomousAgent:
     #: call that errored, where nothing was learned either way.
     MAX_FINAL_VERIFY_ATTEMPTS = 3
 
-    async def _final_verify(
-        self, plan: ExecutionPlan
-    ) -> tuple[bool, bool, list[dict[str, Any]]]:
+    async def _final_verify(self, plan: ExecutionPlan) -> tuple[bool, bool, list[dict[str, Any]]]:
         """Check the plan's success criteria against real evidence.
 
         Returns `(passed, conclusive, evidence)`. `conclusive` is False when the
@@ -1451,7 +1514,9 @@ class AutonomousAgent:
                     role="tool",
                     name=request.name,
                     tool_call_id=request.id,
-                    content=json.dumps(result.to_payload(limit=2000), ensure_ascii=False, default=str),
+                    content=json.dumps(
+                        result.to_payload(limit=2000), ensure_ascii=False, default=str
+                    ),
                 )
             )
             messages.append(

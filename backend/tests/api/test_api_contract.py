@@ -64,7 +64,9 @@ async def test_metrics_endpoint(client: httpx.AsyncClient) -> None:
     assert registered.status_code == 201
     token = registered.json()["data"]["access_token"]
 
-    data = (await client.get("/metrics", headers={"Authorization": f"Bearer {token}"})).json()["data"]
+    data = (await client.get("/metrics", headers={"Authorization": f"Bearer {token}"})).json()[
+        "data"
+    ]
     assert data["enabled"] is True
     assert "ai_24h" in data
     assert "cache" in data
@@ -80,7 +82,12 @@ async def test_register_login_and_profile(client: httpx.AsyncClient) -> None:
 
     registered = await client.post(
         "/auth/register",
-        json={"email": email, "username": username, "password": "test1234", "display_name": "Alice"},
+        json={
+            "email": email,
+            "username": username,
+            "password": "test1234",
+            "display_name": "Alice",
+        },
     )
     assert registered.status_code == 201
     body = registered.json()
@@ -145,9 +152,7 @@ async def test_missing_and_malformed_tokens(client: httpx.AsyncClient) -> None:
     assert (
         await client.get("/auth/me", headers={"Authorization": "Bearer not-a-jwt"})
     ).status_code == 401
-    assert (
-        await client.get("/auth/me", headers={"Authorization": "Bearer "})
-    ).status_code == 401
+    assert (await client.get("/auth/me", headers={"Authorization": "Bearer "})).status_code == 401
 
 
 @pytest.mark.asyncio
@@ -266,7 +271,9 @@ async def test_project_lifecycle_with_stats(client: httpx.AsyncClient, auth_head
     assert listing["meta"]["total"] == 1
     assert listing["meta"]["has_next"] is False
 
-    assert (await client.delete(f"/projects/{project['id']}", headers=auth_headers)).status_code == 200
+    assert (
+        await client.delete(f"/projects/{project['id']}", headers=auth_headers)
+    ).status_code == 200
 
 
 @pytest.mark.asyncio
@@ -286,9 +293,13 @@ async def test_knowledge_base_stats_reflect_documents(
         data={"knowledge_base_id": knowledge_base["id"]},
     )
     async with session_scope() as session:
-        await DocumentService(session).ingest(uuid_module.UUID(upload.json()["data"]["document"]["id"]))
+        await DocumentService(session).ingest(
+            uuid_module.UUID(upload.json()["data"]["document"]["id"])
+        )
 
-    detail = (await client.get(f"/knowledge-bases/{knowledge_base['id']}", headers=auth_headers)).json()["data"]
+    detail = (
+        await client.get(f"/knowledge-bases/{knowledge_base['id']}", headers=auth_headers)
+    ).json()["data"]
     assert detail["stats"]["document_count"] == 1
     assert detail["stats"]["chunk_count"] > 0
     assert detail["stats"]["embedded_chunk_count"] == detail["stats"]["chunk_count"]
@@ -306,11 +317,15 @@ async def test_notes_crud(client: httpx.AsyncClient, auth_headers: dict) -> None
     assert note["is_ai_generated"] is False
 
     updated = await client.patch(
-        f"/notes/{note['id']}", headers=auth_headers, json={"content_md": "# 更新", "is_pinned": True}
+        f"/notes/{note['id']}",
+        headers=auth_headers,
+        json={"content_md": "# 更新", "is_pinned": True},
     )
     assert updated.json()["data"]["is_pinned"] is True
 
-    listing = (await client.get("/notes", headers=auth_headers, params={"q": "更新"})).json()["data"]
+    listing = (await client.get("/notes", headers=auth_headers, params={"q": "更新"})).json()[
+        "data"
+    ]
     assert listing["meta"]["total"] == 1
 
     assert (await client.delete(f"/notes/{note['id']}", headers=auth_headers)).status_code == 200
@@ -363,10 +378,14 @@ async def test_dashboard_numbers_come_from_the_database(
         data={"knowledge_base_id": knowledge_base["id"]},
     )
     async with session_scope() as session:
-        await DocumentService(session).ingest(uuid_module.UUID(upload.json()["data"]["document"]["id"]))
+        await DocumentService(session).ingest(
+            uuid_module.UUID(upload.json()["data"]["document"]["id"])
+        )
 
     await client.post("/tasks", headers=auth_headers, json={"title": "任务 A"})
-    done = (await client.post("/tasks", headers=auth_headers, json={"title": "任务 B"})).json()["data"]
+    done = (await client.post("/tasks", headers=auth_headers, json={"title": "任务 B"})).json()[
+        "data"
+    ]
     await client.post(f"/tasks/{done['id']}/complete", headers=auth_headers, json={})
 
     data = (await client.get("/stats/dashboard", headers=auth_headers)).json()["data"]
@@ -414,7 +433,9 @@ async def test_graph_projects_relationships(
     async with session_scope() as session:
         await DocumentService(session).ingest(uuid_module.UUID(document_id))
 
-    task = (await client.post("/tasks", headers=auth_headers, json={"title": "学习 GC"})).json()["data"]
+    task = (await client.post("/tasks", headers=auth_headers, json={"title": "学习 GC"})).json()[
+        "data"
+    ]
     await client.post(
         f"/tasks/{task['id']}/knowledge", headers=auth_headers, json={"document_id": document_id}
     )
@@ -481,7 +502,9 @@ async def test_ai_runs_are_isolated_between_users(client: httpx.AsyncClient) -> 
     headers_a = {"Authorization": f"Bearer {first.json()['data']['access_token']}"}
     headers_b = {"Authorization": f"Bearer {second.json()['data']['access_token']}"}
 
-    run = (await client.post("/planner/plan", headers=headers_a, json={"goal": "A 的计划"})).json()["data"]
+    run = (await client.post("/planner/plan", headers=headers_a, json={"goal": "A 的计划"})).json()[
+        "data"
+    ]
     run_id = run["plan"]["run_id"]
 
     assert (await client.get(f"/ai-runs/{run_id}", headers=headers_a)).status_code == 200

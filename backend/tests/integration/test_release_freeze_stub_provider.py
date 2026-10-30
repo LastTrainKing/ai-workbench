@@ -120,15 +120,21 @@ async def account():
 async def _read_run(owner: uuid.UUID) -> tuple[AIRun | None, AgentRun | None]:
     async with session_scope() as session:
         run = (
-            await session.execute(
-                select(AIRun).where(AIRun.owner_id == owner).order_by(AIRun.created_at.desc())
+            (
+                await session.execute(
+                    select(AIRun).where(AIRun.owner_id == owner).order_by(AIRun.created_at.desc())
+                )
             )
-        ).scalars().first()
+            .scalars()
+            .first()
+        )
         agent = None
         if run is not None:
             agent = (
-                await session.execute(select(AgentRun).where(AgentRun.ai_run_id == run.id))
-            ).scalars().first()
+                (await session.execute(select(AgentRun).where(AgentRun.ai_run_id == run.id)))
+                .scalars()
+                .first()
+            )
         return run, agent
 
 
@@ -230,7 +236,9 @@ async def test_repeated_identical_tool_call_is_detected_and_stopped(account: uui
     assert agent is not None and agent.status == "INCOMPLETE"
     # The guard fired before the ceiling: the stub was asked once, the duplicate was
     # refused without a second request.
-    assert stub.call_count == 2, f"expected 2 completions (1 real + 1 duplicate), got {stub.call_count}"
+    assert stub.call_count == 2, (
+        f"expected 2 completions (1 real + 1 duplicate), got {stub.call_count}"
+    )
     assert "重复调用" in outcome.final_answer
 
 
@@ -305,14 +313,18 @@ async def _wait_for_running(owner: uuid.UUID, *, timeout: float) -> AIRun | None
     while time.time() < deadline:
         async with session_scope() as session:
             row = (
-                await session.execute(
-                    select(AIRun).where(
-                        AIRun.owner_id == owner,
-                        AIRun.run_type == "AGENT",
-                        AIRun.status == "RUNNING",
+                (
+                    await session.execute(
+                        select(AIRun).where(
+                            AIRun.owner_id == owner,
+                            AIRun.run_type == "AGENT",
+                            AIRun.status == "RUNNING",
+                        )
                     )
                 )
-            ).scalars().first()
+                .scalars()
+                .first()
+            )
         if row is not None:
             return row
         await asyncio.sleep(0.5)

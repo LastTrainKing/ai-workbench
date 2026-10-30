@@ -66,7 +66,9 @@ def _llm_cache_key(cfg: ResolvedAIConfig) -> str:
     # a secret into a log line or a traceback.
     import hashlib
 
-    key_hash = hashlib.sha256(cfg.api_key.encode("utf-8")).hexdigest()[:12] if cfg.api_key else "none"
+    key_hash = (
+        hashlib.sha256(cfg.api_key.encode("utf-8")).hexdigest()[:12] if cfg.api_key else "none"
+    )
     return f"{cfg.provider}:{cfg.model}:{cfg.base_url}:{key_hash}:{cfg.timeout_seconds}"
 
 
@@ -291,7 +293,9 @@ def provider_catalog() -> list[dict[str, Any]]:
     return _provider_catalog()
 
 
-async def test_connection(*, provider: str | None = None, model: str | None = None) -> dict[str, Any]:
+async def test_connection(
+    *, provider: str | None = None, model: str | None = None
+) -> dict[str, Any]:
     """Send one minimal request to prove the current configuration works.
 
     The budget is small but not minimal: a reasoning model spends the allowance

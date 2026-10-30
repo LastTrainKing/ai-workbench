@@ -273,9 +273,7 @@ class NoteService:
             raise NotFoundError("Note not found")
         return note
 
-    async def update(
-        self, *, owner_id: uuid.UUID, note_id: uuid.UUID, **changes: Any
-    ) -> Note:
+    async def update(self, *, owner_id: uuid.UUID, note_id: uuid.UUID, **changes: Any) -> Note:
         note = await self.get(owner_id=owner_id, note_id=note_id)
         if changes.get("title"):
             note.title = str(changes["title"]).strip()[:300]

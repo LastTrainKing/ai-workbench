@@ -84,9 +84,7 @@ def test_a_non_ascii_key_already_on_disk_degrades_instead_of_crashing() -> None:
     """A config file written before this check existed, or edited by hand."""
     runtime_config.CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     _account_file().write_text(
-        json.dumps(
-            {"provider": "deepseek", "model": "deepseek-flash", "api_key": PASTED_LINE}
-        ),
+        json.dumps({"provider": "deepseek", "model": "deepseek-flash", "api_key": PASTED_LINE}),
         encoding="utf-8",
     )
     runtime_config._cache.clear()

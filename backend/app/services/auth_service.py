@@ -50,9 +50,7 @@ class AuthService:
         if await self.users.by_email(email):
             raise ConflictError("This email is already registered", details={"field": "email"})
         if await self.users.by_username(payload.username):
-            raise ConflictError(
-                "This username is already taken", details={"field": "username"}
-            )
+            raise ConflictError("This username is already taken", details={"field": "username"})
 
         user = User(
             email=email,

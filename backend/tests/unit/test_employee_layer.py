@@ -309,7 +309,7 @@ def test_missing_skills_key_inherits() -> None:
 
 
 def test_empty_skills_list_allows_nothing() -> None:
-    """"I listed no tools" is a statement, not an omission."""
+    """ "I listed no tools" is a statement, not an omission."""
     assert tool_allowed({"skills": []}, "file_read") is False
 
 
@@ -317,6 +317,7 @@ def test_whitelist_admits_only_what_it_names() -> None:
     profile = {"skills": ["file_read", "knowledge_search"]}
     assert tool_allowed(profile, "file_read") is True
     assert tool_allowed(profile, "file_delete") is False
+
 
 # --------------------------------------------------------------------------- #
 # the whitelist reaches the executor, not just the display

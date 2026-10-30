@@ -176,9 +176,7 @@ async def test_apply_merges_and_sums_the_usage():
 
 @pytest.mark.asyncio
 async def test_apply_deletes_the_litter():
-    user_id = await seed(
-        memories=[("这是一条浏览器测试写入的记忆", 0), ("用户不吃香菜", 3)]
-    )
+    user_id = await seed(memories=[("这是一条浏览器测试写入的记忆", 0), ("用户不吃香菜", 3)])
     planner = ScriptedPlanner(
         # Index 2, not 1: the plan lists memories by use count descending, so the row
         # with 3 uses is first and the litter is second. Getting this wrong is what the
@@ -225,7 +223,10 @@ async def test_a_real_memory_is_never_merged_away():
 async def test_an_out_of_range_index_is_ignored():
     user_id = await seed(memories=[("用户偏好图表充足", 10), ("用户不吃香菜", 2)])
     planner = ScriptedPlanner(
-        {"duplicates": [{"keep": 99, "merge": [2], "why": "x"}], "litter": [{"index": 0, "why": "y"}]}
+        {
+            "duplicates": [{"keep": 99, "merge": [2], "why": "x"}],
+            "litter": [{"index": 0, "why": "y"}],
+        }
     )
     async with session_scope() as session:
         plan = await plan_cleanup(session, user_id=user_id, llm=planner)
@@ -294,16 +295,24 @@ async def test_the_evidence_count_survives_the_fold():
     user_id = await seed(candidates=["用户偏好图表充足", "用户偏好图表更多"])
     async with session_scope() as session:
         keeper = (
-            await session.execute(
-                select(MemoryCandidate).where(MemoryCandidate.user_id == user_id)
+            (
+                await session.execute(
+                    select(MemoryCandidate).where(MemoryCandidate.user_id == user_id)
+                )
             )
-        ).scalars().first()
+            .scalars()
+            .first()
+        )
         assert keeper is not None
         keeper.structured = {"evidence_count": 5}
         await session.flush()
 
     planner = ScriptedPlanner(
-        {"duplicates": [], "litter": [], "candidate_duplicates": [{"keep": 1, "merge": [2], "why": "x"}]}
+        {
+            "duplicates": [],
+            "litter": [],
+            "candidate_duplicates": [{"keep": 1, "merge": [2], "why": "x"}],
+        }
     )
     async with session_scope() as session:
         plan = await plan_cleanup(session, user_id=user_id, llm=planner)
@@ -320,7 +329,9 @@ async def test_the_evidence_count_survives_the_fold():
 # --------------------------------------------------------------------------- #
 @pytest.mark.asyncio
 async def test_the_planner_sees_memories_and_candidates():
-    user_id = await seed(memories=[("用户偏好图表充足", 3)], candidates=["用户以后所有项目都用 Vue"])
+    user_id = await seed(
+        memories=[("用户偏好图表充足", 3)], candidates=["用户以后所有项目都用 Vue"]
+    )
     planner = ScriptedPlanner({"duplicates": [], "litter": [], "candidate_duplicates": []})
     async with session_scope() as session:
         await plan_cleanup(session, user_id=user_id, llm=planner)

@@ -74,7 +74,9 @@ def _actions_for(item: Deliverable, state: dict[str, Any], *, goal: str) -> list
             "id": "preview",
             "label": "预览",
             "enabled": exists and previewable,
-            "reason": gone if not exists else ("" if previewable else "该格式不在应用内预览，请用系统程序打开"),
+            "reason": gone
+            if not exists
+            else ("" if previewable else "该格式不在应用内预览，请用系统程序打开"),
         },
         {
             "id": "open",

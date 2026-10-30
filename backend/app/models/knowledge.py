@@ -46,7 +46,10 @@ class KnowledgeBase(Base, UUIDPrimaryKeyMixin, TimestampMixin):
         Uuid(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
     )
     project_id: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid(as_uuid=True), ForeignKey("projects.id", ondelete="SET NULL"), nullable=True, index=True
+        Uuid(as_uuid=True),
+        ForeignKey("projects.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
     )
     name: Mapped[str] = mapped_column(String(160), nullable=False)
     description: Mapped[str] = mapped_column(Text, nullable=False, default="")
@@ -84,7 +87,10 @@ class Document(Base, UUIDPrimaryKeyMixin, TimestampMixin):
         index=True,
     )
     project_id: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid(as_uuid=True), ForeignKey("projects.id", ondelete="SET NULL"), nullable=True, index=True
+        Uuid(as_uuid=True),
+        ForeignKey("projects.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
     )
 
     title: Mapped[str] = mapped_column(String(300), nullable=False)
@@ -130,7 +136,10 @@ class DocumentChunk(Base, UUIDPrimaryKeyMixin):
     )
 
     document_id: Mapped[uuid.UUID] = mapped_column(
-        Uuid(as_uuid=True), ForeignKey("documents.id", ondelete="CASCADE"), nullable=False, index=True
+        Uuid(as_uuid=True),
+        ForeignKey("documents.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
     )
     knowledge_base_id: Mapped[uuid.UUID] = mapped_column(
         Uuid(as_uuid=True),
@@ -186,7 +195,9 @@ class Concept(Base, UUIDPrimaryKeyMixin, TimestampMixin):
 
     __tablename__ = "concepts"
     __table_args__ = (
-        UniqueConstraint("owner_id", "normalized_name", name="uq_concepts_owner_id_normalized_name"),
+        UniqueConstraint(
+            "owner_id", "normalized_name", name="uq_concepts_owner_id_normalized_name"
+        ),
     )
 
     owner_id: Mapped[uuid.UUID] = mapped_column(
@@ -195,9 +206,7 @@ class Concept(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     normalized_name: Mapped[str] = mapped_column(String(200), nullable=False, index=True)
     description: Mapped[str] = mapped_column(Text, nullable=False, default="")
-    source: Mapped[str] = mapped_column(
-        String(16), nullable=False, default=ConceptSource.AI.value
-    )
+    source: Mapped[str] = mapped_column(String(16), nullable=False, default=ConceptSource.AI.value)
     mention_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
 

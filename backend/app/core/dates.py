@@ -16,7 +16,9 @@ def utcnow() -> datetime:
     return datetime.now(UTC)
 
 
-def parse_datetime(value: str | datetime | None, *, default: datetime | None = None) -> datetime | None:
+def parse_datetime(
+    value: str | datetime | None, *, default: datetime | None = None
+) -> datetime | None:
     """Parse an ISO-8601 date/datetime or a simple relative expression.
 
     Accepted forms: ``2026-11-01``, ``2026-11-01T09:30:00Z``,

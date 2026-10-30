@@ -42,7 +42,11 @@ class _BytesStream:
         self._pos = 0
 
     async def read(self, size: int = -1) -> bytes:
-        chunk = self._data[self._pos :] if size is None or size < 0 else self._data[self._pos : self._pos + size]
+        chunk = (
+            self._data[self._pos :]
+            if size is None or size < 0
+            else self._data[self._pos : self._pos + size]
+        )
         self._pos += len(chunk)
         return chunk
 
@@ -67,7 +71,9 @@ async def _seed() -> tuple[uuid.UUID, uuid.UUID, uuid.UUID]:
         session.add(kb)
         await session.flush()
 
-        stored = await save_upload(_BytesStream(DOC.encode("utf-8")), "doc.md", content_type="text/markdown")
+        stored = await save_upload(
+            _BytesStream(DOC.encode("utf-8")), "doc.md", content_type="text/markdown"
+        )
         document, _job, _dup = await DocumentService(session).register_upload(
             owner_id=owner, knowledge_base_id=kb.id, stored=stored
         )
@@ -89,9 +95,7 @@ async def _drop(owner: uuid.UUID) -> None:
 
     async with session_scope() as session:
         # `DocumentChunk` has no `owner_id` — it is reached through its knowledge base.
-        kb_ids = list(
-            (await session.execute(select(KB.id).where(KB.owner_id == owner))).scalars()
-        )
+        kb_ids = list((await session.execute(select(KB.id).where(KB.owner_id == owner))).scalars())
         if kb_ids:
             await session.execute(
                 delete(DocumentChunk).where(DocumentChunk.knowledge_base_id.in_(kb_ids))
@@ -135,7 +139,9 @@ async def test_ingesting_with_a_different_model_at_the_same_dimension_is_refused
     monkeypatch.setattr(embedding_module.EmbeddingService, "model", property(_different_model))
 
     async with session_scope() as session:
-        stored = await save_upload(_BytesStream(DOC_2.encode("utf-8")), "doc2.md", content_type="text/markdown")
+        stored = await save_upload(
+            _BytesStream(DOC_2.encode("utf-8")), "doc2.md", content_type="text/markdown"
+        )
         document, _job, _dup = await DocumentService(session).register_upload(
             owner_id=owner, knowledge_base_id=kb_id, stored=stored
         )
@@ -195,7 +201,9 @@ async def test_a_knowledge_base_with_no_vectors_yet_accepts_any_model(
         session.add(kb)
         await session.flush()
         kb_id = kb.id
-        stored = await save_upload(_BytesStream(DOC.encode("utf-8")), "doc.md", content_type="text/markdown")
+        stored = await save_upload(
+            _BytesStream(DOC.encode("utf-8")), "doc.md", content_type="text/markdown"
+        )
         document, _job, _dup = await DocumentService(session).register_upload(
             owner_id=owner, knowledge_base_id=kb_id, stored=stored
         )

@@ -53,12 +53,16 @@ async def _check() -> int:
     print(f"[{'OK' if qdrant_ok else 'FAIL'}] Qdrant      {qdrant_detail}")
     llm = providers.get("llm", {})
     emb = providers.get("embedding", {})
-    print(f"[{'OK' if not llm.get('degraded') else 'WARN'}] LLM         "
-          f"provider={llm.get('kind')} model={llm.get('model')}")
+    print(
+        f"[{'OK' if not llm.get('degraded') else 'WARN'}] LLM         "
+        f"provider={llm.get('kind')} model={llm.get('model')}"
+    )
     if llm.get("degraded"):
         print(f"        reason: {llm.get('reason')}")
-    print(f"[{'OK' if not emb.get('degraded') else 'WARN'}] Embedding   "
-          f"provider={emb.get('kind')} model={emb.get('model')}")
+    print(
+        f"[{'OK' if not emb.get('degraded') else 'WARN'}] Embedding   "
+        f"provider={emb.get('kind')} model={emb.get('model')}"
+    )
     if emb.get("degraded"):
         print(f"        reason: {emb.get('reason')}")
     return 0 if (db_ok and redis_ok and qdrant_ok) else 1
@@ -88,9 +92,7 @@ async def _stats() -> None:
         print(f"{'table':<18}{'rows':>8}")
         print("-" * 26)
         for name, model in rows:
-            count = (
-                await session.execute(select(func.count()).select_from(model))
-            ).scalar_one()
+            count = (await session.execute(select(func.count()).select_from(model))).scalar_one()
             print(f"{name:<18}{int(count):>8}")
 
 
@@ -224,9 +226,7 @@ def main(argv: list[str] | None = None) -> int:
         asyncio.run(_reindex(args.knowledge_base))
         return 0
     if args.command == "create-user":
-        asyncio.run(
-            _create_user(args.username, args.email, args.password, args.display_name)
-        )
+        asyncio.run(_create_user(args.username, args.email, args.password, args.display_name))
         return 0
     if args.command == "init-env":
         return _init_env(Path(args.root) if args.root else None)

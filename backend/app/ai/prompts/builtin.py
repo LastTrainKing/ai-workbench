@@ -37,6 +37,7 @@ class PromptTemplate:
 
 def render_template(content: str, values: dict[str, object]) -> str:
     """Substitute ``{name}`` placeholders, leaving unknown placeholders intact."""
+
     def _sub(match: re.Match[str]) -> str:
         key = match.group(1)
         if key not in values:

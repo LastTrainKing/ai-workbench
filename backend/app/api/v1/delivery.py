@@ -204,6 +204,7 @@ async def cancel_build_run(
 # Deliverables
 # --------------------------------------------------------------------------- #
 
+
 @router.get("/deliverables", summary="List deliverables")
 async def list_deliverables(
     user: CurrentUser,
@@ -307,7 +308,9 @@ async def open_deliverable(
     return ok(await open_path(Path(item.path)), message="已用系统默认程序打开")
 
 
-@router.post("/build-runs/{build_run_id}/deliverables", status_code=201, summary="Register a produced file")
+@router.post(
+    "/build-runs/{build_run_id}/deliverables", status_code=201, summary="Register a produced file"
+)
 async def register_deliverable(
     build_run_id: uuid.UUID,
     payload: DeliverableCreate,
@@ -335,7 +338,9 @@ async def register_deliverable(
         title=payload.title,
         style=payload.style,
         parent_id=payload.parent_id,
-        applied_preferences={"digest": assembled.profile_digest[:400]} if not assembled.is_empty else {},
+        applied_preferences={"digest": assembled.profile_digest[:400]}
+        if not assembled.is_empty
+        else {},
     )
     result = await service.verify_deliverable(owner_id=user.id, deliverable_id=item.id)
     return ok({"deliverable": item.as_dict(), "verification": result}, message="产出物已登记并校验")

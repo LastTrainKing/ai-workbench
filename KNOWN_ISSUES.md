@@ -1,5 +1,7 @@
 # KNOWN ISSUES — AI Workbench 2.2.0
 
+> **2026-10-30 更新**：KI-03（ruff format）已关闭，见该条。
+
 Things that are **not fixed**. Each is either an external block or a defect this round
 chose not to fix, with the reason stated. Nothing here is a fixable defect renamed as a
 "limitation" — if it could be fixed in this environment, it is fixed and in
@@ -78,18 +80,37 @@ one.
 
 ## Blocked by this machine
 
-### KI-03 — `ruff format --check app tests` fails on 103 files
+### ~~KI-03 — `ruff format --check app tests` fails on 103 files~~ — **CLOSED**
 
-**What.** The documented check in `docs/testing.md` does not pass.
+**What.** The documented check in `docs/testing.md` did not pass.
 
-**Why it is not fixed here.** It is **pre-existing and unrelated to this round**: an
-untouched file (`app/core/logging.py`) also fails it, so the check has never passed on this
-repository. Running the formatter now would produce a whitespace diff across a third of the
-codebase in the middle of a release freeze, which would bury the actual changes and make
-review harder rather than easier.
+**Why it was not fixed then.** It was pre-existing and unrelated to that round: an untouched
+file (`app/core/logging.py`) also failed it, so the check had never passed on this repository.
+Running the formatter during a release freeze would have produced a whitespace diff across a
+third of the codebase and buried the actual changes.
 
-**What would close it.** `ruff format app tests` as its own commit, reviewed separately,
-before the next freeze. Low risk, no behaviour change.
+**Closed on 2026-10-30** exactly as the "what would close it" note prescribed — as its own
+commit, no behaviour change:
+
+```
+$ ruff format app tests
+136 files reformatted, 98 files left unchanged
+
+$ ruff format --check app tests
+234 files already formatted
+
+$ ruff check app tests
+All checks passed!
+
+$ python -m compileall -q app tests      # exit 0
+```
+
+**How it was checked that nothing changed but whitespace.** For a 40-file sample, the set of
+`FunctionDef` / `AsyncFunctionDef` / `ClassDef` names was compared before and after with
+`ast` — **0 structural differences**. Combined with `compileall` exit 0, the change is
+formatting-only.
+
+Diff: 136 files, +2286 / −1099.
 
 ### KI-04 — Multi-monitor DPI is unverified
 
@@ -132,6 +153,36 @@ than implying otherwise.
 
 **Why.** The SYSTEM-level case needs an elevated shell on NTFS with real reparse points.
 This session does not hold that. WORKSPACE-level behaviour is verified and passing.
+
+---
+
+### KI-14 — 11 unit tests fail on a clean Windows checkout (pre-existing)
+
+**What.** `pytest tests/unit` on Windows with current dependency versions:
+**797 passed, 11 failed, 2 skipped**.
+
+| File | Failing tests |
+|---|---|
+| `test_release_freeze_skill_network.py` | 5（allow-list / redirect 相关） |
+| `test_security_fixes_round15.py` | 5（`test_allowlisted_public_hosts_still_pass` ×4 + `test_posting_to_a_trusted_host_is_confirmed`） |
+| `test_user_data_isolation.py` | 1（`REAL_TRAILING_DOT`） |
+
+**Proven not caused by the formatting commit.** The same 11 fail on the pristine `HEAD`
+(`git stash` → run → same 11 failed / 59 passed in that subset → `git stash pop` → identical).
+
+**Likely cause.** Two groups:
+- The network/allow-list ones look like DNS or egress differences on this machine
+  (the redirect tests need a reachable host to resolve).
+- `REAL_TRAILING_DOT` is a Windows path-normalisation difference: `Path(".../data.")`
+  is normalised away by Windows, so the guard never sees the trailing-dot form it
+  expects to reject.
+
+**What would close it.** Run the same suite on Linux (CI does) to see whether it is
+platform-only; for the trailing-dot case, decide whether the guard should compare the
+*normalised* path (which would make the test assert on a form Windows cannot produce).
+
+**Status.** Open. Not fixed — fixing the trailing-dot case changes a security guard's
+semantics, which is not a formatting-round decision.
 
 ---
 

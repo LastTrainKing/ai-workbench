@@ -71,6 +71,7 @@ def _service(session: Any, user: dict, llm: ScriptedLLM) -> ConversationService:
 
 # --------------------------------------------------------------------------- the gate --
 
+
 @pytest.mark.asyncio
 async def test_a_thin_request_is_asked_about_and_builds_nothing(
     session: Any, user_token: tuple[str, dict], started: list[uuid.UUID]
@@ -131,9 +132,7 @@ async def test_a_question_without_a_default_is_kept_and_marked(
     recommendation for that one, and the screen says so.
     """
     _, user = user_token
-    llm = ScriptedLLM(
-        {"decision": "clarify", "questions": [{"question": "要什么格式？"}]}
-    )
+    llm = ScriptedLLM({"decision": "clarify", "questions": [{"question": "要什么格式？"}]})
     service = _service(session, user, llm)
     conversation = await service.create()
 
@@ -144,6 +143,7 @@ async def test_a_question_without_a_default_is_kept_and_marked(
 
 
 # ------------------------------------------------------------------------ the outcomes --
+
 
 @pytest.mark.asyncio
 async def test_a_question_that_needs_no_file_is_just_answered(
@@ -233,6 +233,7 @@ async def test_an_unknown_deliverable_kind_falls_back_rather_than_failing(
 
 # ---------------------------------------------------------------------- don't ask, do --
 
+
 @pytest.mark.asyncio
 async def test_telling_it_not_to_ask_starts_work_and_records_the_assumptions(
     session: Any, user_token: tuple[str, dict], started: list[uuid.UUID]
@@ -283,6 +284,7 @@ async def test_speaking_again_answers_the_outstanding_question(
 
 
 # -------------------------------------------------------------------------- plumbing --
+
 
 @pytest.mark.asyncio
 async def test_the_first_thing_said_becomes_the_title_and_the_greeting_comes_once(
@@ -396,7 +398,9 @@ async def test_routes_refuse_another_users_conversation(
     )
     other_headers = {"Authorization": f"Bearer {other.json()['data']['access_token']}"}
 
-    assert (await client.get(f"/conversations/{conversation_id}", headers=other_headers)).status_code == 404
+    assert (
+        await client.get(f"/conversations/{conversation_id}", headers=other_headers)
+    ).status_code == 404
     assert (
         await client.post(
             f"/conversations/{conversation_id}/messages",
@@ -410,4 +414,3 @@ async def test_routes_refuse_another_users_conversation(
 async def test_routes_require_a_token(client: Any) -> None:
     assert (await client.get("/conversations")).status_code == 401
     assert (await client.post("/conversations", json={})).status_code == 401
-

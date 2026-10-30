@@ -402,7 +402,6 @@ class ResolvedAIConfig:
         }
 
 
-
 # --------------------------------------------------------------------------- #
 # What state is this account's AI configuration in?
 # --------------------------------------------------------------------------- #
@@ -478,8 +477,12 @@ def record_check(owner_id: Any, result: dict[str, Any]) -> dict[str, Any]:
     _cache.pop(path, None)
     logger.info(
         "ai_connection_checked",
-        extra={"owner": _coerce_owner(owner_id), "ok": entry["ok"],
-               "provider": entry["provider"], "error_code": entry["error_code"]},
+        extra={
+            "owner": _coerce_owner(owner_id),
+            "ok": entry["ok"],
+            "provider": entry["provider"],
+            "error_code": entry["error_code"],
+        },
     )
     return entry
 
@@ -528,6 +531,7 @@ def ai_status(owner_id: Any = None) -> dict[str, Any]:
         "check": check,
         "stale_check": bool(check) and state in ("configured_untested",),
     }
+
 
 def mask_api_key(value: str | None) -> str:
     """Return ``sk-****(len=35)`` — enough to identify a key, not to use one."""
@@ -587,9 +591,7 @@ def resolve(owner_id: Any = None, *, root: Path | None = None) -> ResolvedAIConf
         sources[field_name] = origin_name
         return value
 
-    provider = str(
-        pick("provider", (settings.ai_provider, "env"), default="deepseek")
-    ).lower()
+    provider = str(pick("provider", (settings.ai_provider, "env"), default="deepseek")).lower()
     if provider not in _PROVIDER_VALUES:
         raise ValidationError(
             f"Unknown AI provider '{provider}'",
@@ -606,7 +608,9 @@ def resolve(owner_id: Any = None, *, root: Path | None = None) -> ResolvedAIConf
         api_key = str(pick("api_key", (deepseek_key, "env"), default=""))
         model = str(pick("model", (settings.deepseek_model, "env"), default="deepseek-flash"))
     elif provider == "ollama":
-        base_url = str(pick("base_url", (settings.ai_base_url, "env"), default="http://127.0.0.1:11434"))
+        base_url = str(
+            pick("base_url", (settings.ai_base_url, "env"), default="http://127.0.0.1:11434")
+        )
         api_key = str(pick("api_key", (None, "env"), default=""))
         model = str(pick("model", (settings.ai_model, "env"), default="qwen2.5:7b"))
     else:  # openai_compatible | offline
@@ -634,7 +638,11 @@ def resolve(owner_id: Any = None, *, root: Path | None = None) -> ResolvedAIConf
         ),
         embedding_provider=embedding_provider,
         embedding_model=str(
-            pick("embedding_model", (settings.embedding_model, "env"), default="text-embedding-3-small")
+            pick(
+                "embedding_model",
+                (settings.embedding_model, "env"),
+                default="text-embedding-3-small",
+            )
         ),
         embedding_base_url=str(
             pick(
@@ -651,8 +659,7 @@ def resolve(owner_id: Any = None, *, root: Path | None = None) -> ResolvedAIConf
             )
         ),
         enabled_providers=dict(
-            runtime.get("enabled_providers")
-            or dict.fromkeys(sorted(_PROVIDER_VALUES), True)
+            runtime.get("enabled_providers") or dict.fromkeys(sorted(_PROVIDER_VALUES), True)
         ),
         sources=sources,
     )

@@ -47,6 +47,7 @@ os.environ["AI_WORKBENCH_DATA_DIR"] = str(
     __import__("pathlib").Path(__file__).resolve().parents[2] / ".runtime" / "test-runtime"
 )
 
+
 # ...and inherit the machine-local secrets it still needs.
 #
 # Qdrant is started with an API key that lives in the runtime directory, so moving the
@@ -115,9 +116,7 @@ async def _ensure_test_database() -> None:
         database="postgres",
     )
     try:
-        exists = await admin.fetchval(
-            "SELECT 1 FROM pg_database WHERE datname = $1", TEST_DB_NAME
-        )
+        exists = await admin.fetchval("SELECT 1 FROM pg_database WHERE datname = $1", TEST_DB_NAME)
         if not exists:
             await admin.execute(f'CREATE DATABASE "{TEST_DB_NAME}"')
     finally:

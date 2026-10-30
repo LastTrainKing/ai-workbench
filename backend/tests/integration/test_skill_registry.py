@@ -48,7 +48,10 @@ def make_skill(*, params: bool = True, body: str = BODY) -> Skill:
         description="把一周的工作整理成周报",
         when_to_use="需要交周报的时候；每周五整理产出",
         body=body,
-        params=[SkillParam(name="audience", description="汇报对象"), SkillParam(name="tone", description="语气")]
+        params=[
+            SkillParam(name="audience", description="汇报对象"),
+            SkillParam(name="tone", description="语气"),
+        ]
         if params
         else [],
         source="https://github.com/example/skills",
@@ -175,7 +178,9 @@ async def test_a_skill_with_no_params_renders_unchanged(session: AsyncSession) -
 async def test_finds_a_skill_by_when_to_use(session: AsyncSession) -> None:
     user_id = await make_user(session)
     await adopt(session, user_id=user_id, skill=make_skill(), confirmed=True)
-    matches = await find_matching_skills(session, user_id=user_id, question="我要交周报了，帮我整理一下")
+    matches = await find_matching_skills(
+        session, user_id=user_id, question="我要交周报了，帮我整理一下"
+    )
     assert matches, "when_to_use 里写了周报，应该匹配上"
     assert matches[0].name == "weekly-report"
 
@@ -193,7 +198,9 @@ async def test_another_users_skills_are_invisible(session: AsyncSession) -> None
     """Isolation again, on the new table. A skill library is personal."""
     owner = await make_user(session)
     await adopt(session, user_id=owner, skill=make_skill(), confirmed=True)
-    matches = await find_matching_skills(session, user_id=await make_user(session), question="我要交周报了")
+    matches = await find_matching_skills(
+        session, user_id=await make_user(session), question="我要交周报了"
+    )
     assert matches == []
 
 

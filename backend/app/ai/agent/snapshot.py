@@ -42,9 +42,26 @@ logger = get_logger(__name__)
 #: Directories never snapshotted: build output and dependency trees are large,
 #: reproducible, and not something a rollback should ever restore.
 SKIP_DIRS = {
-    ".git", "node_modules", ".venv", "venv", "__pycache__", ".pytest_cache",
-    ".ruff_cache", ".mypy_cache", "target", "dist", "build", ".next", ".turbo",
-    ".runtime", "vendor", "coverage", ".cache", "out", "bin", "obj",
+    ".git",
+    "node_modules",
+    ".venv",
+    "venv",
+    "__pycache__",
+    ".pytest_cache",
+    ".ruff_cache",
+    ".mypy_cache",
+    "target",
+    "dist",
+    "build",
+    ".next",
+    ".turbo",
+    ".runtime",
+    "vendor",
+    "coverage",
+    ".cache",
+    "out",
+    "bin",
+    "obj",
 }
 
 #: Ceilings so a snapshot of a huge tree cannot fill the disk.
@@ -53,11 +70,49 @@ MAX_FILE_BYTES = 5_000_000
 MAX_TOTAL_BYTES = 300_000_000
 
 TEXT_SUFFIXES = {
-    ".py", ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".json", ".md", ".txt",
-    ".toml", ".ini", ".cfg", ".yaml", ".yml", ".xml", ".html", ".css", ".scss",
-    ".sql", ".sh", ".bat", ".cmd", ".ps1", ".java", ".kt", ".go", ".rs", ".c",
-    ".h", ".cpp", ".hpp", ".cs", ".rb", ".php", ".vue", ".svelte", ".env",
-    ".example", ".gitignore", ".lock", ".properties", ".gradle",
+    ".py",
+    ".ts",
+    ".tsx",
+    ".js",
+    ".jsx",
+    ".mjs",
+    ".cjs",
+    ".json",
+    ".md",
+    ".txt",
+    ".toml",
+    ".ini",
+    ".cfg",
+    ".yaml",
+    ".yml",
+    ".xml",
+    ".html",
+    ".css",
+    ".scss",
+    ".sql",
+    ".sh",
+    ".bat",
+    ".cmd",
+    ".ps1",
+    ".java",
+    ".kt",
+    ".go",
+    ".rs",
+    ".c",
+    ".h",
+    ".cpp",
+    ".hpp",
+    ".cs",
+    ".rb",
+    ".php",
+    ".vue",
+    ".svelte",
+    ".env",
+    ".example",
+    ".gitignore",
+    ".lock",
+    ".properties",
+    ".gradle",
 }
 
 
@@ -237,7 +292,9 @@ class WorkspaceSnapshotManager:
             try:
                 shutil.copy2(source, target)
             except OSError as exc:
-                logger.warning("snapshot_copy_failed", extra={"path": entry.path, "error": str(exc)})
+                logger.warning(
+                    "snapshot_copy_failed", extra={"path": entry.path, "error": str(exc)}
+                )
                 entry.stored = False
 
         self._write(snapshot)
@@ -374,9 +431,7 @@ class WorkspaceSnapshotManager:
                 # the stale variable reported a newly added file with the size of
                 # whichever file happened to be visited last, which is a wrong number
                 # rather than a missing one — the harder kind to notice.
-                entries.append(
-                    DiffEntry(path=path, change="added", after_size=current[path].size)
-                )
+                entries.append(DiffEntry(path=path, change="added", after_size=current[path].size))
 
         summary = {
             "added": sum(1 for e in entries if e.change == "added"),
@@ -446,12 +501,16 @@ class WorkspaceSnapshotManager:
             before_lines: list[str] = []
             stored = snapshot.directory / "files" / path
             if entry.change != "added" and stored.is_file():
-                before_lines = stored.read_text(encoding="utf-8", errors="replace").splitlines(keepends=True)
+                before_lines = stored.read_text(encoding="utf-8", errors="replace").splitlines(
+                    keepends=True
+                )
 
             after_lines: list[str] = []
             current = base / path
             if entry.change != "removed" and current.is_file():
-                after_lines = current.read_text(encoding="utf-8", errors="replace").splitlines(keepends=True)
+                after_lines = current.read_text(encoding="utf-8", errors="replace").splitlines(
+                    keepends=True
+                )
 
             diff = difflib.unified_diff(
                 before_lines, after_lines, fromfile=f"a/{path}", tofile=f"b/{path}", n=3
@@ -480,7 +539,9 @@ class WorkspaceSnapshotManager:
             if expected is None:
                 if path in snapshot.files and snapshot.files[path].sha256 != entry.sha256:
                     conflicts.append(
-                        Conflict(path=path, reason="This file changed after the snapshot and the run")
+                        Conflict(
+                            path=path, reason="This file changed after the snapshot and the run"
+                        )
                     )
                 elif path not in snapshot.files:
                     conflicts.append(
@@ -494,9 +555,7 @@ class WorkspaceSnapshotManager:
 
         return conflicts
 
-    def restore(
-        self, snapshot: WorkspaceSnapshot, *, force: bool = False
-    ) -> dict[str, Any]:
+    def restore(self, snapshot: WorkspaceSnapshot, *, force: bool = False) -> dict[str, Any]:
         """Put the workspace back to the snapshot state."""
         base = Path(snapshot.root)
         if not base.is_dir():
@@ -526,7 +585,9 @@ class WorkspaceSnapshotManager:
                     (base / path).unlink()
                     removed.append(path)
                 except OSError as exc:
-                    logger.warning("rollback_delete_failed", extra={"path": path, "error": str(exc)})
+                    logger.warning(
+                        "rollback_delete_failed", extra={"path": path, "error": str(exc)}
+                    )
 
         # Restore or rewrite the rest.
         for path in snapshot.files:

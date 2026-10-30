@@ -69,7 +69,9 @@ class _StubEmbedder:
 
 
 @pytest.fixture
-async def knowledge_base_with_vectors(tmp_path_factory: pytest.TempPathFactory) -> tuple[uuid.UUID, uuid.UUID]:
+async def knowledge_base_with_vectors(
+    tmp_path_factory: pytest.TempPathFactory,
+) -> tuple[uuid.UUID, uuid.UUID]:
     """A knowledge base built by `model-a`, with one chunk already embedded.
 
     The document has a real file behind it: `ingest` parses before it embeds, so a row with

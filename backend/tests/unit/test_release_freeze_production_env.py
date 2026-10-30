@@ -60,9 +60,9 @@ def test_each_install_gets_a_different_key(tmp_path: Path) -> None:
     second = tmp_path / "b"
     ensure_production_env(first)
     ensure_production_env(second)
-    assert (first / ".env").read_text(encoding="utf-8") != (
-        second / ".env"
-    ).read_text(encoding="utf-8")
+    assert (first / ".env").read_text(encoding="utf-8") != (second / ".env").read_text(
+        encoding="utf-8"
+    )
 
 
 def test_an_existing_file_is_never_touched(tmp_path: Path) -> None:
@@ -89,7 +89,9 @@ def test_env_problems_flags_every_unsafe_shape(tmp_path: Path) -> None:
     problems = env_problems(env_path)
     assert "APP_ENV=dev" in problems and "DEBUG=true" in problems
 
-    env_path.write_text("APP_ENV=prod\nSECRET_KEY=change-me-to-a-random-32-character-string", encoding="utf-8")
+    env_path.write_text(
+        "APP_ENV=prod\nSECRET_KEY=change-me-to-a-random-32-character-string", encoding="utf-8"
+    )
     assert any("placeholder" in p for p in env_problems(env_path))
 
     env_path.write_text("APP_ENV=prod\nSECRET_KEY=short\n", encoding="utf-8")
@@ -113,7 +115,9 @@ def test_missing_file_is_reported_not_crashed(tmp_path: Path) -> None:
 
 def test_installer_no_longer_copies_the_example() -> None:
     """The `.env.example` -> `.env` copy is the defect; it must not come back."""
-    nsi = (REPO_ROOT / "installer" / "ai-workbench.nsi").read_text(encoding="utf-8", errors="replace")
+    nsi = (REPO_ROOT / "installer" / "ai-workbench.nsi").read_text(
+        encoding="utf-8", errors="replace"
+    )
     active = [
         line.strip()
         for line in nsi.splitlines()
@@ -124,7 +128,9 @@ def test_installer_no_longer_copies_the_example() -> None:
 
 
 def test_launcher_generates_the_environment_before_starting_the_api() -> None:
-    launcher = (REPO_ROOT / "scripts" / "start-desktop.bat").read_text(encoding="utf-8", errors="replace")
+    launcher = (REPO_ROOT / "scripts" / "start-desktop.bat").read_text(
+        encoding="utf-8", errors="replace"
+    )
     assert "app.cli init-env" in launcher
     # ... and before the API start, not after.
     assert launcher.index("app.cli init-env") < launcher.index("api: start requested")

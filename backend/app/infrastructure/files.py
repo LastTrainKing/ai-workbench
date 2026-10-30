@@ -26,7 +26,10 @@ logger = get_logger(__name__)
 
 _UNSAFE = re.compile(r"[\x00-\x1f<>:\"/\\|?*]")
 _WINDOWS_RESERVED = {
-    "CON", "PRN", "AUX", "NUL",
+    "CON",
+    "PRN",
+    "AUX",
+    "NUL",
     *(f"COM{i}" for i in range(1, 10)),
     *(f"LPT{i}" for i in range(1, 10)),
 }

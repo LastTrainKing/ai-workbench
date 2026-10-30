@@ -39,12 +39,8 @@ class KnowledgeBaseRepository(BaseRepository[KnowledgeBase]):
         stmt = apply_search(stmt, KnowledgeBase.name, search)
         return stmt.order_by(KnowledgeBase.updated_at.desc())
 
-    async def get_owned(
-        self, kb_id: uuid.UUID | None, owner_id: uuid.UUID
-    ) -> KnowledgeBase | None:
-        return await self.get_or_none(
-            KnowledgeBase.id == kb_id, KnowledgeBase.owner_id == owner_id
-        )
+    async def get_owned(self, kb_id: uuid.UUID | None, owner_id: uuid.UUID) -> KnowledgeBase | None:
+        return await self.get_or_none(KnowledgeBase.id == kb_id, KnowledgeBase.owner_id == owner_id)
 
     async def name_taken(
         self, owner_id: uuid.UUID, name: str, *, exclude_id: uuid.UUID | None = None
@@ -80,9 +76,7 @@ class KnowledgeBaseRepository(BaseRepository[KnowledgeBase]):
         processing = await self.count_of(
             Document,
             Document.knowledge_base_id == kb_id,
-            Document.status.in_(
-                [DocumentStatus.PENDING.value, DocumentStatus.PROCESSING.value]
-            ),
+            Document.status.in_([DocumentStatus.PENDING.value, DocumentStatus.PROCESSING.value]),
         )
         return {
             "document_count": int(row.documents or 0),
@@ -210,9 +204,7 @@ class DocumentChunkRepository(BaseRepository[DocumentChunk]):
 class TagRepository(BaseRepository[Tag]):
     model = Tag
 
-    async def get_or_create(
-        self, owner_id: uuid.UUID, name: str, color: str = "#64748b"
-    ) -> Tag:
+    async def get_or_create(self, owner_id: uuid.UUID, name: str, color: str = "#64748b") -> Tag:
         clean = name.strip()[:64]
         existing = await self.get_or_none(Tag.owner_id == owner_id, Tag.name == clean)
         if existing:
@@ -241,9 +233,7 @@ class ConceptRepository(BaseRepository[Concept]):
         )
         if existing:
             return existing
-        concept = Concept(
-            owner_id=owner_id, name=name.strip()[:200], normalized_name=normalized
-        )
+        concept = Concept(owner_id=owner_id, name=name.strip()[:200], normalized_name=normalized)
         self.session.add(concept)
         await self.session.flush()
         return concept

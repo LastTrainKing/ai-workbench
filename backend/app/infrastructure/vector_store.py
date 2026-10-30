@@ -228,8 +228,7 @@ class VectorStore:
             await self.client().upsert(
                 collection_name=self.collection,
                 points=[
-                    models.PointStruct(id=p.id, vector=p.vector, payload=p.payload)
-                    for p in points
+                    models.PointStruct(id=p.id, vector=p.vector, payload=p.payload) for p in points
                 ],
                 wait=wait,
             )
@@ -274,9 +273,7 @@ class VectorStore:
                 points_selector=models.FilterSelector(
                     filter=models.Filter(
                         must=[
-                            models.FieldCondition(
-                                key=field, match=models.MatchValue(value=value)
-                            )
+                            models.FieldCondition(key=field, match=models.MatchValue(value=value))
                         ]
                     )
                 ),
@@ -335,9 +332,7 @@ class VectorStore:
                 with_vectors=False,
             )
         except (ApiException, ValueError) as exc:
-            raise VectorStoreError(
-                "Vector search failed", details={"error": str(exc)}
-            ) from exc
+            raise VectorStoreError("Vector search failed", details={"error": str(exc)}) from exc
 
         return [
             VectorHit(

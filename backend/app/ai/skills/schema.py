@@ -103,7 +103,9 @@ _FRONT_MATTER = re.compile(r"\A---\s*\n(.*?)\n---\s*\n(.*)\Z", re.DOTALL)
 _LIST_KEYS = {"scripts", "params"}
 
 
-def parse_skill(text: str, *, source: str = "", source_commit: str = "") -> tuple[Skill, SkillValidation]:
+def parse_skill(
+    text: str, *, source: str = "", source_commit: str = ""
+) -> tuple[Skill, SkillValidation]:
     """Parse a skill file. Returns the skill and everything wrong with it.
 
     Never raises on malformed input: a candidate fetched from the internet is expected to
@@ -114,7 +116,9 @@ def parse_skill(text: str, *, source: str = "", source_commit: str = "") -> tupl
     match = _FRONT_MATTER.match(text.strip())
     if not match:
         validation.errors.append("缺少 front matter（文件必须以 --- 开头，以 --- 结束）")
-        return Skill(name="", description="", source=source, source_commit=source_commit), validation
+        return Skill(
+            name="", description="", source=source, source_commit=source_commit
+        ), validation
 
     header, body = match.groups()
     fields: dict[str, Any] = {}

@@ -43,13 +43,63 @@ MAX_SEARCH_RESULTS = 200
 MAX_WALK_DEPTH = 12
 
 TEXT_SUFFIXES = {
-    ".py", ".pyi", ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".json", ".jsonc",
-    ".md", ".txt", ".toml", ".ini", ".cfg", ".yaml", ".yml", ".xml", ".html",
-    ".htm", ".css", ".scss", ".sql", ".sh", ".bash", ".bat", ".cmd", ".ps1",
-    ".psm1", ".java", ".kt", ".go", ".rs", ".c", ".h", ".cpp", ".hpp", ".cs",
-    ".rb", ".php", ".swift", ".vue", ".svelte", ".dockerfile", ".gitignore",
-    ".env", ".example", ".conf", ".properties", ".gradle", ".lua", ".r", ".m",
-    ".csv", ".tsv", ".log", ".lock",
+    ".py",
+    ".pyi",
+    ".ts",
+    ".tsx",
+    ".js",
+    ".jsx",
+    ".mjs",
+    ".cjs",
+    ".json",
+    ".jsonc",
+    ".md",
+    ".txt",
+    ".toml",
+    ".ini",
+    ".cfg",
+    ".yaml",
+    ".yml",
+    ".xml",
+    ".html",
+    ".htm",
+    ".css",
+    ".scss",
+    ".sql",
+    ".sh",
+    ".bash",
+    ".bat",
+    ".cmd",
+    ".ps1",
+    ".psm1",
+    ".java",
+    ".kt",
+    ".go",
+    ".rs",
+    ".c",
+    ".h",
+    ".cpp",
+    ".hpp",
+    ".cs",
+    ".rb",
+    ".php",
+    ".swift",
+    ".vue",
+    ".svelte",
+    ".dockerfile",
+    ".gitignore",
+    ".env",
+    ".example",
+    ".conf",
+    ".properties",
+    ".gradle",
+    ".lua",
+    ".r",
+    ".m",
+    ".csv",
+    ".tsv",
+    ".log",
+    ".lock",
 }
 
 
@@ -125,10 +175,19 @@ class FileReadTool(Tool):
         parameters={
             "type": "object",
             "properties": {
-                "path": {"type": "string", "description": "Absolute, or relative to the working directory"},
+                "path": {
+                    "type": "string",
+                    "description": "Absolute, or relative to the working directory",
+                },
                 "line_start": {"type": "integer", "description": "1-based first line (optional)"},
-                "line_end": {"type": "integer", "description": "1-based last line, inclusive (optional)"},
-                "max_bytes": {"type": "integer", "description": f"Ceiling, default {MAX_READ_BYTES}"},
+                "line_end": {
+                    "type": "integer",
+                    "description": "1-based last line, inclusive (optional)",
+                },
+                "max_bytes": {
+                    "type": "integer",
+                    "description": f"Ceiling, default {MAX_READ_BYTES}",
+                },
             },
             "required": ["path"],
         },
@@ -222,7 +281,10 @@ class FileWriteTool(Tool):
             "properties": {
                 "path": {"type": "string"},
                 "content": {"type": "string"},
-                "create_dirs": {"type": "boolean", "description": "Create missing parents (default true)"},
+                "create_dirs": {
+                    "type": "boolean",
+                    "description": "Create missing parents (default true)",
+                },
             },
             "required": ["path", "content"],
         },
@@ -375,7 +437,11 @@ class FileAppendTool(Tool):
         ctx.register_artifact("files_written", str(target))
         return ToolResult(
             ok=True,
-            data={"path": str(target), "appended_bytes": len(content.encode("utf-8")), "size_before": before},
+            data={
+                "path": str(target),
+                "appended_bytes": len(content.encode("utf-8")),
+                "size_before": before,
+            },
             summary=f"appended to {target.name}",
         )
 
@@ -388,7 +454,11 @@ class FileDeleteTool(Tool):
         name="file_delete",
         description="Delete a single file. Deleting a directory requires directory_delete.",
         category="filesystem",
-        parameters={"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]},
+        parameters={
+            "type": "object",
+            "properties": {"path": {"type": "string"}},
+            "required": ["path"],
+        },
         permission_level=1,
         risk_level="medium",
         timeout_seconds=20,
@@ -424,7 +494,11 @@ class FileMoveTool(Tool):
         category="filesystem",
         parameters={
             "type": "object",
-            "properties": {"source": {"type": "string"}, "destination": {"type": "string"}, "overwrite": {"type": "boolean"}},
+            "properties": {
+                "source": {"type": "string"},
+                "destination": {"type": "string"},
+                "overwrite": {"type": "boolean"},
+            },
             "required": ["source", "destination"],
         },
         permission_level=1,
@@ -452,7 +526,11 @@ class FileMoveTool(Tool):
         shutil.move(str(src), str(dst))
         ctx.consume_write()
         ctx.register_artifact("files_moved", f"{src} -> {dst}")
-        return ToolResult(ok=True, data={"source": str(src), "destination": str(dst)}, summary=f"moved to {dst.name}")
+        return ToolResult(
+            ok=True,
+            data={"source": str(src), "destination": str(dst)},
+            summary=f"moved to {dst.name}",
+        )
 
 
 class FileCopyTool(Tool):
@@ -462,7 +540,11 @@ class FileCopyTool(Tool):
         category="filesystem",
         parameters={
             "type": "object",
-            "properties": {"source": {"type": "string"}, "destination": {"type": "string"}, "overwrite": {"type": "boolean"}},
+            "properties": {
+                "source": {"type": "string"},
+                "destination": {"type": "string"},
+                "overwrite": {"type": "boolean"},
+            },
             "required": ["source", "destination"],
         },
         permission_level=1,
@@ -483,7 +565,9 @@ class FileCopyTool(Tool):
             return ToolResult(ok=False, error=f"No such path: {src}", summary="not found")
         if dst.exists():
             if not overwrite:
-                return ToolResult(ok=False, error=f"{dst} already exists", summary="destination exists")
+                return ToolResult(
+                    ok=False, error=f"{dst} already exists", summary="destination exists"
+                )
             if dst.is_dir():
                 shutil.rmtree(dst)
             else:
@@ -496,7 +580,11 @@ class FileCopyTool(Tool):
             shutil.copy2(src, dst)
         ctx.consume_write()
         ctx.register_artifact("files_copied", f"{src} -> {dst}")
-        return ToolResult(ok=True, data={"source": str(src), "destination": str(dst)}, summary=f"copied to {dst.name}")
+        return ToolResult(
+            ok=True,
+            data={"source": str(src), "destination": str(dst)},
+            summary=f"copied to {dst.name}",
+        )
 
 
 # --------------------------------------------------------------------------- #
@@ -507,7 +595,11 @@ class FileExistsTool(Tool):
         name="file_exists",
         description="Check whether a path exists and what kind of thing it is.",
         category="filesystem",
-        parameters={"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]},
+        parameters={
+            "type": "object",
+            "properties": {"path": {"type": "string"}},
+            "required": ["path"],
+        },
         permission_level=0,
         risk_level="low",
         timeout_seconds=10,
@@ -535,7 +627,11 @@ class FileMetadataTool(Tool):
         name="file_metadata",
         description="Size, timestamps, permissions and hash for a path.",
         category="filesystem",
-        parameters={"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]},
+        parameters={
+            "type": "object",
+            "properties": {"path": {"type": "string"}},
+            "required": ["path"],
+        },
         permission_level=0,
         risk_level="low",
         timeout_seconds=15,
@@ -605,7 +701,9 @@ class DirectoryListTool(Tool):
         if not root.exists():
             return ToolResult(ok=False, error=f"No such directory: {root}", summary="not found")
         if not root.is_dir():
-            return ToolResult(ok=False, error=f"{root} is not a directory", summary="not a directory")
+            return ToolResult(
+                ok=False, error=f"{root} is not a directory", summary="not a directory"
+            )
 
         depth_limit = max(1, min(int(max_depth or 3), MAX_WALK_DEPTH))
         entries: list[dict[str, Any]] = []
@@ -625,8 +723,10 @@ class DirectoryListTool(Tool):
                     return
                 if not include_hidden and child.name.startswith("."):
                     continue
-                if pattern and not fnmatch.fnmatch(child.name, pattern) and not (
-                    child.is_dir() and recursive
+                if (
+                    pattern
+                    and not fnmatch.fnmatch(child.name, pattern)
+                    and not (child.is_dir() and recursive)
                 ):
                     continue
                 try:
@@ -665,7 +765,11 @@ class DirectoryCreateTool(Tool):
         name="directory_create",
         description="Create a directory, including missing parents.",
         category="filesystem",
-        parameters={"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]},
+        parameters={
+            "type": "object",
+            "properties": {"path": {"type": "string"}},
+            "required": ["path"],
+        },
         permission_level=1,
         risk_level="low",
         timeout_seconds=15,
@@ -759,7 +863,10 @@ class DirectoryDeleteTool(Tool):
             "type": "object",
             "properties": {
                 "path": {"type": "string"},
-                "recursive": {"type": "boolean", "description": "Required to delete a non-empty directory"},
+                "recursive": {
+                    "type": "boolean",
+                    "description": "Required to delete a non-empty directory",
+                },
             },
             "required": ["path"],
         },
@@ -777,7 +884,9 @@ class DirectoryDeleteTool(Tool):
         if not target.exists():
             return ToolResult(ok=False, error=f"No such directory: {target}", summary="not found")
         if not target.is_dir():
-            return ToolResult(ok=False, error=f"{target} is not a directory", summary="not a directory")
+            return ToolResult(
+                ok=False, error=f"{target} is not a directory", summary="not a directory"
+            )
 
         # Refuse the obviously catastrophic targets even if a broad path was
         # granted: these are never a legitimate agent action.
@@ -821,9 +930,15 @@ class FileSearchTool(Tool):
         parameters={
             "type": "object",
             "properties": {
-                "root": {"type": "string", "description": "Directory to search (default: working directory)"},
+                "root": {
+                    "type": "string",
+                    "description": "Directory to search (default: working directory)",
+                },
                 "name_pattern": {"type": "string", "description": "Glob, e.g. *.py or test_*.ts"},
-                "content": {"type": "string", "description": "Substring or regex to find inside files"},
+                "content": {
+                    "type": "string",
+                    "description": "Substring or regex to find inside files",
+                },
                 "regex": {"type": "boolean"},
                 "case_sensitive": {"type": "boolean"},
                 "max_results": {"type": "integer"},
@@ -882,7 +997,17 @@ class FileSearchTool(Tool):
             dirnames[:] = [
                 d
                 for d in dirnames
-                if d not in {"node_modules", ".git", "__pycache__", ".venv", "venv", "dist", "build", ".next"}
+                if d
+                not in {
+                    "node_modules",
+                    ".git",
+                    "__pycache__",
+                    ".venv",
+                    "venv",
+                    "dist",
+                    "build",
+                    ".next",
+                }
             ]
 
             for filename in filenames:
@@ -893,7 +1018,9 @@ class FileSearchTool(Tool):
 
                 candidate = current / filename
                 # A search must not become a way to read protected files.
-                verdict = ctx.permissions.check_path(candidate, write=False) if ctx.permissions else None
+                verdict = (
+                    ctx.permissions.check_path(candidate, write=False) if ctx.permissions else None
+                )
                 if verdict is not None and not verdict.allowed:
                     skipped_denied += 1
                     continue

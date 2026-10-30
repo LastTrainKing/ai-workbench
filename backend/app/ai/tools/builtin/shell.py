@@ -261,12 +261,16 @@ class _TerminalTool(Tool):
         working = Path(ctx.resolve(cwd)) if cwd else Path(ctx.resolve("."))
         ctx.require_permission(working, write=True)
         if not working.is_dir():
-            return ToolResult(ok=False, error=f"Working directory does not exist: {working}", summary="bad cwd")
+            return ToolResult(
+                ok=False, error=f"Working directory does not exist: {working}", summary="bad cwd"
+            )
 
         # Classified here as well as in the executor so the *reason* travels with
         # the result even when the command was allowed by policy.
         if ctx.permissions is not None:
-            verdict = ctx.permissions.check_command(command, cwd=working, interpreter=self.interpreter)
+            verdict = ctx.permissions.check_command(
+                command, cwd=working, interpreter=self.interpreter
+            )
             if not verdict.allowed:
                 from app.core.errors import PermissionDeniedError
 
@@ -290,7 +294,12 @@ class _TerminalTool(Tool):
         if outcome["timed_out"]:
             return ToolResult(
                 ok=False,
-                data={**outcome, "command": command, "cwd": str(working), "interpreter": self.interpreter},
+                data={
+                    **outcome,
+                    "command": command,
+                    "cwd": str(working),
+                    "interpreter": self.interpreter,
+                },
                 error=f"Command exceeded {budget:g}s and was terminated",
                 summary=f"timeout after {budget:g}s",
             )
@@ -325,8 +334,14 @@ class TerminalExecTool(_TerminalTool):
             "type": "object",
             "properties": {
                 "command": {"type": "string"},
-                "cwd": {"type": "string", "description": "Optional; defaults to the working directory"},
-                "timeout_seconds": {"type": "number", "description": f"Default {DEFAULT_TIMEOUT:g}, max {MAX_TIMEOUT:g}"},
+                "cwd": {
+                    "type": "string",
+                    "description": "Optional; defaults to the working directory",
+                },
+                "timeout_seconds": {
+                    "type": "number",
+                    "description": f"Default {DEFAULT_TIMEOUT:g}, max {MAX_TIMEOUT:g}",
+                },
                 "env": {"type": "object", "description": "Extra environment variables"},
             },
             "required": ["command"],

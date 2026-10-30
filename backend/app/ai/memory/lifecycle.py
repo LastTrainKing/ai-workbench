@@ -296,15 +296,19 @@ async def raise_conflict_candidates(
     created = 0
     for conflict in conflicts:
         existing = (
-            await session.execute(
-                select(MemoryCandidate).where(
-                    MemoryCandidate.user_id == user_id,
-                    MemoryCandidate.status == "pending",
-                    MemoryCandidate.proposed_kind == "conflict",
-                    MemoryCandidate.content.like(f"%{conflict.left[:20]}%"),
+            (
+                await session.execute(
+                    select(MemoryCandidate).where(
+                        MemoryCandidate.user_id == user_id,
+                        MemoryCandidate.status == "pending",
+                        MemoryCandidate.proposed_kind == "conflict",
+                        MemoryCandidate.content.like(f"%{conflict.left[:20]}%"),
+                    )
                 )
             )
-        ).scalars().first()
+            .scalars()
+            .first()
+        )
         if existing is not None:
             continue
 
@@ -342,9 +346,7 @@ async def consolidate(
     anything is changed — the same reason the assess stage exists for skills.
     """
     rows = list(
-        (
-            await session.execute(select(MemoryEntry).where(MemoryEntry.user_id == user_id))
-        ).scalars()
+        (await session.execute(select(MemoryEntry).where(MemoryEntry.user_id == user_id))).scalars()
     )
     active = [r for r in rows if r.status == "active"]
 
@@ -420,9 +422,7 @@ async def is_forgotten(session: AsyncSession, *, user_id: uuid.UUID, memory_id: 
     """Used by the tests, and by anything that needs to prove a deletion took."""
     row = (
         await session.execute(
-            select(MemoryEntry).where(
-                MemoryEntry.id == memory_id, MemoryEntry.user_id == user_id
-            )
+            select(MemoryEntry).where(MemoryEntry.id == memory_id, MemoryEntry.user_id == user_id)
         )
     ).scalar_one_or_none()
     return row is None
@@ -431,15 +431,11 @@ async def is_forgotten(session: AsyncSession, *, user_id: uuid.UUID, memory_id: 
 async def memory_stats(session: AsyncSession, *, user_id: uuid.UUID) -> dict[str, Any]:
     """The numbers the acceptance asks for, computed rather than estimated."""
     rows = list(
-        (
-            await session.execute(select(MemoryEntry).where(MemoryEntry.user_id == user_id))
-        ).scalars()
+        (await session.execute(select(MemoryEntry).where(MemoryEntry.user_id == user_id))).scalars()
     )
     candidates = list(
         (
-            await session.execute(
-                select(MemoryCandidate).where(MemoryCandidate.user_id == user_id)
-            )
+            await session.execute(select(MemoryCandidate).where(MemoryCandidate.user_id == user_id))
         ).scalars()
     )
 
@@ -497,4 +493,3 @@ __all__ = [  # noqa: RUF022
     "raise_conflict_candidates",
     "similarity",
 ]
-

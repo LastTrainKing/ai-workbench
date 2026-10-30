@@ -75,9 +75,7 @@ def _container_checks(kind: str, target: Path) -> list[dict[str, Any]]:
     """A zip container, then the parts that make it that format."""
     checks: list[dict[str, Any]] = []
     if not zipfile.is_zipfile(target):
-        checks.append(
-            _check("container", "fail", f"{kind} 是一个 zip 容器，这个文件不是。")
-        )
+        checks.append(_check("container", "fail", f"{kind} 是一个 zip 容器，这个文件不是。"))
         return checks
     checks.append(_check("container", "pass", "zip 容器可读"))
 
@@ -145,7 +143,9 @@ def _readback_check(kind: str, target: Path) -> dict[str, Any]:
         return _check(
             "readback",
             "pass" if sheets > 0 else "fail",
-            f"{sheets} 个工作表，{payload.get('charts')} 个图表" if sheets else "工作簿里没有工作表",
+            f"{sheets} 个工作表，{payload.get('charts')} 个图表"
+            if sheets
+            else "工作簿里没有工作表",
         )
     if kind == "pdf":
         pages = int(payload.get("page_count") or 0)
@@ -219,7 +219,9 @@ def checks_for(kind: str, target: Path) -> list[dict[str, Any]]:
         # §10: "没有运行就不能声称已编译或通过测试". This stage does not run a
         # build, so it says so instead of implying one happened.
         checks.append(
-            _check("runtime_check", "unverified", "本次没有运行任何编译或测试，不对代码正确性下结论")
+            _check(
+                "runtime_check", "unverified", "本次没有运行任何编译或测试，不对代码正确性下结论"
+            )
         )
         return checks
 

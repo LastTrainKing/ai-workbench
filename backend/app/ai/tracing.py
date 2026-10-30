@@ -320,9 +320,7 @@ async def finish_tool_call(
     `finished_at` is what closes the window `begin_tool_call` opened. A row that has
     `started_at` and no `finished_at` is the definition of "we do not know".
     """
-    call.status = (
-        ToolCallStatus.SUCCEEDED.value if ok else ToolCallStatus.FAILED.value
-    )
+    call.status = ToolCallStatus.SUCCEEDED.value if ok else ToolCallStatus.FAILED.value
     call.result = _sanitize(result or {})
     call.latency_ms = int(latency_ms or 0)
     call.error_message = (error_message or "")[:2000]
@@ -397,8 +395,7 @@ async def resolve_orphan_tool_calls(session: AsyncSession) -> list[ToolCall]:
     for call in rows:
         call.status = ToolCallStatus.UNKNOWN.value
         call.error_message = (
-            call.error_message
-            or "进程在工具调用期间终止，无法确认该操作是否已经产生效果"
+            call.error_message or "进程在工具调用期间终止，无法确认该操作是否已经产生效果"
         )
     if rows:
         await session.flush()

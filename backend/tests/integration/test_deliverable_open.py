@@ -138,9 +138,7 @@ async def _seed_deliverable(*, path: str, owner: bool = True) -> tuple[uuid.UUID
         run = BuildRun(user_id=user.id, goal="[open-test] 打开一个文件", title="open-test")
         session.add(run)
         await session.flush()
-        item = Deliverable(
-            user_id=user.id, build_run_id=run.id, path=path, kind="pptx", title="t"
-        )
+        item = Deliverable(user_id=user.id, build_run_id=run.id, path=path, kind="pptx", title="t")
         session.add(item)
         await session.flush()
         return user.id, item.id

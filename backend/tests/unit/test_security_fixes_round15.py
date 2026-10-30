@@ -118,7 +118,11 @@ def test_the_network_tools_do_not_build_a_script() -> None:
     tree = ast.parse(inspect.getsource(process_network))
 
     # No function that assembles a script.
-    names = {node.name for node in ast.walk(tree) if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))}
+    names = {
+        node.name
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
     assert "_fetch_script" not in names, "the script-building function came back"
 
     # **The bug's actual shape is an f-string that mixes script text with a variable.**
@@ -216,7 +220,9 @@ def test_unfilled_skill_params_are_kept() -> None:
     from app.ai.skills.registry import SkillParam, bind_params
 
     body = "用 {{font}} 字体，字号 {{size}}"
-    rendered = bind_params(body, [SkillParam(name="font", description="", source="", default="")], {"font": "宋体"})
+    rendered = bind_params(
+        body, [SkillParam(name="font", description="", source="", default="")], {"font": "宋体"}
+    )
     assert "宋体" in rendered
     assert "{{size}}" in rendered, "an unfilled slot was blanked instead of kept"
 
@@ -518,7 +524,13 @@ def test_adoption_refuses_what_has_not_been_checked() -> None:
     # A skill with no source cannot be traced, so it cannot be adopted — the check that
     # makes "where did this come from?" answerable.
     untraceable = Skill(
-        name="x", description="", when_to_use="", body="b",
-        skill_type=SkillType.DOCUMENT, params=[], scripts=[], source="",
+        name="x",
+        description="",
+        when_to_use="",
+        body="b",
+        skill_type=SkillType.DOCUMENT,
+        params=[],
+        scripts=[],
+        source="",
     )
     assert untraceable.source == ""

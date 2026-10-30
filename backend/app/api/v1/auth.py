@@ -83,9 +83,7 @@ async def get_profile(user: CurrentUser) -> dict:
 
 
 @user_router.patch("/users/me", summary="Update display name or avatar colour")
-async def update_profile(
-    payload: UserUpdate, user: CurrentUser, session: DbSession
-) -> dict:
+async def update_profile(payload: UserUpdate, user: CurrentUser, session: DbSession) -> dict:
     updated = await AuthService(session).update_profile(
         user.id,
         display_name=payload.display_name,

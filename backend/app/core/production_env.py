@@ -95,7 +95,9 @@ def ensure_production_env(root: Path) -> Path | None:
         return None
 
     env_path.parent.mkdir(parents=True, exist_ok=True)
-    env_path.write_text(render_production_env(generate_secret_key()), encoding="utf-8", newline="\n")
+    env_path.write_text(
+        render_production_env(generate_secret_key()), encoding="utf-8", newline="\n"
+    )
     # Best effort: the file holds the token-signing key.
     with contextlib.suppress(OSError):
         env_path.chmod(0o600)

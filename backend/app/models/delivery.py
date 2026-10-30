@@ -103,9 +103,7 @@ DELIVERABLE_KINDS = ("pptx", "docx", "xlsx", "pdf", "md", "csv", "report", "code
 #: Declared here rather than in the UI because two surfaces ask the question (the run
 #: page's artifact cards and the delivery page's list) and a second copy of the list is
 #: how one of them ends up offering a preview the other knows is impossible.
-TEXT_PREVIEWABLE_KINDS = frozenset(
-    {"md", "txt", "report", "csv", "code", "json", "yaml", "log"}
-)
+TEXT_PREVIEWABLE_KINDS = frozenset({"md", "txt", "report", "csv", "code", "json", "yaml", "log"})
 
 
 class BuildRun(Base, UUIDPrimaryKeyMixin, TimestampMixin):
@@ -179,7 +177,6 @@ class BuildRun(Base, UUIDPrimaryKeyMixin, TimestampMixin):
         if self.steps_total <= 0:
             return 1.0 if self.status == BuildStatus.COMPLETED.value else 0.0
         return min(1.0, self.steps_done / self.steps_total)
-
 
     def _deliverable_count(self) -> int:
         """Count attached deliverables without triggering a lazy load.

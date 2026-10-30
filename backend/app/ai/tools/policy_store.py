@@ -174,12 +174,18 @@ def build_policy(user_id: Any = None) -> AgentPolicy:
     # workspace and the project are always re-added by from_settings.
     allowed = overrides.get("allowed_paths")
     if isinstance(allowed, list):
-        policy.allowed_paths = [*[Path(p) for p in allowed if str(p).strip()], *policy.allowed_paths]
+        policy.allowed_paths = [
+            *[Path(p) for p in allowed if str(p).strip()],
+            *policy.allowed_paths,
+        ]
 
     # Denied areas: additive only. A settings file can protect more, never less.
     extra_denied = overrides.get("extra_denied_paths")
     if isinstance(extra_denied, list):
-        policy.denied_paths = [*policy.denied_paths, *[Path(p) for p in extra_denied if str(p).strip()]]
+        policy.denied_paths = [
+            *policy.denied_paths,
+            *[Path(p) for p in extra_denied if str(p).strip()],
+        ]
 
     for key in ("allowed_domains", "blocked_domains"):
         value = overrides.get(key)

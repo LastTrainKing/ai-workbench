@@ -114,9 +114,7 @@ class Message(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     """One thing said, in order."""
 
     __tablename__ = "messages"
-    __table_args__ = (
-        Index("ix_messages_conversation_created", "conversation_id", "created_at"),
-    )
+    __table_args__ = (Index("ix_messages_conversation_created", "conversation_id", "created_at"),)
 
     conversation_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("conversations.id", ondelete="CASCADE"), nullable=False, index=True
@@ -138,9 +136,7 @@ class Message(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     #: ``[{"question": "...", "default": "..."}]``. The default is not decoration — the
     #: user's own rule is that a question without one hands the cost of choosing back to
     #: them, so every entry has both keys.
-    questions: Mapped[list[dict[str, Any]]] = mapped_column(
-        JSONB, nullable=False, default=list
-    )
+    questions: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, nullable=False, default=list)
 
     #: The run this message started, when ``kind`` is ``start``.
     build_run_id: Mapped[uuid.UUID | None] = mapped_column(
@@ -159,9 +155,7 @@ class Message(Base, UUIDPrimaryKeyMixin, TimestampMixin):
 
     #: Set when this message is a question *of* the user that has since been answered, so
     #: the UI can stop showing it as outstanding.
-    answered_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
+    answered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     @property
     def is_user(self) -> bool:

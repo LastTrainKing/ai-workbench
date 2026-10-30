@@ -86,8 +86,12 @@ def test_a_saved_configuration_is_untested_not_connected(config: Path) -> None:
     Without it, "the key is saved" had to be displayed as either 未配置 (false) or as a
     connection that nobody had made (a claim the program cannot support).
     """
-    _save(provider="deepseek", model="deepseek-flash", base_url="https://api.deepseek.com",
-          api_key="sk-test-0000000000000000000000000000")
+    _save(
+        provider="deepseek",
+        model="deepseek-flash",
+        base_url="https://api.deepseek.com",
+        api_key="sk-test-0000000000000000000000000000",
+    )
     assert _state() == "configured_untested"
 
 
@@ -104,21 +108,45 @@ def test_the_offline_provider_is_offline_rather_than_broken(config: Path) -> Non
 def test_a_successful_check_makes_it_connected(config: Path) -> None:
     from app.ai.runtime_config import record_check
 
-    _save(provider="deepseek", model="deepseek-flash", base_url="https://api.deepseek.com",
-          api_key="sk-test-0000000000000000000000000000")
-    record_check(OWNER, {"ok": True, "provider": "deepseek", "model": "deepseek-flash",
-                         "base_url": "https://api.deepseek.com", "latency_ms": 420})
+    _save(
+        provider="deepseek",
+        model="deepseek-flash",
+        base_url="https://api.deepseek.com",
+        api_key="sk-test-0000000000000000000000000000",
+    )
+    record_check(
+        OWNER,
+        {
+            "ok": True,
+            "provider": "deepseek",
+            "model": "deepseek-flash",
+            "base_url": "https://api.deepseek.com",
+            "latency_ms": 420,
+        },
+    )
     assert _state() == "connected"
 
 
 def test_a_refused_check_makes_it_failed_and_keeps_the_reason(config: Path) -> None:
     from app.ai.runtime_config import ai_status, record_check
 
-    _save(provider="deepseek", model="deepseek-flash", base_url="https://api.deepseek.com",
-          api_key="sk-test-0000000000000000000000000000")
-    record_check(OWNER, {"ok": False, "provider": "deepseek", "model": "deepseek-flash",
-                         "base_url": "https://api.deepseek.com",
-                         "error_code": "ai_auth_error", "error_message": "401 Unauthorized"})
+    _save(
+        provider="deepseek",
+        model="deepseek-flash",
+        base_url="https://api.deepseek.com",
+        api_key="sk-test-0000000000000000000000000000",
+    )
+    record_check(
+        OWNER,
+        {
+            "ok": False,
+            "provider": "deepseek",
+            "model": "deepseek-flash",
+            "base_url": "https://api.deepseek.com",
+            "error_code": "ai_auth_error",
+            "error_message": "401 Unauthorized",
+        },
+    )
     status = ai_status(OWNER)
     assert status["state"] == "failed"
     assert status["check"]["error_code"] == "ai_auth_error"
@@ -129,10 +157,21 @@ def test_changing_the_model_makes_an_old_check_stale(config: Path) -> None:
     configuration that is in effect now."""
     from app.ai.runtime_config import record_check
 
-    _save(provider="deepseek", model="deepseek-flash", base_url="https://api.deepseek.com",
-          api_key="sk-test-0000000000000000000000000000")
-    record_check(OWNER, {"ok": True, "provider": "deepseek", "model": "deepseek-flash",
-                         "base_url": "https://api.deepseek.com"})
+    _save(
+        provider="deepseek",
+        model="deepseek-flash",
+        base_url="https://api.deepseek.com",
+        api_key="sk-test-0000000000000000000000000000",
+    )
+    record_check(
+        OWNER,
+        {
+            "ok": True,
+            "provider": "deepseek",
+            "model": "deepseek-flash",
+            "base_url": "https://api.deepseek.com",
+        },
+    )
     assert _state() == "connected"
 
     _save(model="deepseek-chat")
@@ -142,10 +181,21 @@ def test_changing_the_model_makes_an_old_check_stale(config: Path) -> None:
 def test_clearing_the_configuration_clears_the_check_with_it(config: Path) -> None:
     from app.ai.runtime_config import clear, record_check
 
-    _save(provider="deepseek", model="deepseek-flash", base_url="https://api.deepseek.com",
-          api_key="sk-test-0000000000000000000000000000")
-    record_check(OWNER, {"ok": True, "provider": "deepseek", "model": "deepseek-flash",
-                         "base_url": "https://api.deepseek.com"})
+    _save(
+        provider="deepseek",
+        model="deepseek-flash",
+        base_url="https://api.deepseek.com",
+        api_key="sk-test-0000000000000000000000000000",
+    )
+    record_check(
+        OWNER,
+        {
+            "ok": True,
+            "provider": "deepseek",
+            "model": "deepseek-flash",
+            "base_url": "https://api.deepseek.com",
+        },
+    )
     clear(OWNER)
     assert _state() == "offline"
 
@@ -153,8 +203,12 @@ def test_clearing_the_configuration_clears_the_check_with_it(config: Path) -> No
 def test_the_key_never_leaves_the_store_unmasked(config: Path) -> None:
     from app.ai.runtime_config import ai_status, resolve
 
-    _save(provider="deepseek", model="deepseek-flash", base_url="https://api.deepseek.com",
-          api_key="sk-0123456789abcdef0123456789abcdef")
+    _save(
+        provider="deepseek",
+        model="deepseek-flash",
+        base_url="https://api.deepseek.com",
+        api_key="sk-0123456789abcdef0123456789abcdef",
+    )
     safe = resolve(OWNER).safe()
     assert safe["api_key_set"] is True
     assert "0123456789abcdef" not in safe["api_key_hint"]
@@ -173,8 +227,12 @@ def test_resolving_without_an_owner_does_not_see_an_accounts_key(config: Path) -
     binding the owner therefore reported "not configured" no matter what the account had
     saved — which is what the settings page did.
     """
-    _save(provider="deepseek", model="deepseek-flash", base_url="https://api.deepseek.com",
-          api_key="sk-test-0000000000000000000000000000")
+    _save(
+        provider="deepseek",
+        model="deepseek-flash",
+        base_url="https://api.deepseek.com",
+        api_key="sk-test-0000000000000000000000000000",
+    )
     from app.ai.runtime_config import resolve
 
     assert resolve(OWNER).api_key_set is True
@@ -186,8 +244,12 @@ def test_the_provider_a_call_uses_is_the_one_that_was_saved(config: Path) -> Non
     from app.ai.providers.factory import build_llm_provider
     from app.ai.runtime_config import set_current_owner
 
-    _save(provider="deepseek", model="deepseek-flash", base_url="https://api.deepseek.com",
-          api_key="sk-test-0000000000000000000000000000")
+    _save(
+        provider="deepseek",
+        model="deepseek-flash",
+        base_url="https://api.deepseek.com",
+        api_key="sk-test-0000000000000000000000000000",
+    )
 
     set_current_owner(str(OWNER))
     try:
@@ -243,11 +305,16 @@ def test_the_runtime_info_slot_reports_the_accounts_provider(
     screen where the fields, which do bind it, showed a saved key. Against the old code
     `offline` is True here and this fails.
     """
-    _save(provider="deepseek", model="deepseek-flash", base_url="https://api.deepseek.com",
-          api_key="sk-test-0000000000000000000000000000")
+    _save(
+        provider="deepseek",
+        model="deepseek-flash",
+        base_url="https://api.deepseek.com",
+        api_key="sk-test-0000000000000000000000000000",
+    )
 
     bridge = _bridge()
     try:
+
         async def fake_owner(self: ServiceBridge) -> uuid.UUID:
             return OWNER
 
@@ -268,11 +335,16 @@ def test_the_runtime_info_slot_reports_the_accounts_provider(
 def test_the_config_slot_carries_the_state_so_the_page_need_not_guess(
     config: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    _save(provider="deepseek", model="deepseek-flash", base_url="https://api.deepseek.com",
-          api_key="sk-test-0000000000000000000000000000")
+    _save(
+        provider="deepseek",
+        model="deepseek-flash",
+        base_url="https://api.deepseek.com",
+        api_key="sk-test-0000000000000000000000000000",
+    )
 
     bridge = _bridge()
     try:
+
         async def fake_owner(self: ServiceBridge) -> uuid.UUID:
             return OWNER
 
@@ -294,16 +366,23 @@ def test_saving_then_reading_back_gives_the_same_state(
 
     bridge = _bridge()
     try:
+
         async def fake_owner(self: ServiceBridge) -> uuid.UUID:
             return OWNER
 
         monkeypatch.setattr(ServiceBridge, "_owner", fake_owner)
-        _call(bridge, "saveAiConfig", _json.dumps({
-            "provider": "deepseek",
-            "model": "deepseek-flash",
-            "base_url": "https://api.deepseek.com",
-            "api_key": "sk-test-0000000000000000000000000000",
-        }))
+        _call(
+            bridge,
+            "saveAiConfig",
+            _json.dumps(
+                {
+                    "provider": "deepseek",
+                    "model": "deepseek-flash",
+                    "base_url": "https://api.deepseek.com",
+                    "api_key": "sk-test-0000000000000000000000000000",
+                }
+            ),
+        )
         reopened = _call(bridge, "loadAiConfig")
     finally:
         bridge._runner.shutdown()

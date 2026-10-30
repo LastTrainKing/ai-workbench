@@ -87,7 +87,9 @@ async def test_a_version_mismatch_is_refused_and_nothing_is_stamped(monkeypatch)
 
 
 @pytest.mark.asyncio
-async def test_a_database_without_a_version_is_adopted_when_only_things_are_missing(monkeypatch) -> None:
+async def test_a_database_without_a_version_is_adopted_when_only_things_are_missing(
+    monkeypatch,
+) -> None:
     """Tables but no `alembic_version` is the pre-migration state, and it can be brought forward.
 
     A database built before migrations existed is a strict subset of what the migrations

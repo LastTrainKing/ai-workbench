@@ -59,7 +59,11 @@ async def dependencies(request: Request) -> dict:
     qdrant_ok, qdrant_detail = await get_vector_store().ping()
     providers = await check_provider_health()
 
-    degraded = providers.get("llm", {}).get("degraded") if isinstance(providers.get("llm"), dict) else False
+    degraded = (
+        providers.get("llm", {}).get("degraded")
+        if isinstance(providers.get("llm"), dict)
+        else False
+    )
     status = "ok" if (db_ok and redis_ok and qdrant_ok) else "degraded"
 
     return ok(

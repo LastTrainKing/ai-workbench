@@ -39,7 +39,9 @@ def no_choices() -> dict[str, Any]:
     return {"id": "stub", "object": "chat.completion"}
 
 
-def tool_call(name: str, arguments: dict[str, Any] | None = None, call_id: str = "call_1") -> dict[str, Any]:
+def tool_call(
+    name: str, arguments: dict[str, Any] | None = None, call_id: str = "call_1"
+) -> dict[str, Any]:
     """A completion asking for one tool call."""
     return {
         "choices": [
@@ -165,7 +167,9 @@ class StubProvider:
                 stub._respond(self, 200, json.dumps(payload))
 
         self._server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-        self._thread = threading.Thread(target=self._server.serve_forever, daemon=True, name="stub-provider")
+        self._thread = threading.Thread(
+            target=self._server.serve_forever, daemon=True, name="stub-provider"
+        )
         self._thread.start()
         return self
 
@@ -195,14 +199,14 @@ class StubProvider:
         if self.stream_garbage:
             frames.append(f"data: {self.stream_garbage}\n\n")
         frames.append(
-            "data: "
-            + json.dumps({"choices": [{"delta": {}, "finish_reason": "stop"}]})
-            + "\n\n"
+            "data: " + json.dumps({"choices": [{"delta": {}, "finish_reason": "stop"}]}) + "\n\n"
         )
         if self.stream_usage is not None:
             # The usage frame has an EMPTY choices array — the shape that crashes a parser
             # which indexes choices[0] unconditionally on the last frame of every stream.
-            frames.append("data: " + json.dumps({"choices": [], "usage": self.stream_usage}) + "\n\n")
+            frames.append(
+                "data: " + json.dumps({"choices": [], "usage": self.stream_usage}) + "\n\n"
+            )
         frames.append("data: [DONE]\n\n")
 
         body = "".join(frames).encode("utf-8")

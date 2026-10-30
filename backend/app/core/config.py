@@ -153,9 +153,7 @@ def _secret_problems(value: str) -> list[str]:
     lowered = key.lower()
     markers = sorted({m for m in _PLACEHOLDER_MARKERS if m in lowered})
     if markers:
-        problems.append(
-            "SECRET_KEY contains placeholder text (" + ", ".join(markers) + ")"
-        )
+        problems.append("SECRET_KEY contains placeholder text (" + ", ".join(markers) + ")")
     if len(set(key)) < _MIN_DISTINCT_SECRET_CHARS:
         problems.append(
             f"SECRET_KEY uses only {len(set(key))} distinct characters; "
@@ -283,9 +281,7 @@ class Settings(BaseSettings):
     cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173"
 
     # ----------------------------------------------------------- database ---
-    database_url: str = (
-        "postgresql+asyncpg://aiworkbench:aiworkbench@127.0.0.1:5432/aiworkbench"
-    )
+    database_url: str = "postgresql+asyncpg://aiworkbench:aiworkbench@127.0.0.1:5432/aiworkbench"
     db_echo: bool = False
     db_pool_size: int = 10
     db_max_overflow: int = 20
@@ -324,9 +320,7 @@ class Settings(BaseSettings):
     deepseek_model: str = "deepseek-flash"
 
     # ------------------------------------------------------ AI: embedding ---
-    embedding_provider: Literal["openai_compatible", "ollama", "offline"] = (
-        "openai_compatible"
-    )
+    embedding_provider: Literal["openai_compatible", "ollama", "offline"] = "openai_compatible"
     embedding_base_url: str = ""
     embedding_api_key: str = ""
     embedding_model: str = "text-embedding-3-small"
@@ -391,7 +385,8 @@ class Settings(BaseSettings):
 
         if problems:
             raise ValueError(
-                "refusing to start with APP_ENV=prod: " + "; ".join(problems)
+                "refusing to start with APP_ENV=prod: "
+                + "; ".join(problems)
                 + ". Set them in the environment or in .env."
             )
         return self

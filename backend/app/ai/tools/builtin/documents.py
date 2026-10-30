@@ -43,7 +43,8 @@ MAX_SECTIONS = 400
 
 #: Named styles, resolved from user preferences. The point of the product is that
 #: the same request produces a different document for a different person.
-STYLE_PRESETS: dict[str, dict[str, Any]] = {    "concise": {
+STYLE_PRESETS: dict[str, dict[str, Any]] = {
+    "concise": {
         "slides": "few",
         "bullets_per_slide": 4,
         "words_per_bullet": 12,
@@ -170,15 +171,13 @@ def normalise_chart(spec: dict[str, Any]) -> tuple[list[str], dict[str, list[flo
     with the offending value quoted.
     """
     categories_raw = (
-        spec.get("categories")
-        or spec.get("labels")
-        or spec.get("x")
-        or spec.get("index")
-        or []
+        spec.get("categories") or spec.get("labels") or spec.get("x") or spec.get("index") or []
     )
     if isinstance(categories_raw, dict):
         categories_raw = list(categories_raw.values())
-    categories = [str(c) for c in categories_raw] if isinstance(categories_raw, (list, tuple)) else []
+    categories = (
+        [str(c) for c in categories_raw] if isinstance(categories_raw, (list, tuple)) else []
+    )
 
     raw_series = spec.get("series")
     if raw_series is None:
@@ -214,7 +213,12 @@ def normalise_chart(spec: dict[str, Any]) -> tuple[list[str], dict[str, list[flo
         for index, item in enumerate(raw_series):
             if isinstance(item, dict):
                 name = str(item.get("name") or item.get("label") or f"系列{index + 1}")
-                add(name, item.get("data") if "data" in item else item.get("values") or item.get("y") or item)
+                add(
+                    name,
+                    item.get("data")
+                    if "data" in item
+                    else item.get("values") or item.get("y") or item,
+                )
             elif isinstance(item, (list, tuple)):
                 add(f"系列{index + 1}", item)
             else:
@@ -228,10 +232,7 @@ def normalise_chart(spec: dict[str, Any]) -> tuple[list[str], dict[str, list[flo
         )
 
     if not categories:
-        raise ChartRenderError(
-            "chart 缺少 categories（横轴标签）。"
-            f"收到的字段：{sorted(spec)}"
-        )
+        raise ChartRenderError(f"chart 缺少 categories（横轴标签）。收到的字段：{sorted(spec)}")
     if not series:
         raise ChartRenderError("chart 的 series 是空的，画不出任何东西")
 
@@ -267,7 +268,9 @@ def _render_chart(spec: dict[str, Any], target: Path) -> Path:
 
     # A CJK font, or Chinese labels render as empty boxes.
     matplotlib.rcParams["font.sans-serif"] = [
-        "Microsoft YaHei", "SimHei", "DejaVu Sans",
+        "Microsoft YaHei",
+        "SimHei",
+        "DejaVu Sans",
     ]
     matplotlib.rcParams["axes.unicode_minus"] = False
 
@@ -335,7 +338,11 @@ def _write_pptx(
     title_layout = presentation.slide_layouts[0]
     bullet_layout = presentation.slide_layouts[1]
 
-    title_text = str(sections[0].get("heading") or sections[0].get("title") or "演示文稿") if sections else "演示文稿"
+    title_text = (
+        str(sections[0].get("heading") or sections[0].get("title") or "演示文稿")
+        if sections
+        else "演示文稿"
+    )
     cover = presentation.slides.add_slide(title_layout)
     cover.shapes.title.text = title_text
     if len(cover.placeholders) > 1:
@@ -356,9 +363,11 @@ def _write_pptx(
     for section in body_sections[: min(limit, MAX_SLIDES)]:
         heading = str(section.get("heading") or section.get("title") or "").strip()
         body = section.get("content") or section.get("bullets") or ""
-        bullets = body if isinstance(body, list) else [
-            line.strip("-• \t") for line in str(body).split("\n") if line.strip()
-        ]
+        bullets = (
+            body
+            if isinstance(body, list)
+            else [line.strip("-• \t") for line in str(body).split("\n") if line.strip()]
+        )
         bullets = [str(b)[: style["words_per_bullet"] * 4] for b in bullets][:per_slide]
 
         slide = presentation.slides.add_slide(bullet_layout)
@@ -402,17 +411,13 @@ def _write_pptx(
             try:
                 from pptx.util import Inches
 
-                slide.shapes.add_picture(
-                    str(visual), Inches(4.7), Inches(1.7), width=Inches(4.8)
-                )
+                slide.shapes.add_picture(str(visual), Inches(4.7), Inches(1.7), width=Inches(4.8))
                 images_placed += 1
             except Exception as exc:
                 chart_failures.append(
                     {"heading": heading or "（无标题）", "error": f"插入图片失败：{exc}"}
                 )
-                logger.warning(
-                    "slide_image_failed", extra={"path": str(visual), "error": str(exc)}
-                )
+                logger.warning("slide_image_failed", extra={"path": str(visual), "error": str(exc)})
 
     total_slides = len(presentation.slides)
     dropped = max(0, len(body_sections) - min(limit, MAX_SLIDES))
@@ -481,7 +486,9 @@ def _write_xlsx(
             chart = kinds.get(str(chart_spec.get("type") or "bar"), BarChart)()
             chart.title = str(chart_spec.get("title") or section.get("heading") or "Chart")
             last_col = max(1, len(rows[0]) if rows and isinstance(rows[0], (list, tuple)) else 1)
-            data = Reference(sheet, min_col=1, min_row=1, max_col=last_col, max_row=min(total_rows, 50))
+            data = Reference(
+                sheet, min_col=1, min_row=1, max_col=last_col, max_row=min(total_rows, 50)
+            )
             chart.add_data(data, titles_from_data=True)
             sheet.add_chart(chart, str(chart_spec.get("anchor") or "H2"))
         written_sheets += 1
@@ -506,7 +513,7 @@ def _write_pdf(
             flow.append(Paragraph(str(section["heading"]), styles["Heading1"]))
             flow.append(Spacer(1, 8))
         body = section.get("content") or ""
-        for chunk in (body if isinstance(body, list) else str(body).split("\n\n")):
+        for chunk in body if isinstance(body, list) else str(body).split("\n\n"):
             text = str(chunk).strip()
             if text:
                 flow.append(Paragraph(text.replace("\n", "<br/>"), styles["BodyText"]))
@@ -594,17 +601,20 @@ class DocumentWriteTool(Tool):
                         "- heading：标题（pptx 的页标题 / docx 的标题 / xlsx 的工作表名）\n"
                         "- content：正文；字符串，或字符串数组（每个元素是一行/一条要点）\n"
                         "- rows / data：表格数据，二维数组或对象数组\n"
-                        "- formulas：[{cell: \"B7\", formula: \"=SUM(B2:B6)\"}]，原样写入\n"
+                        '- formulas：[{cell: "B7", formula: "=SUM(B2:B6)"}]，原样写入\n'
                         "- chart：图表，形如 "
-                        "{\"type\": \"bar|line|pie\", \"title\": \"...\", "
-                        "\"categories\": [\"A\",\"B\"], "
-                        "\"series\": [{\"name\": \"系列名\", \"data\": [1,2]}]}；"
-                        "series 也接受 {\"系列名\": [1,2]} 形式。"
+                        '{"type": "bar|line|pie", "title": "...", '
+                        '"categories": ["A","B"], '
+                        '"series": [{"name": "系列名", "data": [1,2]}]}；'
+                        'series 也接受 {"系列名": [1,2]} 形式。'
                         "categories 与每个 series 的长度必须一致，值必须是数字。\n"
                         "- notes：讲稿备注（仅 pptx）"
                     ),
                 },
-                "style": {"type": "string", "description": "concise / academic / business，留空则读用户偏好"},
+                "style": {
+                    "type": "string",
+                    "description": "concise / academic / business，留空则读用户偏好",
+                },
                 "min_slides": {
                     "type": "integer",
                     "description": "仅 pptx：硬约束要求的最少页数，不足会直接失败而不是交出不足页数的文件",
@@ -722,13 +732,17 @@ async def _preferred_style(ctx: ToolContext) -> str | None:
         from app.models.context import UserPreference
 
         row = (
-            await ctx.session.execute(
-                select(UserPreference).where(
-                    UserPreference.user_id == ctx.owner_id,
-                    UserPreference.key.in_(("document_style", "ppt_style", "output_style")),
+            (
+                await ctx.session.execute(
+                    select(UserPreference).where(
+                        UserPreference.user_id == ctx.owner_id,
+                        UserPreference.key.in_(("document_style", "ppt_style", "output_style")),
+                    )
                 )
             )
-        ).scalars().first()
+            .scalars()
+            .first()
+        )
         if row is None:
             return None
         value = row.value

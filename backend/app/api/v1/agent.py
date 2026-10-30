@@ -46,7 +46,9 @@ class PermissionUpdate(BaseModel):
 
     mode: str | None = Field(default=None, description="assist | supervised | autonomous")
     level: int | None = Field(default=None, ge=0, le=3, description="0 observe .. 3 full control")
-    allowed_paths: list[str] | None = Field(default=None, description="Replaces the configured list")
+    allowed_paths: list[str] | None = Field(
+        default=None, description="Replaces the configured list"
+    )
     extra_denied_paths: list[str] | None = Field(default=None, description="Additive only")
     allowed_domains: list[str] | None = None
     blocked_domains: list[str] | None = None
@@ -164,7 +166,9 @@ async def check_permission(payload: PermissionProbe, user: CurrentUser) -> dict[
     if payload.path:
         results["path"] = manager.check_path(payload.path, write=bool(payload.write)).as_dict()
     if payload.domain:
-        results["domain"] = manager.check_domain(payload.domain, writes=bool(payload.write)).as_dict()
+        results["domain"] = manager.check_domain(
+            payload.domain, writes=bool(payload.write)
+        ).as_dict()
     if payload.command:
         verdict = manager.check_command(payload.command)
         results["command"] = verdict.as_dict()
@@ -287,7 +291,9 @@ async def list_tools(
     excluded: list[dict[str, Any]] = []
     from app.ai.tools.permissions import AgentPolicy
 
-    permissive = AgentPolicy.from_settings(mode=AgentMode.SUPERVISED, level=PermissionLevel.FULL_CONTROL)
+    permissive = AgentPolicy.from_settings(
+        mode=AgentMode.SUPERVISED, level=PermissionLevel.FULL_CONTROL
+    )
     all_names = set(build_computer_registry(permissive).names())
     for row in build_computer_registry(permissive).catalog():
         if row["name"] not in available_names and row["name"] in all_names:

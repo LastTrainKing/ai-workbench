@@ -79,7 +79,9 @@ async def _seed(*, status: str, suffix: str) -> tuple[uuid.UUID, uuid.UUID, Path
 @pytest.mark.asyncio
 async def test_a_good_file_from_an_unfinished_run_is_still_verified():
     """The regression, stated as both facts at once."""
-    owner_id, item_id, _ = await _seed(status=BuildStatus.PARTIAL.value, suffix=uuid.uuid4().hex[:8])
+    owner_id, item_id, _ = await _seed(
+        status=BuildStatus.PARTIAL.value, suffix=uuid.uuid4().hex[:8]
+    )
 
     async with session_scope() as session:
         result = await DeliveryService(session).verify_deliverable(

@@ -139,9 +139,7 @@ async def list_tasks(
         roots_only=roots_only,
         search=q,
     )
-    rows, total = await repo.paginate(
-        stmt, page=pagination.page, page_size=pagination.page_size
-    )
+    rows, total = await repo.paginate(stmt, page=pagination.page, page_size=pagination.page_size)
     return ok(
         build_page(
             [TaskOut.model_validate(row).model_dump(mode="json") for row in rows],
@@ -196,8 +194,7 @@ async def get_task(task_id: uuid.UUID, user: CurrentUser, session: DbSession) ->
                 for dep in detail["dependencies"]
             ],
             "dependents": [
-                TaskOut.model_validate(dep).model_dump(mode="json")
-                for dep in detail["dependents"]
+                TaskOut.model_validate(dep).model_dump(mode="json") for dep in detail["dependents"]
             ],
             "documents": [
                 {"id": str(doc.id), "title": doc.title, "status": doc.status}
@@ -295,12 +292,8 @@ async def list_notes(
     q: str | None = Query(None, max_length=200),
 ) -> dict:
     repo = NoteRepository(session)
-    stmt = repo.query(
-        user.id, project_id=project_id, knowledge_base_id=knowledge_base_id, search=q
-    )
-    rows, total = await repo.paginate(
-        stmt, page=pagination.page, page_size=pagination.page_size
-    )
+    stmt = repo.query(user.id, project_id=project_id, knowledge_base_id=knowledge_base_id, search=q)
+    rows, total = await repo.paginate(stmt, page=pagination.page, page_size=pagination.page_size)
     return ok(
         build_page(
             [NoteOut.model_validate(row).model_dump(mode="json") for row in rows],

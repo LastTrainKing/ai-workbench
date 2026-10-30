@@ -275,6 +275,4 @@ async def test_another_account_cannot_read_the_outcome():
 
     async with session_scope() as session:
         with pytest.raises(NotFoundError):
-            await DeliveryService(session).outcome_for_run(
-                owner_id=stranger, build_run_id=run_id
-            )
+            await DeliveryService(session).outcome_for_run(owner_id=stranger, build_run_id=run_id)

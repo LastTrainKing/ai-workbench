@@ -40,7 +40,10 @@ class Task(Base, UUIDPrimaryKeyMixin, TimestampMixin):
         Uuid(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
     )
     project_id: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid(as_uuid=True), ForeignKey("projects.id", ondelete="SET NULL"), nullable=True, index=True
+        Uuid(as_uuid=True),
+        ForeignKey("projects.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
     )
     # Self-referencing tree: goal → phase → task → subtask
     parent_id: Mapped[uuid.UUID | None] = mapped_column(
@@ -56,9 +59,7 @@ class Task(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     priority: Mapped[str] = mapped_column(
         String(16), nullable=False, default=TaskPriority.MEDIUM.value
     )
-    source: Mapped[str] = mapped_column(
-        String(16), nullable=False, default=TaskSource.MANUAL.value
-    )
+    source: Mapped[str] = mapped_column(String(16), nullable=False, default=TaskSource.MANUAL.value)
     ai_suggestion: Mapped[str] = mapped_column(Text, nullable=False, default="")
 
     due_date: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -104,9 +105,7 @@ class TaskDependency(Base):
         Uuid(as_uuid=True), ForeignKey("tasks.id", ondelete="CASCADE"), nullable=False, index=True
     )
 
-    task: Mapped[Task] = relationship(
-        foreign_keys=[task_id], back_populates="dependencies"
-    )
+    task: Mapped[Task] = relationship(foreign_keys=[task_id], back_populates="dependencies")
     depends_on_task: Mapped[Task] = relationship(
         foreign_keys=[depends_on_task_id], back_populates="dependents"
     )

@@ -51,7 +51,9 @@ class FakeSnapshot:
     pinned: bool = False
 
 
-def _snapshot(snapshot_id: str, *, days_old: float, run_id: str = "", pinned: bool = False) -> FakeSnapshot:
+def _snapshot(
+    snapshot_id: str, *, days_old: float, run_id: str = "", pinned: bool = False
+) -> FakeSnapshot:
     # Snapshots are written with `time.strftime("%Y-%m-%d %H:%M:%S")` — **local** time with
     # no offset. Producing a UTC string here would test a format the product never writes,
     # and would hide the timezone bug this used to have.
@@ -453,7 +455,9 @@ def test_restore_brings_the_content_back_byte_for_byte(tmp_path: Path) -> None:
     assert restored["failed"] == []
     assert restored["restored"] == 1
     assert restored["restored_ids"] == ["doomed"]
-    assert _tree_snapshot(root / "doomed") == original, "the restored content differs from the original"
+    assert _tree_snapshot(root / "doomed") == original, (
+        "the restored content differs from the original"
+    )
 
 
 def test_restore_refuses_a_tampered_archive(tmp_path: Path) -> None:
@@ -489,7 +493,9 @@ def test_restore_does_not_clobber_a_snapshot_that_is_still_there(tmp_path: Path)
     assert second["restored"] == 0
     assert second["skipped"], "the existing snapshot was not reported as skipped"
 
-    forced = restore_snapshot_archive(Path(report["archive_dir"]), snapshot_root=root, overwrite=True)
+    forced = restore_snapshot_archive(
+        Path(report["archive_dir"]), snapshot_root=root, overwrite=True
+    )
     assert forced["restored"] == 1
 
 

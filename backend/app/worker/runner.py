@@ -69,9 +69,7 @@ class Worker:
                 # (including the API when the worker runs in-process) would
                 # freeze. Always yielding for the poll interval fixes that.
                 with contextlib.suppress(asyncio.TimeoutError):
-                    await asyncio.wait_for(
-                        self._stop.wait(), timeout=settings.worker_poll_interval
-                    )
+                    await asyncio.wait_for(self._stop.wait(), timeout=settings.worker_poll_interval)
         except asyncio.CancelledError:
             logger.info("worker_cancelled", extra={"worker_id": WORKER_ID})
             raise
@@ -90,9 +88,7 @@ class Worker:
     # ------------------------------------------------------------- scheduling --
     async def _recover_stale(self) -> None:
         async with session_scope() as session:
-            requeued = await JobRepository(session).requeue_stale(
-                settings.worker_stale_job_seconds
-            )
+            requeued = await JobRepository(session).requeue_stale(settings.worker_stale_job_seconds)
         if requeued:
             logger.warning("stale_jobs_requeued", extra={"count": requeued})
 
@@ -140,9 +136,7 @@ class Worker:
                 repo = JobRepository(session)
                 row = await repo.get(job_id)  # type: ignore[arg-type]
                 if row is None:
-                    logger.warning(
-                        "job_progress_missing_row", extra={"job_id": str(job_id)}
-                    )
+                    logger.warning("job_progress_missing_row", extra={"job_id": str(job_id)})
                     return
                 row.progress = percent
                 row.stage = stage
@@ -250,7 +244,9 @@ async def _handle_embed(payload: dict[str, object], progress) -> None:
     from app.infrastructure.vector_store import VectorPoint, get_vector_store
     from app.repositories.knowledge_repo import DocumentChunkRepository, DocumentRepository
 
-    kb_id = uuid.UUID(str(payload["knowledge_base_id"])) if payload.get("knowledge_base_id") else None
+    kb_id = (
+        uuid.UUID(str(payload["knowledge_base_id"])) if payload.get("knowledge_base_id") else None
+    )
     async with session_scope() as session:
         chunk_repo = DocumentChunkRepository(session)
         rows = await chunk_repo.pending_embedding(kb_id, limit=int(payload.get("limit") or 500))
@@ -327,9 +323,7 @@ async def _handle_reindex(payload: dict[str, object], progress) -> None:
 
     kb_id = uuid.UUID(str(payload["knowledge_base_id"]))
     async with session_scope() as session:
-        documents = await DocumentRepository(session).list(
-            Document.knowledge_base_id == kb_id
-        )
+        documents = await DocumentRepository(session).list(Document.knowledge_base_id == kb_id)
     for index, document in enumerate(documents, start=1):
         async with session_scope() as session:
             await DocumentService(session).ingest(document.id)

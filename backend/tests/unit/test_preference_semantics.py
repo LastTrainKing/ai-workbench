@@ -80,7 +80,9 @@ def test_the_rationale_names_the_source_phrase():
 def test_fewer_pages_is_bounded_by_the_fifteen_minute_floor():
     constraints = derive_constraints("做一份 15 分钟的答辩 PPT")
     resolution = resolve_preferences(
-        [Preference("用户偏好演示文稿页数更少")], constraints, workspace=__import__("pathlib").Path(".")
+        [Preference("用户偏好演示文稿页数更少")],
+        constraints,
+        workspace=__import__("pathlib").Path("."),
     )
     assert resolution.target_slides == 10, "must be the floor, not 2 and not 0"
     outcome = resolution.outcomes[0]
@@ -144,9 +146,7 @@ def test_detailed_content_cannot_override_a_three_minute_talk():
 # --------------------------------------------------------------------------- #
 def test_a_missing_template_is_reported_not_ignored(tmp_path):
     constraints = derive_constraints("做一份 PPT")
-    resolution = resolve_preferences(
-        [Preference("用公司模板")], constraints, workspace=tmp_path
-    )
+    resolution = resolve_preferences([Preference("用公司模板")], constraints, workspace=tmp_path)
     outcome = resolution.outcomes[0]
     assert outcome.verdict == "unsatisfiable"
     assert "模板" in outcome.detail
@@ -334,7 +334,9 @@ def test_the_other_shapes_and_aliases_are_accepted():
     from app.ai.tools.builtin.documents import normalise_chart
 
     assert normalise_chart({"labels": ["a", "b"], "values": [1, 2]})[0] == ["a", "b"]
-    assert normalise_chart({"categories": ["a", "b"], "series": {"n": [1, 2]}})[1] == {"n": [1.0, 2.0]}
+    assert normalise_chart({"categories": ["a", "b"], "series": {"n": [1, 2]}})[1] == {
+        "n": [1.0, 2.0]
+    }
     assert normalise_chart({"categories": ["a"], "series": [3]})[1] == {"数值": [3.0]}
     assert normalise_chart({"x": ["a"], "series": [[1]]})[1] == {"系列1": [1.0]}
     # Numeric strings and percent signs are what a model writes when it is unsure.

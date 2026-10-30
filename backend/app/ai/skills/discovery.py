@@ -118,7 +118,9 @@ def build_queries(profile: dict[str, Any], need: str, *, limit: int = 3) -> list
 
     # ASCII words from the need and the profile, which GitHub can match.
     ascii_words = re.findall(r"[A-Za-z][A-Za-z0-9+#.-]{2,}", f"{need} {profile.get('domain', '')}")
-    ascii_words = [w for w in ascii_words if w.lower() not in {"the", "and", "for", "with", "skill"}]
+    ascii_words = [
+        w for w in ascii_words if w.lower() not in {"the", "and", "for", "with", "skill"}
+    ]
     if ascii_words:
         terms.append(" ".join(ascii_words[:4]))
 
@@ -303,7 +305,9 @@ def _describe(exc: Exception, url: str) -> str:
     the URL are the two things that make it actionable.
     """
     detail = str(exc).strip()
-    return f"{type(exc).__name__} to {url}" + (f": {detail}" if detail else " (no message from httpx)")
+    return f"{type(exc).__name__} to {url}" + (
+        f": {detail}" if detail else " (no message from httpx)"
+    )
 
 
 async def fetch_skill_file(
@@ -387,9 +391,7 @@ def _days_since(stamp: str) -> int | None:
     return (datetime.now(UTC) - when).days
 
 
-def assess(
-    candidate: Candidate, profile: dict[str, Any], *, max_age_days: int = 730
-) -> Candidate:
+def assess(candidate: Candidate, profile: dict[str, Any], *, max_age_days: int = 730) -> Candidate:
     """Decide whether to keep a candidate, and say why.
 
     The reasons are the point. "Why this one" is what turns a search result into something
@@ -428,16 +430,25 @@ def assess(
     return candidate
 
 
-def shortlist(candidates: list[Candidate], profile: dict[str, Any], *, keep: int = 5) -> tuple[list[Candidate], list[Candidate]]:
+def shortlist(
+    candidates: list[Candidate], profile: dict[str, Any], *, keep: int = 5
+) -> tuple[list[Candidate], list[Candidate]]:
     """Assess everything, then split into kept and dropped, best first."""
     assessed = [assess(c, profile) for c in candidates]
-    kept = sorted([c for c in assessed if not c.dropped_because], key=lambda c: c.stars, reverse=True)
+    kept = sorted(
+        [c for c in assessed if not c.dropped_because], key=lambda c: c.stars, reverse=True
+    )
     dropped = [c for c in assessed if c.dropped_because]
     return kept[:keep], dropped
 
 
 async def discover(
-    *, profile: dict[str, Any], need: str, permissions: Any = None, token: str = "", per_query: int = 5
+    *,
+    profile: dict[str, Any],
+    need: str,
+    permissions: Any = None,
+    token: str = "",
+    per_query: int = 5,
 ) -> DiscoveryResult:
     """The whole FIND + ASSESS pass, with failures reported rather than hidden."""
     result = DiscoveryResult(queries=build_queries(profile, need))
@@ -446,7 +457,9 @@ async def discover(
     errors: list[str] = []
     for query in result.queries:
         try:
-            pool.extend(await search_github(query, permissions=permissions, token=token, limit=per_query))
+            pool.extend(
+                await search_github(query, permissions=permissions, token=token, limit=per_query)
+            )
         except ValidationError as exc:
             # One query failing is not the whole search failing; both are reported.
             errors.append(str(exc))

@@ -600,7 +600,9 @@ async def test_the_executor_commits_the_intent_before_the_tool_runs(
     llm = _OneCallLLM("file_append", {"path": "out.txt", "content": "x\n"})
 
     monkeypatch.setattr(
-        executor_module, "build_llm_provider", lambda: (llm, ProviderInfo(kind="offline", model="fake-tool-caller"))
+        executor_module,
+        "build_llm_provider",
+        lambda: (llm, ProviderInfo(kind="offline", model="fake-tool-caller")),
     )
 
     async with session_scope() as session:
@@ -663,7 +665,9 @@ async def test_the_executor_closes_the_window_when_the_tool_returns(
     registry = _Registry()
     llm = _OneCallLLM("file_append", {"path": "out.txt", "content": "x\n"})
     monkeypatch.setattr(
-        executor_module, "build_llm_provider", lambda: (llm, ProviderInfo(kind="offline", model="fake-tool-caller"))
+        executor_module,
+        "build_llm_provider",
+        lambda: (llm, ProviderInfo(kind="offline", model="fake-tool-caller")),
     )
 
     async with session_scope() as session:

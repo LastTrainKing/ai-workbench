@@ -55,9 +55,7 @@ MAX_PASSWORD_UTF8_BYTES = 512
 #: A valid hash of a value nobody knows, used to spend the same bcrypt work on a login
 #: for a **non-existent** account as on a real one. Without it, "no such user" returns
 #: faster than "wrong password" and the difference is an account-existence oracle.
-DUMMY_PASSWORD_HASH = (
-    "bcrypt_sha256$$2b$12$3Q5Ixs2IO3nQGdC4jLml3OFgnqzg.q2QZeTBBGzTp2gPx8Ez3Tzq2"
-)
+DUMMY_PASSWORD_HASH = "bcrypt_sha256$$2b$12$3Q5Ixs2IO3nQGdC4jLml3OFgnqzg.q2QZeTBBGzTp2gPx8Ez3Tzq2"
 
 
 def check_password_length(password: str) -> None:
@@ -102,7 +100,7 @@ def verify_password(password: str, hashed: str) -> bool:
         return False
     try:
         if hashed.startswith(_HASH_PREFIX):
-            return bcrypt.checkpw(_prehash(password), hashed[len(_HASH_PREFIX):].encode("utf-8"))
+            return bcrypt.checkpw(_prehash(password), hashed[len(_HASH_PREFIX) :].encode("utf-8"))
         return _verify_legacy(password, hashed)
     except (ValueError, TypeError):
         # Malformed hash in the database -> treat as a failed login, never crash.
@@ -156,6 +154,7 @@ def constant_time_equals(a: str, b: str) -> bool:
 
 def generate_api_token(prefix: str = "awb") -> str:
     return f"{prefix}_{secrets.token_urlsafe(32)}"
+
 
 # ------------------------------------------------------------- token revocation --
 #
@@ -258,9 +257,7 @@ async def is_token_revoked(payload: dict[str, Any], session: Any) -> RevocationS
 
     try:
         expires_at = (
-            await session.execute(
-                select(RevokedToken.expires_at).where(RevokedToken.jti == jti)
-            )
+            await session.execute(select(RevokedToken.expires_at).where(RevokedToken.jti == jti))
         ).scalar_one_or_none()
     except SQLAlchemyError as exc:
         logger.error(

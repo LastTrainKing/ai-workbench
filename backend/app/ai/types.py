@@ -261,7 +261,9 @@ class ToolResult:
             payload["error"] = self.error
         if self.data is not None:
             text = self.data if isinstance(self.data, str) else _json_safe(self.data)
-            payload["data"] = text if len(str(text)) <= limit else str(text)[:limit] + "...<truncated>"
+            payload["data"] = (
+                text if len(str(text)) <= limit else str(text)[:limit] + "...<truncated>"
+            )
         return payload
 
 

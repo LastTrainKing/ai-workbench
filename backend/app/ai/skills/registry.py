@@ -364,7 +364,9 @@ async def usage_stats(session: AsyncSession, *, user_id: uuid.UUID) -> dict[str,
         "never_used": len(rows) - len(used),
         "total_uses": sum(r.use_count for r in rows),
         "rated": len(rated),
-        "average_rating": round(sum(r.rating or 0 for r in rated) / len(rated), 2) if rated else None,
+        "average_rating": round(sum(r.rating or 0 for r in rated) / len(rated), 2)
+        if rated
+        else None,
     }
 
 

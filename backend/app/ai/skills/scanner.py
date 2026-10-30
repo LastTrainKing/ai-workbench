@@ -105,6 +105,7 @@ def _external_urls(text: str) -> list[str]:
         if not any(host_matches_allowed(host, allowed) for allowed in _ALLOWED_HOSTS)
     ]
 
+
 #: Reading things a skill has no business reading.
 _SECRET_PATHS = re.compile(
     r"""(?ix)
@@ -214,7 +215,11 @@ def _scan_text(text: str, *, where: str, scripted: bool) -> list[Finding]:
                     rule="outbound-network",
                     severity=Severity.BLOCK,
                     detail=f"{where} 里向外发送数据"
-                    + (f"，目标 {', '.join(sorted(set(outside))[:3])}" if outside else "（目标无法确认）"),
+                    + (
+                        f"，目标 {', '.join(sorted(set(outside))[:3])}"
+                        if outside
+                        else "（目标无法确认）"
+                    ),
                     evidence=match.group(0)[:120],
                 )
             )

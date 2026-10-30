@@ -132,7 +132,10 @@ def rank(
         return []
     corpus = [terms(str(getattr(m, "content", m))) for m in memories]
     df = document_frequencies(corpus)
-    scored = [(score(question, str(getattr(m, "content", m)), df=df, corpus_size=len(memories)), m) for m in memories]
+    scored = [
+        (score(question, str(getattr(m, "content", m)), df=df, corpus_size=len(memories)), m)
+        for m in memories
+    ]
     kept = [(value, m) for value, m in scored if value >= floor]
     kept.sort(key=lambda pair: pair[0], reverse=True)
     return kept[:limit] if limit else kept

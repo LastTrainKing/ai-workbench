@@ -113,9 +113,7 @@ async def test_release_is_quiet_when_the_employee_is_gone(session: Any, owner: U
 
 
 @pytest.mark.asyncio
-async def test_release_ignores_an_employee_owned_by_someone_else(
-    session: Any, owner: User
-) -> None:
+async def test_release_ignores_an_employee_owned_by_someone_else(session: Any, owner: User) -> None:
     """The id arrives from caller-supplied data, so ownership is re-checked on write."""
     other = User(
         email=f"other_{uuid.uuid4().hex[:8]}@aiworkbench.dev",
@@ -137,9 +135,7 @@ async def test_release_ignores_an_employee_owned_by_someone_else(
 # the restart
 # --------------------------------------------------------------------------- #
 @pytest.mark.asyncio
-async def test_restart_returns_a_stuck_employee_to_the_roster(
-    session: Any, owner: User
-) -> None:
+async def test_restart_returns_a_stuck_employee_to_the_roster(session: Any, owner: User) -> None:
     """`working` is driven by an in-process task, so a restart makes it false."""
     from app.main import _reconcile_stuck_employees
 

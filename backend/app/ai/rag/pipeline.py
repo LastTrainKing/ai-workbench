@@ -122,11 +122,7 @@ def analyse_citations(answer: str, source_count: int) -> CitationReport:
         reason = ""
 
     grounded = bool(
-        source_count > 0
-        and units
-        and not invalid
-        and valid
-        and supported_units == len(units)
+        source_count > 0 and units and not invalid and valid and supported_units == len(units)
     )
     return CitationReport(
         source_count=source_count,
@@ -164,9 +160,7 @@ class RAGPipeline:
         self.llm, self.llm_info = build_llm_provider()
 
     # ---------------------------------------------------------------- rewrite --
-    async def _rewrite_query(
-        self, session: AsyncSession, question: str
-    ) -> list[str]:
+    async def _rewrite_query(self, session: AsyncSession, question: str) -> list[str]:
         """Expand the question into retrieval-friendly variants.
 
         A failure here is *not* fatal: we simply fall back to the raw question.
@@ -323,19 +317,20 @@ class RAGPipeline:
 
             history_text = ""
             if history:
-                history_text = "\n".join(
-                    f"{'用户' if h.get('role') == 'user' else '助手'}: {h.get('content', '')[:300]}"
-                    for h in history[-4:]
-                ) or "（无）"
+                history_text = (
+                    "\n".join(
+                        f"{'用户' if h.get('role') == 'user' else '助手'}: {h.get('content', '')[:300]}"
+                        for h in history[-4:]
+                    )
+                    or "（无）"
+                )
             else:
                 history_text = "（无）"
 
             rendered = prompt.render(
-                context=(
-                    f"{extra_context}\n\n{context}" if extra_context.strip() else context
-                ),
+                context=(f"{extra_context}\n\n{context}" if extra_context.strip() else context),
                 question=question,
-                history=history_text
+                history=history_text,
             )
             chat = await self.llm.chat(
                 [

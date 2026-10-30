@@ -66,9 +66,7 @@ class StatsService:
                         Task.owner_id == owner_id,
                         Task.due_date.is_not(None),
                         Task.due_date < now,
-                        Task.status.notin_(
-                            [TaskStatus.DONE.value, TaskStatus.CANCELLED.value]
-                        ),
+                        Task.status.notin_([TaskStatus.DONE.value, TaskStatus.CANCELLED.value]),
                     )
                 )
             ).scalar_one()
@@ -419,11 +417,9 @@ class GraphService:
 
         # ---------------------------------------------------------------- notes
         notes = list(
-            (
-                await self.session.execute(
-                    select(Note).where(Note.owner_id == owner_id).limit(60)
-                )
-            ).scalars().all()
+            (await self.session.execute(select(Note).where(Note.owner_id == owner_id).limit(60)))
+            .scalars()
+            .all()
         )
         for note in notes:
             add_node(
@@ -435,9 +431,7 @@ class GraphService:
             if note.project_id:
                 add_edge(f"project:{note.project_id}", f"note:{note.id}", "contains")
             if note.source_document_id:
-                add_edge(
-                    f"document:{note.source_document_id}", f"note:{note.id}", "produced"
-                )
+                add_edge(f"document:{note.source_document_id}", f"note:{note.id}", "produced")
 
         # ------------------------------------------------------------- ai runs
         if include_runs:

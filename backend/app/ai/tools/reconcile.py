@@ -207,12 +207,8 @@ async def reconcile_unknown_calls(
             extra={
                 "count": len(reports),
                 "applied": sum(1 for r in reports if r.verdict is ReconcileVerdict.APPLIED),
-                "not_applied": sum(
-                    1 for r in reports if r.verdict is ReconcileVerdict.NOT_APPLIED
-                ),
-                "undecidable": sum(
-                    1 for r in reports if r.verdict is ReconcileVerdict.UNDECIDABLE
-                ),
+                "not_applied": sum(1 for r in reports if r.verdict is ReconcileVerdict.NOT_APPLIED),
+                "undecidable": sum(1 for r in reports if r.verdict is ReconcileVerdict.UNDECIDABLE),
             },
         )
     return reports

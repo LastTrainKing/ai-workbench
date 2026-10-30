@@ -37,7 +37,9 @@ async def _ingest(document_id: str) -> dict:
 async def test_markdown_ingestion_end_to_end(
     client: httpx.AsyncClient, auth_headers: dict, knowledge_base: dict, sample_markdown: bytes
 ) -> None:
-    response = await _upload(client, auth_headers, knowledge_base["id"], "notes.md", sample_markdown)
+    response = await _upload(
+        client, auth_headers, knowledge_base["id"], "notes.md", sample_markdown
+    )
     assert response.status_code == 202
     payload = response.json()["data"]
     assert payload["duplicate"] is False
@@ -99,7 +101,9 @@ async def test_duplicate_upload_is_skipped(
 async def test_reingest_is_idempotent(
     client: httpx.AsyncClient, auth_headers: dict, knowledge_base: dict, sample_markdown: bytes
 ) -> None:
-    response = await _upload(client, auth_headers, knowledge_base["id"], "notes.md", sample_markdown)
+    response = await _upload(
+        client, auth_headers, knowledge_base["id"], "notes.md", sample_markdown
+    )
     document_id = response.json()["data"]["document"]["id"]
 
     first = await _ingest(document_id)
@@ -109,9 +113,9 @@ async def test_reingest_is_idempotent(
     detail = (await client.get(f"/documents/{document_id}", headers=auth_headers)).json()["data"]
     assert detail["chunk_count"] == first["chunks"]
 
-    chunks = (
-        await client.get(f"/documents/{document_id}/chunks", headers=auth_headers)
-    ).json()["data"]
+    chunks = (await client.get(f"/documents/{document_id}/chunks", headers=auth_headers)).json()[
+        "data"
+    ]
     assert chunks["meta"]["total"] == first["chunks"]
 
 
@@ -119,21 +123,23 @@ async def test_reingest_is_idempotent(
 async def test_chunk_listing_and_content(
     client: httpx.AsyncClient, auth_headers: dict, knowledge_base: dict, sample_markdown: bytes
 ) -> None:
-    response = await _upload(client, auth_headers, knowledge_base["id"], "notes.md", sample_markdown)
+    response = await _upload(
+        client, auth_headers, knowledge_base["id"], "notes.md", sample_markdown
+    )
     document_id = response.json()["data"]["document"]["id"]
     await _ingest(document_id)
 
-    chunks = (
-        await client.get(f"/documents/{document_id}/chunks", headers=auth_headers)
-    ).json()["data"]
+    chunks = (await client.get(f"/documents/{document_id}/chunks", headers=auth_headers)).json()[
+        "data"
+    ]
     assert chunks["items"]
     assert chunks["items"][0]["chunk_index"] == 0
     assert chunks["items"][0]["embedding_status"] == "EMBEDDED"
     assert chunks["items"][0]["vector_id"]
 
-    content = (
-        await client.get(f"/documents/{document_id}/content", headers=auth_headers)
-    ).json()["data"]
+    content = (await client.get(f"/documents/{document_id}/content", headers=auth_headers)).json()[
+        "data"
+    ]
     assert "垃圾回收" in content["content"]
     assert content["char_count"] > 0
 
@@ -144,14 +150,18 @@ async def test_delete_document_removes_chunks_and_vectors(
 ) -> None:
     from app.infrastructure.vector_store import get_vector_store
 
-    response = await _upload(client, auth_headers, knowledge_base["id"], "notes.md", sample_markdown)
+    response = await _upload(
+        client, auth_headers, knowledge_base["id"], "notes.md", sample_markdown
+    )
     document_id = response.json()["data"]["document"]["id"]
     await _ingest(document_id)
 
     before = await get_vector_store().count(knowledge_base["id"])
     assert before > 0
 
-    assert (await client.delete(f"/documents/{document_id}", headers=auth_headers)).status_code == 200
+    assert (
+        await client.delete(f"/documents/{document_id}", headers=auth_headers)
+    ).status_code == 200
     after = await get_vector_store().count(knowledge_base["id"])
     assert after < before, "deleting a document must delete its vectors"
 
@@ -163,7 +173,9 @@ async def test_delete_document_removes_chunks_and_vectors(
 async def test_all_search_modes_return_results(
     client: httpx.AsyncClient, auth_headers: dict, knowledge_base: dict, sample_markdown: bytes
 ) -> None:
-    response = await _upload(client, auth_headers, knowledge_base["id"], "notes.md", sample_markdown)
+    response = await _upload(
+        client, auth_headers, knowledge_base["id"], "notes.md", sample_markdown
+    )
     await _ingest(response.json()["data"]["document"]["id"])
 
     for mode in ("keyword", "semantic", "hybrid"):
@@ -171,7 +183,11 @@ async def test_all_search_modes_return_results(
             await client.get(
                 "/search",
                 headers=auth_headers,
-                params={"q": "垃圾回收 收集器", "mode": mode, "knowledge_base_id": knowledge_base["id"]},
+                params={
+                    "q": "垃圾回收 收集器",
+                    "mode": mode,
+                    "knowledge_base_id": knowledge_base["id"],
+                },
             )
         ).json()["data"]
         assert result["results"], f"{mode} search returned nothing"
@@ -183,14 +199,20 @@ async def test_all_search_modes_return_results(
 async def test_hybrid_results_expose_both_score_legs(
     client: httpx.AsyncClient, auth_headers: dict, knowledge_base: dict, sample_markdown: bytes
 ) -> None:
-    response = await _upload(client, auth_headers, knowledge_base["id"], "notes.md", sample_markdown)
+    response = await _upload(
+        client, auth_headers, knowledge_base["id"], "notes.md", sample_markdown
+    )
     await _ingest(response.json()["data"]["document"]["id"])
 
     result = (
         await client.get(
             "/search",
             headers=auth_headers,
-            params={"q": "HashMap 红黑树", "mode": "hybrid", "knowledge_base_id": knowledge_base["id"]},
+            params={
+                "q": "HashMap 红黑树",
+                "mode": "hybrid",
+                "knowledge_base_id": knowledge_base["id"],
+            },
         )
     ).json()["data"]
 
@@ -207,7 +229,9 @@ async def test_search_is_cached_and_namespace_invalidated(
 ) -> None:
     from app.core.cache import bump_namespace
 
-    response = await _upload(client, auth_headers, knowledge_base["id"], "notes.md", sample_markdown)
+    response = await _upload(
+        client, auth_headers, knowledge_base["id"], "notes.md", sample_markdown
+    )
     await _ingest(response.json()["data"]["document"]["id"])
     params = {"q": "线程池", "mode": "hybrid", "knowledge_base_id": knowledge_base["id"]}
 
@@ -251,7 +275,9 @@ async def test_search_cannot_read_another_users_knowledge_base(
 async def test_rag_returns_citations_from_real_chunks(
     client: httpx.AsyncClient, auth_headers: dict, knowledge_base: dict, sample_markdown: bytes
 ) -> None:
-    response = await _upload(client, auth_headers, knowledge_base["id"], "notes.md", sample_markdown)
+    response = await _upload(
+        client, auth_headers, knowledge_base["id"], "notes.md", sample_markdown
+    )
     await _ingest(response.json()["data"]["document"]["id"])
 
     rag = (
@@ -282,14 +308,19 @@ async def test_rag_returns_citations_from_real_chunks(
 async def test_rag_trace_records_prompt_version_and_sources(
     client: httpx.AsyncClient, auth_headers: dict, knowledge_base: dict, sample_markdown: bytes
 ) -> None:
-    response = await _upload(client, auth_headers, knowledge_base["id"], "notes.md", sample_markdown)
+    response = await _upload(
+        client, auth_headers, knowledge_base["id"], "notes.md", sample_markdown
+    )
     await _ingest(response.json()["data"]["document"]["id"])
 
     rag = (
         await client.post(
             "/chat/rag",
             headers=auth_headers,
-            json={"question": "HashMap 的结构是什么？", "knowledge_base_ids": [knowledge_base["id"]]},
+            json={
+                "question": "HashMap 的结构是什么？",
+                "knowledge_base_ids": [knowledge_base["id"]],
+            },
         )
     ).json()["data"]
 
@@ -337,7 +368,9 @@ async def test_rag_rejects_unknown_knowledge_base(
 async def test_document_analysis_workflows(
     client: httpx.AsyncClient, auth_headers: dict, knowledge_base: dict, sample_markdown: bytes
 ) -> None:
-    response = await _upload(client, auth_headers, knowledge_base["id"], "notes.md", sample_markdown)
+    response = await _upload(
+        client, auth_headers, knowledge_base["id"], "notes.md", sample_markdown
+    )
     document_id = response.json()["data"]["document"]["id"]
     await _ingest(document_id)
 
@@ -366,7 +399,9 @@ async def test_document_analysis_workflows(
 async def test_analysis_requires_completed_document(
     client: httpx.AsyncClient, auth_headers: dict, knowledge_base: dict, sample_markdown: bytes
 ) -> None:
-    response = await _upload(client, auth_headers, knowledge_base["id"], "notes.md", sample_markdown)
+    response = await _upload(
+        client, auth_headers, knowledge_base["id"], "notes.md", sample_markdown
+    )
     document_id = response.json()["data"]["document"]["id"]  # still PENDING
 
     result = await client.post(

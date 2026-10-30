@@ -14,6 +14,7 @@ The project tools run the project's own commands (tests, lint, typecheck, build)
 through the detected package manager, so a Node project and a Python project are
 both handled without the agent having to know which is which.
 """
+
 from __future__ import annotations
 
 import contextlib
@@ -81,11 +82,13 @@ class GitStatusTool(_GitTool):
 
     async def execute(self, ctx: ToolContext, path: str | None = None) -> ToolResult:
         root = await self._repo(ctx, path)
-        if (err := await self._ensure_repo(root)):
+        if err := await self._ensure_repo(root):
             return ToolResult(ok=False, error=err, summary="not a repository")
 
         status = await _git_run(root, ["status", "--porcelain=v1", "--branch"])
-        files = [line for line in status["stdout"].splitlines() if line and not line.startswith("##")]
+        files = [
+            line for line in status["stdout"].splitlines() if line and not line.startswith("##")
+        ]
         branch = ""
         ahead = behind = 0
         for line in status["stdout"].splitlines():
@@ -142,7 +145,7 @@ class GitDiffTool(_GitTool):
         revision: str | None = None,
     ) -> ToolResult:
         root = await self._repo(ctx, path)
-        if (err := await self._ensure_repo(root)):
+        if err := await self._ensure_repo(root):
             return ToolResult(ok=False, error=err, summary="not a repository")
 
         args = ["diff", "--no-color", "--stat"]
@@ -192,10 +195,15 @@ class GitLogTool(_GitTool):
         self, ctx: ToolContext, path: str | None = None, limit: int = 20, file: str | None = None
     ) -> ToolResult:
         root = await self._repo(ctx, path)
-        if (err := await self._ensure_repo(root)):
+        if err := await self._ensure_repo(root):
             return ToolResult(ok=False, error=err, summary="not a repository")
 
-        args = ["log", f"-{max(1, min(int(limit or 20), 200))}", "--pretty=format:%h|%an|%ad|%s", "--date=short"]
+        args = [
+            "log",
+            f"-{max(1, min(int(limit or 20), 200))}",
+            "--pretty=format:%h|%an|%ad|%s",
+            "--date=short",
+        ]
         if file:
             args += ["--", file]
         result = await _git_run(root, args)
@@ -203,9 +211,15 @@ class GitLogTool(_GitTool):
         for line in result["stdout"].splitlines():
             parts = line.split("|", 3)
             if len(parts) == 4:
-                commits.append({"sha": parts[0], "author": parts[1], "date": parts[2], "subject": parts[3]})
+                commits.append(
+                    {"sha": parts[0], "author": parts[1], "date": parts[2], "subject": parts[3]}
+                )
 
-        return ToolResult(ok=True, data={"commits": commits, "count": len(commits)}, summary=f"{len(commits)} commits")
+        return ToolResult(
+            ok=True,
+            data={"commits": commits, "count": len(commits)},
+            summary=f"{len(commits)} commits",
+        )
 
 
 class GitBranchTool(_GitTool):
@@ -222,7 +236,7 @@ class GitBranchTool(_GitTool):
 
     async def execute(self, ctx: ToolContext, path: str | None = None) -> ToolResult:
         root = await self._repo(ctx, path)
-        if (err := await self._ensure_repo(root)):
+        if err := await self._ensure_repo(root):
             return ToolResult(ok=False, error=err, summary="not a repository")
         result = await _git_run(root, ["branch", "--format=%(refname:short)|%(HEAD)"])
         branches = []
@@ -233,7 +247,9 @@ class GitBranchTool(_GitTool):
             if head.strip() == "*":
                 current = name
         return ToolResult(
-            ok=True, data={"branches": branches, "current": current}, summary=f"on {current or 'detached'}"
+            ok=True,
+            data={"branches": branches, "current": current},
+            summary=f"on {current or 'detached'}",
         )
 
 
@@ -266,7 +282,7 @@ class GitCheckoutTool(_GitTool):
         self, ctx: ToolContext, target: str, create: bool = False, path: str | None = None
     ) -> ToolResult:
         root = await self._repo(ctx, path)
-        if (err := await self._ensure_repo(root)):
+        if err := await self._ensure_repo(root):
             return ToolResult(ok=False, error=err, summary="not a repository")
         args = ["checkout"]
         if create:
@@ -275,7 +291,11 @@ class GitCheckoutTool(_GitTool):
         result = await _git_run(root, args)
         return ToolResult(
             ok=result["exit_code"] == 0,
-            data={"target": target, "created": create, "output": result["stdout"] + result["stderr"]},
+            data={
+                "target": target,
+                "created": create,
+                "output": result["stdout"] + result["stderr"],
+            },
             error="" if result["exit_code"] == 0 else result["stderr"],
             summary=f"checked out {target}",
         )
@@ -289,7 +309,11 @@ class GitAddTool(_GitTool):
         parameters={
             "type": "object",
             "properties": {
-                "paths": {"type": "array", "items": {"type": "string"}, "description": "Empty means all changes"},
+                "paths": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Empty means all changes",
+                },
                 "path": {"type": "string", "description": "Repository directory"},
             },
             "required": [],
@@ -322,7 +346,7 @@ class GitAddTool(_GitTool):
         self, ctx: ToolContext, paths: list[str] | None = None, path: str | None = None
     ) -> ToolResult:
         root = await self._repo(ctx, path)
-        if (err := await self._ensure_repo(root)):
+        if err := await self._ensure_repo(root):
             return ToolResult(ok=False, error=err, summary="not a repository")
         args = ["add", *(["--", *list(paths)] if paths else ["-A"])]
         result = await _git_run(root, args)
@@ -387,7 +411,7 @@ class GitAddTool(_GitTool):
                 detail=f"无法定位仓库：{type(exc).__name__}: {exc}",
                 evidence={"paths": [str(p) for p in paths]},
             )
-        if (err := await self._ensure_repo(root)):
+        if err := await self._ensure_repo(root):
             return ReconcileOutcome(
                 verdict=ReconcileVerdict.UNDECIDABLE,
                 detail=f"无法读取仓库状态：{err}",
@@ -401,7 +425,11 @@ class GitAddTool(_GitTool):
                 detail=f"`git diff --cached` 失败：{staged['stderr'].strip()[:200]}",
                 evidence={"repo": str(root)},
             )
-        in_index = {line.strip().replace("\\", "/") for line in staged["stdout"].splitlines() if line.strip()}
+        in_index = {
+            line.strip().replace("\\", "/")
+            for line in staged["stdout"].splitlines()
+            if line.strip()
+        }
         wanted = [str(p).replace("\\", "/") for p in paths]
         missing = [p for p in wanted if p not in in_index]
         evidence = {"repo": str(root), "index": sorted(in_index), "wanted": wanted}
@@ -438,7 +466,7 @@ class GitCommitTool(_GitTool):
 
     async def execute(self, ctx: ToolContext, message: str, path: str | None = None) -> ToolResult:
         root = await self._repo(ctx, path)
-        if (err := await self._ensure_repo(root)):
+        if err := await self._ensure_repo(root):
             return ToolResult(ok=False, error=err, summary="not a repository")
         if not message.strip():
             raise ValidationError("Commit message must not be empty")
@@ -472,7 +500,11 @@ class GitRestoreTool(_GitTool):
         parameters={
             "type": "object",
             "properties": {
-                "paths": {"type": "array", "items": {"type": "string"}, "description": "Empty means the whole tree"},
+                "paths": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Empty means the whole tree",
+                },
                 "staged": {"type": "boolean", "description": "Unstage instead of discarding"},
                 "path": {"type": "string"},
             },
@@ -494,7 +526,7 @@ class GitRestoreTool(_GitTool):
         path: str | None = None,
     ) -> ToolResult:
         root = await self._repo(ctx, path)
-        if (err := await self._ensure_repo(root)):
+        if err := await self._ensure_repo(root):
             return ToolResult(ok=False, error=err, summary="not a repository")
 
         # Capture what is about to be lost so the report can say how much.
@@ -513,7 +545,8 @@ class GitRestoreTool(_GitTool):
                 "output": result["stdout"] + result["stderr"],
             },
             error="" if result["exit_code"] == 0 else result["stderr"],
-            summary=("unstaged" if staged else "discarded changes in") + f" {paths or 'the working tree'}",
+            summary=("unstaged" if staged else "discarded changes in")
+            + f" {paths or 'the working tree'}",
         )
 
 
@@ -522,8 +555,19 @@ class GitRestoreTool(_GitTool):
 # --------------------------------------------------------------------------- #
 #: Directories never searched when deciding what kind of project this is.
 _PROJECT_SCAN_SKIP = {
-    ".git", ".venv", "venv", "node_modules", "__pycache__", ".pytest_cache",
-    ".ruff_cache", ".mypy_cache", "target", "dist", "build", ".next", ".runtime",
+    ".git",
+    ".venv",
+    "venv",
+    "node_modules",
+    "__pycache__",
+    ".pytest_cache",
+    ".ruff_cache",
+    ".mypy_cache",
+    "target",
+    "dist",
+    "build",
+    ".next",
+    ".runtime",
 }
 
 
@@ -602,9 +646,15 @@ def detect_project(root: Path) -> dict[str, Any]:
             has_pytest = True
         if has_pytest:
             commands["test"] = "python -m pytest -q"
-        if (root / "ruff.toml").is_file() or (pyproject.is_file() and "ruff" in (
-            pyproject.read_text(encoding="utf-8", errors="ignore") if pyproject.is_file() else ""
-        )):
+        if (root / "ruff.toml").is_file() or (
+            pyproject.is_file()
+            and "ruff"
+            in (
+                pyproject.read_text(encoding="utf-8", errors="ignore")
+                if pyproject.is_file()
+                else ""
+            )
+        ):
             commands["lint"] = "python -m ruff check ."
     elif _looks_like_python(root):
         # A directory of Python files with no manifest is still a Python project.
@@ -691,7 +741,10 @@ class RunTestsTool(_ProjectCommandTool):
         parameters={
             "type": "object",
             "properties": {
-                "path": {"type": "string", "description": "Project directory (default: working directory)"},
+                "path": {
+                    "type": "string",
+                    "description": "Project directory (default: working directory)",
+                },
                 "command": {"type": "string", "description": "Override the detected command"},
             },
             "required": [],
@@ -709,7 +762,11 @@ class RunLintTool(_ProjectCommandTool):
         name="run_lint",
         description="Run the project's linter.",
         category="project",
-        parameters={"type": "object", "properties": {"path": {"type": "string"}, "command": {"type": "string"}}, "required": []},
+        parameters={
+            "type": "object",
+            "properties": {"path": {"type": "string"}, "command": {"type": "string"}},
+            "required": [],
+        },
         permission_level=1,
         risk_level="low",
         timeout_seconds=600,
@@ -723,7 +780,11 @@ class RunTypecheckTool(_ProjectCommandTool):
         name="run_typecheck",
         description="Run the project's type checker.",
         category="project",
-        parameters={"type": "object", "properties": {"path": {"type": "string"}, "command": {"type": "string"}}, "required": []},
+        parameters={
+            "type": "object",
+            "properties": {"path": {"type": "string"}, "command": {"type": "string"}},
+            "required": [],
+        },
         permission_level=1,
         risk_level="low",
         timeout_seconds=600,
@@ -737,7 +798,11 @@ class RunBuildTool(_ProjectCommandTool):
         name="run_build",
         description="Build the project.",
         category="project",
-        parameters={"type": "object", "properties": {"path": {"type": "string"}, "command": {"type": "string"}}, "required": []},
+        parameters={
+            "type": "object",
+            "properties": {"path": {"type": "string"}, "command": {"type": "string"}},
+            "required": [],
+        },
         permission_level=1,
         risk_level="medium",
         timeout_seconds=BUILD_TIMEOUT,

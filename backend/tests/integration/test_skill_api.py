@@ -72,7 +72,12 @@ async def test_adopt_requires_the_confirmed_field_at_all(client, auth_headers) -
     response = await client.post(
         "/skills/adopt",
         headers=auth_headers,
-        json={"name": "x", "description": "y", "body": SKILL_BODY, "source": "https://github.com/a/b"},
+        json={
+            "name": "x",
+            "description": "y",
+            "body": SKILL_BODY,
+            "source": "https://github.com/a/b",
+        },
     )
     assert response.status_code == 422
 
@@ -153,7 +158,9 @@ async def test_use_and_review_round_trip(client, auth_headers) -> None:
     )
     skill_id = created.json()["data"]["id"]
 
-    used = await client.post(f"/skills/{skill_id}/use", headers=auth_headers, json={"succeeded": True})
+    used = await client.post(
+        f"/skills/{skill_id}/use", headers=auth_headers, json={"succeeded": True}
+    )
     assert used.status_code == 200
 
     reviewed = await client.post(

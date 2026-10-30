@@ -202,9 +202,7 @@ class DocumentService:
             overlap=settings.chunk_overlap,
         )
         if not pieces:
-            await self._record_failure(
-                doc_id, "document_parse_error: 分块后没有任何有效内容"
-            )
+            await self._record_failure(doc_id, "document_parse_error: 分块后没有任何有效内容")
             raise DocumentParseError("Chunking produced no content")
 
         # ---------------------------------------------------- model conflict
@@ -475,7 +473,9 @@ class DocumentService:
             "tags": list(document.tags),
         }
 
-    async def content(self, *, owner_id: uuid.UUID, document_id: uuid.UUID, limit: int = 40_000) -> dict[str, Any]:
+    async def content(
+        self, *, owner_id: uuid.UUID, document_id: uuid.UUID, limit: int = 40_000
+    ) -> dict[str, Any]:
         document = await self.get(owner_id=owner_id, document_id=document_id)
         rows = await self.chunks.for_document(document.id)
         text = "\n\n".join(chunk.content for chunk in rows)
@@ -586,11 +586,15 @@ class DocumentService:
                 await assembler.persist(assembled, purpose="document")
                 personal = assembled.render()
         except Exception as exc:
-            logger.warning("document_context_failed", extra={"error": f"{type(exc).__name__}: {exc}"})
+            logger.warning(
+                "document_context_failed", extra={"error": f"{type(exc).__name__}: {exc}"}
+            )
 
         recorder = await RunRecorder.start(
             self.session,
-            run_type=RunType.DOCUMENT_SUMMARY if wanted == ["summary"] else RunType.KNOWLEDGE_EXTRACTION,
+            run_type=RunType.DOCUMENT_SUMMARY
+            if wanted == ["summary"]
+            else RunType.KNOWLEDGE_EXTRACTION,
             owner_id=owner_id,
             provider=info.kind,
             model=llm.model,
@@ -665,9 +669,7 @@ class DocumentService:
                     [
                         ChatMessage(
                             role="system",
-                            content=prompt.render(
-                                title=document.title, content=content, count=10
-                            ),
+                            content=prompt.render(title=document.title, content=content, count=10),
                         ),
                         ChatMessage(role="user", content="生成面试题。"),
                     ],
@@ -766,10 +768,13 @@ class DocumentService:
             knowledge_base_ids=knowledge_base_ids,
             top_k=6,
         )
-        context = "\n\n".join(
-            f"【资料 {i}】{c.document_title} / {c.heading}\n{c.content[:1500]}"
-            for i, c in enumerate(result.chunks, start=1)
-        ) or "（知识库中没有检索到相关资料）"
+        context = (
+            "\n\n".join(
+                f"【资料 {i}】{c.document_title} / {c.heading}\n{c.content[:1500]}"
+                for i, c in enumerate(result.chunks, start=1)
+            )
+            or "（知识库中没有检索到相关资料）"
+        )
 
         llm, info = build_llm_provider()
         prompt = await get_prompt(self.session, "note_generation")
@@ -786,9 +791,7 @@ class DocumentService:
         try:
             chat = await llm.chat(
                 [
-                    ChatMessage(
-                        role="system", content=prompt.render(title=title, context=context)
-                    ),
+                    ChatMessage(role="system", content=prompt.render(title=title, context=context)),
                     ChatMessage(role="user", content=topic),
                 ],
                 temperature=0.3,
@@ -837,9 +840,7 @@ class DocumentService:
         await self.session.flush()
 
     @staticmethod
-    def _build_cards(
-        title: str, terms: list[Any], key_points: list[Any]
-    ) -> list[dict[str, str]]:
+    def _build_cards(title: str, terms: list[Any], key_points: list[Any]) -> list[dict[str, str]]:
         cards: list[dict[str, str]] = []
         for term in terms[:10]:
             if isinstance(term, dict):

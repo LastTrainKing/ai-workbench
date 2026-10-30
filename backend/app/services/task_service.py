@@ -122,9 +122,7 @@ class TaskService:
         await self.session.flush()
 
         for document_id in document_ids or []:
-            await self.link_document(
-                owner_id=owner_id, task_id=task.id, document_id=document_id
-            )
+            await self.link_document(owner_id=owner_id, task_id=task.id, document_id=document_id)
         for dependency_id in depends_on_ids or []:
             await self.add_dependency(
                 owner_id=owner_id, task_id=task.id, depends_on_id=dependency_id
@@ -143,9 +141,7 @@ class TaskService:
         return task
 
     # ------------------------------------------------------------------ update --
-    async def update_task(
-        self, *, owner_id: uuid.UUID, task_id: uuid.UUID, **changes: Any
-    ) -> Task:
+    async def update_task(self, *, owner_id: uuid.UUID, task_id: uuid.UUID, **changes: Any) -> Task:
         task = await self.tasks.get_owned(task_id, owner_id)
         if task is None:
             raise NotFoundError("Task not found")

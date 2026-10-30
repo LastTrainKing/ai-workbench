@@ -212,10 +212,13 @@ async def study_plan(payload: PlanIn, user: CurrentUser, session: DbSession) -> 
         knowledge_base_ids=payload.knowledge_base_ids or None,
         top_k=6,
     )
-    context = "\n\n".join(
-        f"【资料 {i}】{c.document_title}\n{c.content[:1200]}"
-        for i, c in enumerate(retrieval.chunks, start=1)
-    ) or "（无相关资料）"
+    context = (
+        "\n\n".join(
+            f"【资料 {i}】{c.document_title}\n{c.content[:1200]}"
+            for i, c in enumerate(retrieval.chunks, start=1)
+        )
+        or "（无相关资料）"
+    )
 
     llm, info = build_llm_provider()
     prompt = await get_prompt(session, "study_plan")
@@ -434,9 +437,7 @@ async def list_ai_runs(
         project_id=project_id,
         search=q,
     )
-    rows, total = await repo.paginate(
-        stmt, page=pagination.page, page_size=pagination.page_size
-    )
+    rows, total = await repo.paginate(stmt, page=pagination.page, page_size=pagination.page_size)
     return ok(
         build_page(
             [AIRunOut.model_validate(row).model_dump(mode="json") for row in rows],

@@ -119,7 +119,11 @@ class ToolContext:
         candidate = Path(path).expanduser()
         if candidate.is_absolute():
             return str(candidate)
-        base = self.working_directory or (self.permissions and str(self.permissions.policy.workspace)) or "."
+        base = (
+            self.working_directory
+            or (self.permissions and str(self.permissions.policy.workspace))
+            or "."
+        )
         return str((Path(base) / candidate).resolve(strict=False))
 
     def can_resolve(self, path: str) -> bool:
@@ -342,9 +346,8 @@ class KnowledgeSearchTool(Tool):
                 for c in result.chunks
             ],
         }
-        summary = (
-            f"检索到 {len(result.chunks)} 个片段"
-            + (f"，来自《{result.chunks[0].document_title}》等资料" if result.chunks else "")
+        summary = f"检索到 {len(result.chunks)} 个片段" + (
+            f"，来自《{result.chunks[0].document_title}》等资料" if result.chunks else ""
         )
         return ToolResult(ok=True, data=payload, summary=summary)
 
@@ -361,13 +364,19 @@ class DocumentReadTool(Tool):
             "type": "object",
             "properties": {
                 "document_id": {"type": "string", "description": "文档 UUID"},
-                "max_chars": {"type": "integer", "description": "最多读取的字符数", "default": 6000},
+                "max_chars": {
+                    "type": "integer",
+                    "description": "最多读取的字符数",
+                    "default": 6000,
+                },
             },
             "required": ["document_id"],
         },
     )
 
-    async def execute(self, ctx: ToolContext, document_id: str, max_chars: int = 6000) -> ToolResult:
+    async def execute(
+        self, ctx: ToolContext, document_id: str, max_chars: int = 6000
+    ) -> ToolResult:
         doc = await _get_document(ctx, document_id)
         from app.infrastructure.files import read_text
 
@@ -400,7 +409,9 @@ class TaskListTool(Tool):
         },
     )
 
-    async def execute(self, ctx: ToolContext, status: str | None = None, limit: int = 30) -> ToolResult:
+    async def execute(
+        self, ctx: ToolContext, status: str | None = None, limit: int = 30
+    ) -> ToolResult:
         stmt = select(Task).where(Task.owner_id == ctx.owner_id)
         if ctx.project_id:
             stmt = stmt.where(Task.project_id == ctx.project_id)
@@ -437,10 +448,16 @@ class ProjectListTool(Tool):
 
     async def execute(self, ctx: ToolContext) -> ToolResult:
         rows = (
-            await ctx.session.execute(
-                select(Project).where(Project.owner_id == ctx.owner_id).order_by(Project.created_at)
+            (
+                await ctx.session.execute(
+                    select(Project)
+                    .where(Project.owner_id == ctx.owner_id)
+                    .order_by(Project.created_at)
+                )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
         return ToolResult(
             ok=True,
             data={
@@ -570,7 +587,11 @@ class TaskCreateTool(Tool):
             "properties": {
                 "title": {"type": "string", "description": "任务标题"},
                 "description": {"type": "string", "default": ""},
-                "priority": {"type": "string", "description": "LOW/MEDIUM/HIGH/URGENT", "default": "MEDIUM"},
+                "priority": {
+                    "type": "string",
+                    "description": "LOW/MEDIUM/HIGH/URGENT",
+                    "default": "MEDIUM",
+                },
                 "estimated_minutes": {"type": "integer", "default": 0},
                 "due_date": {"type": "string", "description": "ISO 日期，例如 2026-11-01"},
                 "completion_criteria": {"type": "string", "default": ""},
@@ -632,7 +653,11 @@ class TaskCreateBatchTool(Tool):
     )
 
     async def execute(
-        self, ctx: ToolContext, from_goal: str, horizon_days: int = 30, project_id: str | None = None
+        self,
+        ctx: ToolContext,
+        from_goal: str,
+        horizon_days: int = 30,
+        project_id: str | None = None,
     ) -> ToolResult:
         from app.services.ai_services import PlannerService
 
@@ -672,7 +697,10 @@ class TaskUpdateTool(Tool):
             "type": "object",
             "properties": {
                 "task_id": {"type": "string"},
-                "status": {"type": "string", "description": "TODO/IN_PROGRESS/BLOCKED/DONE/CANCELLED"},
+                "status": {
+                    "type": "string",
+                    "description": "TODO/IN_PROGRESS/BLOCKED/DONE/CANCELLED",
+                },
                 "priority": {"type": "string"},
                 "estimated_minutes": {"type": "integer"},
                 "actual_minutes": {"type": "integer"},
@@ -815,11 +843,7 @@ class ToolRegistry:
         return tool
 
     def specs(self, *, include_write: bool = True) -> list[ToolSpec]:
-        return [
-            tool.spec
-            for tool in self._tools.values()
-            if include_write or not tool.is_write
-        ]
+        return [tool.spec for tool in self._tools.values() if include_write or not tool.is_write]
 
     def catalog(self) -> list[dict[str, Any]]:
         return [
@@ -836,9 +860,7 @@ class ToolRegistry:
     def names(self) -> list[str]:
         return sorted(self._tools)
 
-    async def execute(
-        self, ctx: ToolContext, name: str, arguments: dict[str, Any]
-    ) -> ToolResult:
+    async def execute(self, ctx: ToolContext, name: str, arguments: dict[str, Any]) -> ToolResult:
         try:
             tool = self.get(name)
         except NotFoundError:
@@ -910,8 +932,6 @@ async def knowledge_base_summary(session: AsyncSession, owner_id: uuid.UUID) -> 
         )
     ).scalar_one()
     docs = (
-        await session.execute(
-            select(func.count(Document.id)).where(Document.owner_id == owner_id)
-        )
+        await session.execute(select(func.count(Document.id)).where(Document.owner_id == owner_id))
     ).scalar_one()
     return {"knowledge_bases": int(total), "documents": int(docs)}
